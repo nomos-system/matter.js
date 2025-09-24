@@ -4,7 +4,6 @@ env:
   # Required, URL to upstream (fork base)
   UPSTREAM_URL: "https://github.com/matter-js/matter.js.git"
   # Required, token to authenticate bot, could use ${{ secrets.GITHUB_TOKEN }} 
-  # Over here, we use a PAT instead to authenticate workflow file changes.
   WORKFLOW_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   # Optional, defaults to main
   UPSTREAM_BRANCH: "main"
@@ -19,7 +18,6 @@ env:
   # Optional toggle to spawn time logs (keeps action active) 
   SPAWN_LOGS: "false" # "true" or "false"
 
-# This runs every day on 1801 UTC
 on:
   schedule:
     - cron: '15 4 * * 1'
