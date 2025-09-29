@@ -11,6 +11,7 @@ import { NetworkBehavior } from "#behavior/system/network/NetworkBehavior.js";
 import { NetworkRuntime } from "#behavior/system/network/NetworkRuntime.js";
 import { PartsBehavior } from "#behavior/system/parts/PartsBehavior.js";
 import { Endpoint } from "#endpoint/Endpoint.js";
+import { Endpoints } from "#endpoint/properties/Endpoints.js";
 import { EndpointType } from "#endpoint/type/EndpointType.js";
 import { MutableEndpoint } from "#endpoint/type/MutableEndpoint.js";
 import {
@@ -24,6 +25,7 @@ import {
     RuntimeService,
 } from "#general";
 import { Interactable } from "#protocol";
+import type { EndpointNumber } from "#types";
 import { RootEndpoint } from "../endpoints/root.js";
 import { NodeLifecycle } from "./NodeLifecycle.js";
 import { ProtocolService } from "./server/ProtocolService.js";
@@ -148,6 +150,16 @@ export abstract class Node<T extends Node.CommonRootEndpoint = Node.CommonRootEn
         await this.lifecycle.mutex.produce(this.cancelWithMutex.bind(this));
     }
 
+    /**
+     * All endpoints owned by the node.
+     *
+     * Normally you access endpoints via {@link parts} but you can use this property access endpoints directly by
+     * {@link EndpointNumber}.
+     */
+    get endpoints(): Endpoints {
+        return new Endpoints(this);
+    }
+
     protected async cancelWithMutex() {
         if (!this.#runtime) {
             return;
@@ -199,7 +211,7 @@ export abstract class Node<T extends Node.CommonRootEndpoint = Node.CommonRootEn
         return ["Runtime for", Diagnostic.strong(this.toString())];
     }
 
-    override get [Diagnostic.value](): unknown {
+    get [Diagnostic.value](): unknown {
         const nodeActivity = this.#environment.get(NodeActivity);
         using _activity = nodeActivity.begin("diagnostics");
         return Diagnostic.node("🧩", this.id, {
