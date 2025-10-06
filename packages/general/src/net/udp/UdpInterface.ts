@@ -4,15 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { Channel, ChannelType, IpNetworkChannel } from "#net/Channel.js";
+import { ConnectionlessTransport } from "#net/ConnectionlessTransport.js";
+import { Network, NetworkError } from "#net/Network.js";
 import { Bytes } from "#util/Bytes.js";
-import { Channel, ChannelType, IpNetworkChannel } from "./Channel.js";
-import { NetInterface } from "./NetInterface.js";
-import { Network, NetworkError } from "./Network.js";
-import { ServerAddress, ServerAddressIp } from "./ServerAddress.js";
-import { TransportInterface } from "./TransportInterface.js";
+import { ServerAddress, ServerAddressUdp } from "../ServerAddress.js";
 import { UdpChannel } from "./UdpChannel.js";
 
-export class UdpInterface implements NetInterface {
+export class UdpInterface implements ConnectionlessTransport {
     readonly #server: UdpChannel;
 
     static async create(network: Network, type: "udp4" | "udp6", port?: number, host?: string, netInterface?: string) {
@@ -41,7 +40,7 @@ export class UdpInterface implements NetInterface {
         return Promise.resolve(new UdpConnection(this.#server, ip, port));
     }
 
-    onData(listener: (channel: Channel<Bytes>, messageBytes: Bytes) => void): TransportInterface.Listener {
+    onData(listener: (channel: Channel<Bytes>, messageBytes: Bytes) => void): ConnectionlessTransport.Listener {
         return this.#server.onData((_netInterface, peerHost, peerPort, data) =>
             listener(new UdpConnection(this.#server, peerHost, peerPort), data),
         );
@@ -89,7 +88,7 @@ export class UdpConnection implements IpNetworkChannel<Bytes> {
         return `${this.type}://[${this.#peerAddress}]:${this.#peerPort}`;
     }
 
-    get networkAddress(): ServerAddressIp {
+    get networkAddress(): ServerAddressUdp {
         return { type: "udp", ip: this.#peerAddress, port: this.#peerPort };
     }
 

@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { InternalError } from "#MatterError.js";
 import { Instant } from "#time/TimeUnit.js";
 import { MaybePromise } from "#util/Promises.js";
 import { DiagnosticSource } from "../log/DiagnosticSource.js";
@@ -58,19 +59,38 @@ export class Environment {
     }
 
     /**
+     * Determine if an environmental services is owned by this environment (not an ancestor).
+     */
+    owns(type: abstract new (...args: any[]) => any): boolean {
+        return !!this.#services?.get(type);
+    }
+
+    /**
      * Access an environmental service.
      */
     get<T extends object>(type: abstract new (...args: any[]) => T): T {
-        let instance = this.#services?.get(type) ?? this.#parent?.maybeGet(type);
+        const mine = this.#services?.get(type);
 
-        if (instance !== undefined && instance !== null) {
-            return instance as T;
+        if (mine !== undefined && mine !== null) {
+            return mine as T;
         }
 
-        if (instance !== null) {
+        // When null then we do not have it and also do not want to inherit from parent
+        if (mine === undefined) {
+            let instance = this.#parent?.maybeGet(type);
+            if (instance !== undefined && instance !== null) {
+                // Parent has it, use it
+                return instance;
+            }
+
+            // ... otherwise try to create it
             if ((type as Environmental.Factory<T>)[Environmental.create]) {
-                this.set(type, (instance = (type as any)[Environmental.create](this)));
-                return instance as T;
+                instance = (type as any)[Environmental.create](this) as T;
+                if (!(instance instanceof type)) {
+                    throw new InternalError(`Service creation did not produce instance of ${type.name}`);
+                }
+                this.set(type, instance);
+                return instance;
             }
         }
 
@@ -113,8 +133,17 @@ export class Environment {
      * @param type the class of the service to block
      */
     block(type: abstract new (...args: any[]) => any) {
-        if (this.has(type)) {
-            this.delete(type);
+        const instance = this.#services?.get(type);
+
+        if (instance !== undefined && instance !== null) {
+            this.#services?.delete(type);
+
+            this.#deleted.emit(type, instance);
+
+            const serviceEvents = this.#serviceEvents.get(type);
+            if (serviceEvents) {
+                serviceEvents.deleted.emit(instance);
+            }
         }
 
         this.#services?.set(type, null);
@@ -203,6 +232,35 @@ export class Environment {
             this.#serviceEvents.set(type, events);
         }
         return events as Environmental.ServiceEvents<T>;
+    }
+
+    /**
+     * Apply functions to a specific service type automatically.
+     *
+     * The environment invokes {@link added} immediately if the service is currently present.  It then invokes
+     * {@link added} in the future if the service is added or replaced and/or {@link deleted} if the service is replaced
+     * or deleted.
+     */
+    applyTo<T extends Environmental.Factory<any>>(
+        type: T,
+        added?: (env: Environment, service: T) => MaybePromise<void>,
+        deleted?: (env: Environment, service: T) => MaybePromise<void>,
+    ) {
+        const events = this.eventsFor(type);
+
+        if (added) {
+            const existing = this.maybeGet(type);
+
+            if (existing) {
+                added(this, existing);
+            }
+
+            events.added.on(service => this.runtime.add(() => added(this, service)));
+        }
+
+        if (deleted) {
+            events.deleted.on(service => this.runtime.add(() => deleted(this, service)));
+        }
     }
 
     /**
