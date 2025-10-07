@@ -280,8 +280,9 @@ const PEER1_STATE = {
         isDisabled: false,
         port: 0x15a4,
         operationalPort: -1,
-        startupSubscription: undefined,
+        defaultSubscription: undefined,
         caseAuthenticatedTags: undefined,
+        autoSubscribe: true,
     },
     basicInformation: {
         clusterRevision: 4,
