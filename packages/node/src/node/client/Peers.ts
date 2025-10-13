@@ -10,9 +10,11 @@ import { ContinuousDiscovery } from "#behavior/system/controller/discovery/Conti
 import { Discovery } from "#behavior/system/controller/discovery/Discovery.js";
 import { InstanceDiscovery } from "#behavior/system/controller/discovery/InstanceDiscovery.js";
 import { EndpointContainer } from "#endpoint/properties/EndpointContainer.js";
-import { CancelablePromise, Duration, Logger, Minutes, Seconds, Time, Timestamp } from "#general";
-import { PeerAddress, PeerAddressStore } from "#protocol";
+import { CancelablePromise, Duration, ImplementationError, Logger, Minutes, Seconds, Time, Timestamp } from "#general";
+import { InteractionServer } from "#node/index.js";
+import { FabricManager, PeerAddress, PeerAddressStore } from "#protocol";
 import { ServerNodeStore } from "#storage/server/ServerNodeStore.js";
+import { ClientSubscriptionHandler, ClientSubscriptions } from "@matter/protocol";
 import { ClientNode } from "../ClientNode.js";
 import type { ServerNode } from "../ServerNode.js";
 import { ClientNodeFactory } from "./ClientNodeFactory.js";
@@ -31,6 +33,7 @@ const EXPIRATION_INTERVAL = Minutes.one;
 export class Peers extends EndpointContainer<ClientNode> {
     #expirationInterval?: CancelablePromise;
     #expirationWorker?: Promise<void>;
+    #subscriptionHandler?: ClientSubscriptionHandler;
     #closed = false;
 
     constructor(owner: ServerNode) {
@@ -42,7 +45,9 @@ export class Peers extends EndpointContainer<ClientNode> {
 
         this.owner.env.set(PeerAddressStore, new NodePeerAddressStore(owner));
 
-        this.added.on(this.#manageExpiration.bind(this));
+        owner.env.applyTo(InteractionServer, this.#configureInteractionServer.bind(this));
+
+        this.added.on(this.#handlePeerAdded.bind(this));
         this.deleted.on(this.#manageExpiration.bind(this));
     }
 
@@ -92,7 +97,7 @@ export class Peers extends EndpointContainer<ClientNode> {
             const address = PeerAddress(id);
             for (const node of this) {
                 const nodeAddress = node.state.commissioning.peerAddress;
-                if (nodeAddress && PeerAddress(nodeAddress) === address) {
+                if (nodeAddress && PeerAddress.is(nodeAddress, address)) {
                     return node;
                 }
             }
@@ -112,8 +117,37 @@ export class Peers extends EndpointContainer<ClientNode> {
         super.add(node);
     }
 
+    /**
+     * Get or create a client node for the given peer address.
+     * This is mainly used to communicate to other known nodes on the fabric without having a formal commissioning
+     * process.
+     */
+    async forAddress(peerAddress: PeerAddress, options: Omit<ClientNode.Options, "owner"> = {}) {
+        if (!this.owner.env.get(FabricManager).has(peerAddress)) {
+            throw new ImplementationError("Cannot register a peer address for a fabric we do not belong to");
+        }
+
+        let node = this.get(peerAddress);
+        if (!node) {
+            // We do not have that node till now, also not persisted, so create it
+            const factory = this.owner.env.get(ClientNodeFactory);
+            node = factory.create(options);
+            await node.construction;
+            this.add(node);
+
+            // Nodes we do not commission are not auto-subscribed but enabled
+            // But we add the peer address
+            await node.set({
+                commissioning: { peerAddress: PeerAddress(peerAddress) },
+            });
+        }
+
+        return node;
+    }
+
     override async close() {
         this.#closed = true;
+        await this.#subscriptionHandler?.close();
         this.#cancelExpiration();
         await this.#expirationWorker;
         await super.close();
@@ -126,8 +160,40 @@ export class Peers extends EndpointContainer<ClientNode> {
         }
     }
 
+    #handlePeerAdded() {
+        if (this.owner.env.has(InteractionServer)) {
+            this.#configureInteractionServer();
+        }
+        this.#manageExpiration();
+    }
+
+    /**
+     * If required, installs a listener in the environment's {@link InteractionServer} to handle subscription responses.
+     */
+    #configureInteractionServer() {
+        if (this.#closed || this.size > 0 || !this.owner.env.has(InteractionServer)) {
+            return;
+        }
+
+        const subscriptions = this.owner.env.get(ClientSubscriptions);
+        const interactionServer = this.owner.env.get(InteractionServer);
+
+        if (!this.#subscriptionHandler) {
+            this.#subscriptionHandler = new ClientSubscriptionHandler(subscriptions);
+        }
+
+        interactionServer.clientHandler = this.#subscriptionHandler;
+    }
+
+    /**
+     * Enables or disables the expiration timer that culls expired uncommissioned nodes.
+     */
     #manageExpiration() {
-        if (this.#closed || this.#expirationWorker) {
+        if (this.#closed) {
+            return;
+        }
+
+        if (this.#expirationWorker) {
             return;
         }
 

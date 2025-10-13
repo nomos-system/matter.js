@@ -258,10 +258,14 @@ export class PeerSet implements ImmutableSet<OperationalPeer>, ObservableSet<Ope
         return this.#interactionQueue;
     }
 
+    async connect(address: PeerAddress, options: PeerConnectionOptions & { operationalAddress?: ServerAddressUdp }) {
+        await this.#ensureConnection(address, { ...options, allowUnknownPeer: true });
+    }
+
     /**
      * Ensure there is a channel to the designated peer.
      */
-    async ensureConnection(
+    async #ensureConnection(
         address: PeerAddress,
         options: PeerConnectionOptions & {
             allowUnknownPeer?: boolean;
@@ -306,6 +310,7 @@ export class PeerSet implements ImmutableSet<OperationalPeer>, ObservableSet<Ope
 
     /**
      * Obtain an exchange provider for the designated peer.
+     * TODO enhance PeerConnectionOptions.discoveryOptions.discoveryData with "addresses" for known operational addresses
      */
     async exchangeProviderFor(addressOrChannel: PeerAddress | MessageChannel, options: PeerConnectionOptions = {}) {
         if (addressOrChannel instanceof MessageChannel) {
@@ -325,7 +330,7 @@ export class PeerSet implements ImmutableSet<OperationalPeer>, ObservableSet<Ope
 
             if (!initiallyConnected && !this.#channels.hasChannel(address)) {
                 // We got an uninitialized node, so do the first connection as usual
-                await this.ensureConnection(address, {
+                await this.#ensureConnection(address, {
                     discoveryOptions: { discoveryType: NodeDiscoveryType.None },
                     caseAuthenticatedTags,
                 });
@@ -376,11 +381,17 @@ export class PeerSet implements ImmutableSet<OperationalPeer>, ObservableSet<Ope
 
     /**
      * Terminate any active peer connection.
+     * Also handles unknown peers
      */
     async disconnect(peer: PeerAddress | OperationalPeer, sendSessionClose = true) {
-        const address = this.get(peer)?.address;
+        let address = this.get(peer)?.address; // Check known Peers
         if (address === undefined) {
-            return;
+            // We did not find a ClientNode for this peer, so check if it is a PeerAddress
+            if ("nodeId" in peer && "fabricIndex" in peer) {
+                address = peer;
+            } else {
+                return;
+            }
         }
 
         await this.#sessions.removeAllSessionsForNode(address, sendSessionClose);
@@ -720,6 +731,7 @@ export class PeerSet implements ImmutableSet<OperationalPeer>, ObservableSet<Ope
         const unsecureSession = this.#sessions.createInsecureSession({
             // Use the session parameters from MDNS announcements when available and rest is assumed to be fallbacks
             sessionParameters: {
+                ...sessionParameters,
                 idleInterval: discoveryData?.SII ?? sessionParameters?.idleInterval,
                 activeInterval: discoveryData?.SAI ?? sessionParameters?.activeInterval,
                 activeThreshold: discoveryData?.SAT ?? sessionParameters?.activeThreshold,
@@ -817,7 +829,7 @@ export class PeerSet implements ImmutableSet<OperationalPeer>, ObservableSet<Ope
 
     async #addOrUpdatePeer(
         address: PeerAddress,
-        operationalServerAddress: ServerAddressUdp,
+        operationalServerAddress?: ServerAddressUdp,
         discoveryData?: DiscoveryData,
     ) {
         let peer = this.#peersByAddress.get(address);
@@ -825,7 +837,7 @@ export class PeerSet implements ImmutableSet<OperationalPeer>, ObservableSet<Ope
             peer = { address, dataStore: await this.#store.createNodeStore(address) };
             this.#peers.add(peer);
         }
-        peer.operationalAddress = operationalServerAddress;
+        peer.operationalAddress = operationalServerAddress ?? peer.operationalAddress;
         if (discoveryData !== undefined) {
             peer.discoveryData = {
                 ...peer.discoveryData,
@@ -835,7 +847,7 @@ export class PeerSet implements ImmutableSet<OperationalPeer>, ObservableSet<Ope
         await this.#store.updatePeer(peer);
 
         // If we got a new channel and have a running discovery we can end it
-        if (this.#runningPeerDiscoveries.has(address)) {
+        if (peer.operationalAddress !== undefined && this.#runningPeerDiscoveries.has(address)) {
             logger.info(`Found ${address} during discovery, cancel discovery.`);
             // We are currently discovering this node, so we need to update the discovery data
             const { mdnsClient: mdnsScanner } = this.#runningPeerDiscoveries.get(address) ?? {};
@@ -843,6 +855,10 @@ export class PeerSet implements ImmutableSet<OperationalPeer>, ObservableSet<Ope
             // This ends discovery and triggers the promises
             mdnsScanner?.cancelOperationalDeviceDiscovery(this.#sessions.fabricFor(address), address.nodeId, true);
         }
+    }
+
+    addKnownPeer(address: PeerAddress, operationalServerAddress?: ServerAddressUdp, discoveryData?: DiscoveryData) {
+        return this.#addOrUpdatePeer(address, operationalServerAddress, discoveryData);
     }
 
     #getLastOperationalAddress(address: PeerAddress) {

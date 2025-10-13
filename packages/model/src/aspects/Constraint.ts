@@ -4,12 +4,26 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { camelize } from "#general";
+import { camelize, isObject } from "#general";
 import { Lexer } from "#parser/Lexer.js";
 import { BasicToken } from "#parser/Token.js";
 import { TokenStream } from "#parser/TokenStream.js";
 import { FieldValue } from "../common/index.js";
 import { Aspect } from "./Aspect.js";
+
+namespace Functions {
+    export function minOf(args: unknown[]) {
+        return Math.min(...args.filter(arg => typeof arg === "number"));
+    }
+
+    export function maxOf(args: unknown[]) {
+        return Math.max(...args.filter(arg => typeof arg === "number"));
+    }
+}
+
+function isFunction(name: string): name is keyof typeof Functions {
+    return Object.hasOwn(Functions, name);
+}
 
 /**
  * An operational view of constraints as defined by the Matter specification.
@@ -124,30 +138,56 @@ export class Constraint extends Aspect<Constraint.Definition> implements Constra
                     case FieldValue.reference:
                         if (typeof value.name === "string") {
                             value = FieldValue(nameResolver?.(camelize(value.name)));
+                            if (isObject(value)) {
+                                value = { type: "properties", properties: value as Record<string, FieldValue> };
+                            }
                         }
                         break;
 
-                    case "+":
-                        {
-                            const lhs = valueOf(value.lhs);
-                            const rhs = valueOf(value.rhs);
-                            if (typeof lhs === "number" && typeof rhs === "number") {
-                                return lhs + rhs;
-                            }
-                            return undefined;
+                    case "+": {
+                        const lhs = valueOf(value.lhs);
+                        const rhs = valueOf(value.rhs);
+                        if (typeof lhs === "number" && typeof rhs === "number") {
+                            return lhs + rhs;
                         }
-                        break;
+                        return undefined;
+                    }
 
-                    case "-":
-                        {
-                            const lhs = valueOf(value.lhs);
-                            const rhs = valueOf(value.rhs);
-                            if (typeof lhs === "number" && typeof rhs === "number") {
-                                return lhs - rhs;
-                            }
+                    case "-": {
+                        const lhs = valueOf(value.lhs);
+                        const rhs = valueOf(value.rhs);
+                        if (typeof lhs === "number" && typeof rhs === "number") {
+                            return lhs - rhs;
+                        }
+                        return undefined;
+                    }
+
+                    case ".": {
+                        const object = valueOf(value.lhs);
+                        if (!isObject(object)) {
                             return undefined;
                         }
-                        break;
+
+                        // rhs may only legally be a name reference
+                        const rhs = FieldValue.referenced(valueOf(value.rhs));
+                        if (rhs === undefined) {
+                            return undefined;
+                        }
+
+                        // Resolve name in context of object.  We aren't using schema here but Object.hasOwn is
+                        // sufficient
+                        if (Object.hasOwn(object, rhs)) {
+                            return (object as Record<string, FieldValue>)[rhs];
+                        }
+
+                        return undefined;
+                    }
+
+                    case "maxOf":
+                    case "minOf": {
+                        Functions[type](value.args.map(value => valueOf(value)));
+                        return undefined;
+                    }
                 }
             }
 
@@ -267,7 +307,7 @@ export namespace Constraint {
      * Parsed binary operator.
      */
     export interface BinaryOperator {
-        type: "+" | "-";
+        type: "+" | "-" | ".";
 
         lhs: Expression;
 
@@ -275,9 +315,18 @@ export namespace Constraint {
     }
 
     /**
+     * Parsed function.
+     */
+    export interface Function {
+        type: "maxOf" | "minOf";
+
+        args: Expression[];
+    }
+
+    /**
      * Parsed expression.
      */
-    export type Expression = FieldValue | BinaryOperator;
+    export type Expression = FieldValue | BinaryOperator | Function;
 
     /**
      * These are all ways to describe a constraint.
@@ -307,7 +356,9 @@ namespace Serializer {
         switch (value.type) {
             case "+":
             case "-":
-                const sum = `${serializeValue(value.lhs, true)} ${value.type} ${serializeValue(value.rhs, true)}`;
+            case ".":
+                const sep = value.type === "." ? "" : " ";
+                const sum = `${serializeValue(value.lhs, true)}${sep}${value.type}${sep}${serializeValue(value.rhs, true)}`;
                 if (inExpr) {
                     // Ideally only add parenthesis if precedence requires.  But nested expressions are not used
                     // anywhere as yet (and probably won't be) so don't try to be fancy, just correct
@@ -316,7 +367,11 @@ namespace Serializer {
                 return sum;
 
             default:
-                return FieldValue.serialize(value);
+                if (isFunction(value.type)) {
+                    return `${value.type}(${(value as Constraint.Function).args.map(value => serializeValue(value)).join(", ")})`;
+                }
+
+                return FieldValue.serialize(value as FieldValue);
         }
     }
 
@@ -357,10 +412,14 @@ namespace Parser {
         const result = parseParts();
 
         if (tokens.token && tokens.token?.type !== ",") {
-            constraint.error("UNEXPECTED_CONSTRAINT_TOKEN", `Unexpected ${tokens.description}`);
+            unexpected();
         }
 
         return result;
+
+        function unexpected() {
+            constraint.error("UNEXPECTED_CONSTRAINT_TOKEN", `Unexpected ${tokens.description}`);
+        }
 
         function parseParts(): Constraint.Ast {
             const parts = Array<Constraint.Ast>();
@@ -522,6 +581,7 @@ namespace Parser {
             switch (tokens.token?.type) {
                 case "+":
                 case "-":
+                case ".":
                     const type = tokens.token.type;
                     tokens.next();
                     const rhs = parseValueExpression();
@@ -534,6 +594,45 @@ namespace Parser {
                         type,
                         lhs: value,
                         rhs,
+                    };
+
+                case "(":
+                    const functionName = FieldValue.referenced(value);
+                    if (functionName === undefined) {
+                        unexpected();
+                        return;
+                    }
+
+                    tokens.next();
+                    if (!isFunction(functionName)) {
+                        constraint.error("UNKNOWN_FUNCTION", `Unknown function "${functionName}"`);
+                        return;
+                    }
+
+                    const args = Array<Constraint.Expression>();
+                    while ((tokens.token?.type as BasicToken.Operator) !== ")") {
+                        const expr = parseValueExpression();
+                        if (expr === undefined) {
+                            return;
+                        }
+                        args.push(expr);
+                        switch (tokens.token?.type as BasicToken.Operator) {
+                            case ",":
+                                tokens.next();
+                                break;
+
+                            case ")":
+                                break;
+
+                            default:
+                                unexpected();
+                                return;
+                        }
+                    }
+                    tokens.next();
+                    return {
+                        type: functionName,
+                        args,
                     };
             }
 

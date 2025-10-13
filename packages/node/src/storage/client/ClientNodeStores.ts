@@ -9,6 +9,10 @@ import type { ClientNode } from "#node/ClientNode.js";
 import type { Node } from "#node/Node.js";
 import { ClientNodeStore } from "./ClientNodeStore.js";
 
+/**
+ * Prefix for incrementally assigned client IDs that are usually commissioned, so an increasing ID is used instead the
+ * node id.
+ */
 const CLIENT_ID_PREFIX = "peer";
 
 /**

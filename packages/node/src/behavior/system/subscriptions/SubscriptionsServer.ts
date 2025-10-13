@@ -235,12 +235,11 @@ export class SubscriptionsBehavior extends Behavior {
                 logger.debug(`We already have and existing session for peer ${peerAddress}`);
             } else {
                 try {
-                    await peers.ensureConnection(peerAddress, {
+                    await peers.connect(peerAddress, {
                         discoveryOptions: {
                             discoveryType: NodeDiscoveryType.TimedDiscovery,
                             timeout: REESTABLISH_SUBSCRIPTIONS_TIMEOUT,
                         },
-                        allowUnknownPeer: true,
                         operationalAddress,
                     });
                 } catch (error) {
@@ -281,7 +280,7 @@ export class SubscriptionsBehavior extends Behavior {
         interactionServer.subscriptionEstablishmentStarted.off(blockHandler);
 
         logger.info(
-            `Re-established ${successfullReEstablishments.length} ${successfullReEstablishments.length ? `(${successfullReEstablishments.join(",")})` : ""} of ${formerSubscriptions.length} former subscriptions successfully`,
+            `Re-established ${successfullReEstablishments.length}${successfullReEstablishments.length ? ` (${successfullReEstablishments.join(",")})` : ""} of ${formerSubscriptions.length} former subscriptions successfully`,
         );
     }
 }

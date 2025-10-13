@@ -30,8 +30,11 @@ export class ClientStructure {
     #nodeStore: ClientNodeStore;
     #endpoints: Record<EndpointNumber, EndpointStructure> = {};
     #emitEvent: ClientEventEmitter;
+    #node: ClientNode;
+    #subscribedFabricFiltered?: boolean;
 
     constructor(node: ClientNode) {
+        this.#node = node;
         this.#nodeStore = node.env.get(ClientNodeStore);
         this.#endpoints[node.number] = {
             endpoint: node,
@@ -143,9 +146,8 @@ export class ClientStructure {
                     case "event-value":
                         this.#emitEvent(change);
                         break;
-                }
-                if (change.kind !== "attr-value") {
-                    continue;
+
+                    // we ignore attr-status and event-status for now
                 }
             }
 
@@ -157,11 +159,27 @@ export class ClientStructure {
         }
     }
 
+    /** Reference to the default subscription used when the node was started. */
+    protected get subscribedFabricFiltered() {
+        if (this.#subscribedFabricFiltered === undefined) {
+            this.#subscribedFabricFiltered = this.#node.state.network.defaultSubscription?.isFabricFiltered ?? true;
+            this.#node.events.network.defaultSubscription$Changed.on(newSubscription => {
+                this.#subscribedFabricFiltered = newSubscription?.isFabricFiltered ?? true;
+            });
+        }
+        return this.#subscribedFabricFiltered;
+    }
+
     async #mutateAttribute(
         change: ReadResult.AttributeValue,
         scope: ReadScope,
         currentUpdates: undefined | AttributeUpdates,
     ) {
+        // We only store values when an initial subscription is defined and the fabric filter matches
+        if (this.subscribedFabricFiltered !== scope.isFabricFiltered) {
+            return currentUpdates;
+        }
+
         const { endpointId, clusterId, attributeId } = change.path;
 
         // If we are building updates to a cluster and the cluster/endpoint changes, apply the current update
@@ -236,6 +254,7 @@ export class ClientStructure {
         const attrs = cluster.store.initialValues ?? {};
 
         // Generate a behavior if enough information is available
+        // TODO: Detect changes in revision/features/attributes/commands and update behavior if needed
         if (cluster.behavior === undefined) {
             const {
                 [ClusterRevision.id]: clusterRevision,
@@ -291,6 +310,9 @@ export class ClientStructure {
 
         const serverList = attrs[SERVER_LIST_ATTR_ID];
         if (Array.isArray(serverList)) {
+            // TODO: Remove clusters that are no longer present
+            //  Including events vis parts/endpoints on node (per endpoint and generic "changed")?
+            //  Including data cleanup
             for (const cluster of serverList) {
                 if (typeof cluster === "number") {
                     this.#clusterFor(endpoint, cluster as ClusterId);
@@ -307,6 +329,9 @@ export class ClientStructure {
 
                 const part = this.#endpointFor(partNo as EndpointNumber);
 
+                // TODO - remove endpoints/parts that are no longer present
+                //  Including events vis parts/endpoints on node (per endpoint and generic "changed")?
+                //  Including data cleanup
                 let isAlreadyDescendant = false;
                 for (let owner = part.endpoint.owner; owner; owner = owner.owner) {
                     if (owner === endpoint.endpoint) {
@@ -336,8 +361,8 @@ export class ClientStructure {
                 number,
                 type: EndpointType({
                     name: "ClientEndpoint",
-                    deviceType: -1,
-                    deviceRevision: -1,
+                    deviceType: EndpointType.UNKNOWN_DEVICE_TYPE,
+                    deviceRevision: EndpointType.UNKNOWN_DEVICE_REVISION,
                 }),
             }),
             clusters: {},

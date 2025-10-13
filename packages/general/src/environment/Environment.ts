@@ -33,12 +33,12 @@ const logger = Logger.get("Environment");
  * TODO - could remove global singletons by moving here
  */
 export class Environment {
-    #services?: Map<abstract new (...args: any[]) => any, Environmental.Service | null>;
+    #services?: Map<Environmental.ServiceType, Environmental.Service | null>;
     #name: string;
     #parent?: Environment;
-    #added = Observable<[type: abstract new (...args: any[]) => {}, instance: {}]>();
-    #deleted = Observable<[type: abstract new (...args: any[]) => {}, instance: {}]>();
-    #serviceEvents = new Map<abstract new (...args: any[]) => any, Environmental.ServiceEvents<any>>();
+    #added = Observable<[type: Environmental.ServiceType, instance: {}]>();
+    #deleted = Observable<[type: Environmental.ServiceType, instance: {}]>();
+    #serviceEvents = new Map<Environmental.ServiceType, Environmental.ServiceEvents<any>>();
 
     constructor(name: string, parent?: Environment) {
         this.#name = name;
@@ -48,7 +48,7 @@ export class Environment {
     /**
      * Determine if an environmental service is available.
      */
-    has(type: abstract new (...args: any[]) => any): boolean {
+    has(type: Environmental.ServiceType): boolean {
         const mine = this.#services?.get(type);
 
         if (mine === null) {
@@ -61,14 +61,14 @@ export class Environment {
     /**
      * Determine if an environmental services is owned by this environment (not an ancestor).
      */
-    owns(type: abstract new (...args: any[]) => any): boolean {
+    owns(type: Environmental.ServiceType): boolean {
         return !!this.#services?.get(type);
     }
 
     /**
      * Access an environmental service.
      */
-    get<T extends object>(type: abstract new (...args: any[]) => T): T {
+    get<T extends object>(type: Environmental.ServiceType<T>): T {
         const mine = this.#services?.get(type);
 
         if (mine !== undefined && mine !== null) {
@@ -77,21 +77,20 @@ export class Environment {
 
         // When null then we do not have it and also do not want to inherit from parent
         if (mine === undefined) {
-            let instance = this.#parent?.maybeGet(type);
+            const instance = this.#parent?.maybeGet(type);
             if (instance !== undefined && instance !== null) {
                 // Parent has it, use it
                 return instance;
             }
+        }
 
-            // ... otherwise try to create it
-            if ((type as Environmental.Factory<T>)[Environmental.create]) {
-                instance = (type as any)[Environmental.create](this) as T;
-                if (!(instance instanceof type)) {
-                    throw new InternalError(`Service creation did not produce instance of ${type.name}`);
-                }
-                this.set(type, instance);
-                return instance;
+        // ... otherwise try to create it. The create method must install it in the environment if needed
+        if ((type as Environmental.Factory<T>)[Environmental.create]) {
+            const instance = (type as any)[Environmental.create](this) as T;
+            if (!(instance instanceof type)) {
+                throw new InternalError(`Service creation did not produce instance of ${type.name}`);
             }
+            return instance;
         }
 
         throw new UnsupportedDependencyError(`Required dependency ${type.name}`, "is not available");
@@ -100,64 +99,48 @@ export class Environment {
     /**
      * Access an environmental service that may not exist.
      */
-    maybeGet<T extends object>(type: abstract new (...args: any[]) => T): T | undefined {
+    maybeGet<T extends object>(type: Environmental.ServiceType<T>): T | undefined {
         if (this.has(type)) {
             return this.get(type);
         }
     }
 
     /**
-     * Remove an environmental service.
+     * Remove an environmental service and block further inheritance
      *
      * @param type the class of the service to remove
      * @param instance optional instance expected, if existing instance does not match it is not deleted
      */
-    delete(type: abstract new (...args: any[]) => any, instance?: any) {
-        if (instance !== undefined && this.#services?.get(type) !== instance) {
+    delete(type: Environmental.ServiceType, instance?: any) {
+        const localInstance = this.#services?.get(type);
+
+        // Remove instance and replace by null to prevent inheritance from parent
+        this.#services?.set(type, null);
+
+        if (localInstance === undefined || localInstance === null) {
             return;
         }
-        this.#services?.delete(type);
-        this.#parent?.delete(type);
+        if (instance !== undefined && localInstance !== instance) {
+            return;
+        }
 
-        this.#deleted.emit(type, instance);
+        this.#deleted.emit(type, localInstance);
 
         const serviceEvents = this.#serviceEvents.get(type);
         if (serviceEvents) {
-            serviceEvents.deleted.emit(instance);
+            serviceEvents.deleted.emit(localInstance);
         }
-    }
-
-    /**
-     * Prevent this environment from automatically instantiating or retrieving a service from parent environment.
-     *
-     * @param type the class of the service to block
-     */
-    block(type: abstract new (...args: any[]) => any) {
-        const instance = this.#services?.get(type);
-
-        if (instance !== undefined && instance !== null) {
-            this.#services?.delete(type);
-
-            this.#deleted.emit(type, instance);
-
-            const serviceEvents = this.#serviceEvents.get(type);
-            if (serviceEvents) {
-                serviceEvents.deleted.emit(instance);
-            }
-        }
-
-        this.#services?.set(type, null);
     }
 
     /**
      * Remove and close an environmental service.
      */
     close<T extends object>(
-        type: abstract new (...args: any[]) => T,
+        type: Environmental.ServiceType<T>,
     ): T extends { close: () => MaybePromise<void> } ? MaybePromise<void> : void {
         const instance = this.maybeGet(type);
+        this.delete(type, instance); // delete and block inheritance
         if (instance !== undefined) {
-            this.delete(type, instance);
             return (instance as Partial<Destructable>).close?.() as T extends { close: () => MaybePromise<void> }
                 ? MaybePromise<void>
                 : void;
@@ -176,7 +159,7 @@ export class Environment {
     /**
      * Install a preinitialized version of an environmental service.
      */
-    set<T extends {}>(type: abstract new (...args: any[]) => T, instance: T) {
+    set<T extends {}>(type: Environmental.ServiceType<T>, instance: T) {
         if (!this.#services) {
             this.#services = new Map();
         }
@@ -222,7 +205,7 @@ export class Environment {
      *
      * This is a more convenient way to observe a specific service than {@link added} and {@link deleted}.
      */
-    eventsFor<T extends Environmental.Factory<any>>(type: T) {
+    eventsFor<T extends Environmental.ServiceType>(type: T) {
         let events = this.#serviceEvents.get(type);
         if (events === undefined) {
             events = {
@@ -241,8 +224,8 @@ export class Environment {
      * {@link added} in the future if the service is added or replaced and/or {@link deleted} if the service is replaced
      * or deleted.
      */
-    applyTo<T extends Environmental.Factory<any>>(
-        type: T,
+    applyTo<T extends object>(
+        type: Environmental.ServiceType<T>,
         added?: (env: Environment, service: T) => MaybePromise<void>,
         deleted?: (env: Environment, service: T) => MaybePromise<void>,
     ) {

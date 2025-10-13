@@ -77,6 +77,53 @@ const TEST_CONSTRAINTS: [text: string, ast: Constraint.Ast, expectedText?: strin
             },
         },
     ],
+    [
+        "min maxOf(holdTimeMin, 10)",
+        {
+            min: {
+                type: "maxOf",
+
+                args: [
+                    {
+                        type: "reference",
+                        name: "holdTimeMin",
+                    },
+
+                    10,
+                ],
+            },
+        },
+    ],
+    [
+        "holdTimeLimits.holdTimeMin to holdTimeLimits.holdTimeMax",
+        {
+            min: {
+                type: ".",
+
+                lhs: {
+                    type: "reference",
+                    name: "holdTimeLimits",
+                },
+                rhs: {
+                    type: "reference",
+                    name: "holdTimeMin",
+                },
+            },
+
+            max: {
+                type: ".",
+
+                lhs: {
+                    type: "reference",
+                    name: "holdTimeLimits",
+                },
+                rhs: {
+                    type: "reference",
+                    name: "holdTimeMax",
+                },
+            },
+        },
+    ],
 ];
 
 describe("Constraint", () => {

@@ -8,10 +8,8 @@ import { Behavior } from "#behavior/Behavior.js";
 import { BasicInformationBehavior } from "#behaviors/basic-information";
 import { ConnectionlessTransportSet, ImplementationError } from "#general";
 import { Node } from "#node/Node.js";
-import { InteractionServer } from "#node/server/InteractionServer.js";
 import {
     Ble,
-    ClientSubscriptionHandler,
     ClientSubscriptions,
     Fabric,
     FabricAuthority,
@@ -23,6 +21,7 @@ import {
     Scanner,
     ScannerSet,
 } from "#protocol";
+import { FabricId } from "@matter/types";
 import type { CommissioningClient } from "../commissioning/CommissioningClient.js";
 import { CommissioningServer } from "../commissioning/CommissioningServer.js";
 import { NetworkServer } from "../network/NetworkServer.js";
@@ -48,6 +47,7 @@ export class ControllerBehavior extends Behavior {
             throw new ImplementationError("adminFabricLabel must be set for ControllerBehavior.");
         }
         const adminFabricLabel = this.state.adminFabricLabel;
+        const adminFabricId = this.state.adminFabricId;
 
         // Configure discovery transports
         if (this.state.ip === undefined) {
@@ -76,6 +76,10 @@ export class ControllerBehavior extends Behavior {
 
                     override get adminFabricLabel() {
                         return adminFabricLabel;
+                    }
+
+                    get fabricId() {
+                        return adminFabricId;
                     }
                 })(),
             );
@@ -114,11 +118,6 @@ export class ControllerBehavior extends Behavior {
         if (this.state.ble) {
             netTransports.add(this.env.get(Ble).centralInterface);
         }
-
-        // Install handler to receive data reports for subscriptions
-        const subscriptions = this.env.get(ClientSubscriptions);
-        const interactionServer = this.env.get(InteractionServer);
-        interactionServer.clientHandler = new ClientSubscriptionHandler(subscriptions);
 
         // Clean up as the node goes offline
         const node = Node.forEndpoint(this.endpoint);
@@ -185,5 +184,12 @@ export namespace ControllerBehavior {
          * Contains the label of the admin fabric which is set for all commissioned devices
          */
         adminFabricLabel = "matter.js";
+
+        /**
+         * Contains the FabricId of the admin fabric when a defined number needs to be used because special Certificates
+         * are used.
+         * If not provided, a random FabricId will be generated.
+         */
+        adminFabricId?: FabricId = undefined;
     }
 }

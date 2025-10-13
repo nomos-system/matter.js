@@ -10,13 +10,14 @@ import { ClientNetworkRuntime } from "#behavior/system/network/ClientNetworkRunt
 import { NetworkClient } from "#behavior/system/network/NetworkClient.js";
 import { NetworkRuntime } from "#behavior/system/network/NetworkRuntime.js";
 import { Agent } from "#endpoint/Agent.js";
+import { ClientNodeEndpoints } from "#endpoint/properties/ClientNodeEndpoints.js";
 import { EndpointInitializer } from "#endpoint/properties/EndpointInitializer.js";
 import { Diagnostic, Identity, Lifecycle, Logger, MaybePromise } from "#general";
+import { Matter, MatterModel } from "#model";
 import { Interactable, OccurrenceManager, PeerAddress } from "#protocol";
 import { ClientNodeStore } from "#storage/client/ClientNodeStore.js";
 import { RemoteWriter } from "#storage/client/RemoteWriter.js";
 import { ServerNodeStore } from "#storage/server/ServerNodeStore.js";
-import { Matter, MatterModel } from "@matter/model";
 import { ClientEndpointInitializer } from "./client/ClientEndpointInitializer.js";
 import { ClientNodeInteraction } from "./client/ClientNodeInteraction.js";
 import { Node } from "./Node.js";
@@ -44,7 +45,7 @@ export class ClientNode extends Node<ClientNode.RootEndpoint> {
         super(opts);
 
         // Block the OccurrenceManager from parent environment so we don't attempt to record events from peers
-        this.env.block(OccurrenceManager);
+        this.env.close(OccurrenceManager);
 
         this.env.set(Node, this);
         this.env.set(ClientNode, this);
@@ -59,6 +60,10 @@ export class ClientNode extends Node<ClientNode.RootEndpoint> {
      */
     get matter() {
         return this.#matter;
+    }
+
+    override get endpoints(): ClientNodeEndpoints {
+        return new ClientNodeEndpoints(this);
     }
 
     override initialize() {
