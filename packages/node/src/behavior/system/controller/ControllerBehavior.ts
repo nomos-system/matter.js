@@ -6,14 +6,14 @@
 
 import { Behavior } from "#behavior/Behavior.js";
 import { BasicInformationBehavior } from "#behaviors/basic-information";
-import { ConnectionlessTransportSet, ImplementationError } from "#general";
+import { ConnectionlessTransportSet, ImplementationError, Logger } from "#general";
 import { Node } from "#node/Node.js";
 import {
     Ble,
     ClientSubscriptions,
     Fabric,
     FabricAuthority,
-    FabricAuthorityConfigurationProvider,
+    FabricAuthorityConfiguration,
     FabricManager,
     MdnsClient,
     MdnsScannerTargetCriteria,
@@ -21,12 +21,14 @@ import {
     Scanner,
     ScannerSet,
 } from "#protocol";
-import { FabricId } from "@matter/types";
+import { CaseAuthenticatedTag, FabricId, NodeId } from "#types";
 import type { CommissioningClient } from "../commissioning/CommissioningClient.js";
 import { CommissioningServer } from "../commissioning/CommissioningServer.js";
 import { NetworkServer } from "../network/NetworkServer.js";
 import { ActiveDiscoveries } from "./discovery/ActiveDiscoveries.js";
 import type { Discovery } from "./discovery/Discovery.js";
+
+const logger = Logger.get("ControllerBehavior");
 
 /**
  * Node controller functionality.
@@ -44,10 +46,8 @@ export class ControllerBehavior extends Behavior {
 
     override async initialize() {
         if (this.state.adminFabricLabel === undefined || this.state.adminFabricLabel === "") {
-            throw new ImplementationError("adminFabricLabel must be set for ControllerBehavior.");
+            throw new ImplementationError("adminFabricLabel must be set for ControllerBehavior");
         }
-        const adminFabricLabel = this.state.adminFabricLabel;
-        const adminFabricId = this.state.adminFabricId;
 
         // Configure discovery transports
         if (this.state.ip === undefined) {
@@ -61,28 +61,12 @@ export class ControllerBehavior extends Behavior {
             this.state.ble = (await this.agent.load(NetworkServer)).state.ble;
         }
         if (this.state.ble !== false) {
-            this.env.get(ScannerSet).add(this.env.get(Ble).scanner);
-        }
-
-        // Configure management of controlled fabrics
-        if (!this.env.has(FabricAuthorityConfigurationProvider)) {
-            const biState = this.endpoint.stateOf(BasicInformationBehavior);
-            this.env.set(
-                FabricAuthorityConfigurationProvider,
-                new (class extends FabricAuthorityConfigurationProvider {
-                    get vendorId() {
-                        return biState.vendorId;
-                    }
-
-                    override get adminFabricLabel() {
-                        return adminFabricLabel;
-                    }
-
-                    get fabricId() {
-                        return adminFabricId;
-                    }
-                })(),
-            );
+            try {
+                this.env.get(ScannerSet).add(this.env.get(Ble).scanner);
+            } catch (error) {
+                logger.error("Disabling BLE due to initialization error:", error);
+                this.state.ble = false;
+            }
         }
 
         // Ensure the fabric authority is fully initialized
@@ -104,6 +88,7 @@ export class ControllerBehavior extends Behavior {
         if (node.lifecycle.isOnline) {
             this.#nodeOnline();
         }
+        this.reactTo(node.lifecycle.goingOffline, this.#nodeGoingOffline);
     }
 
     override async [Symbol.asyncDispose]() {
@@ -112,16 +97,21 @@ export class ControllerBehavior extends Behavior {
         this.env.delete(ScannerSet);
     }
 
+    get fabricAuthorityConfig(): FabricAuthorityConfiguration {
+        const biState = this.endpoint.stateOf(BasicInformationBehavior);
+        return {
+            adminVendorId: biState.vendorId,
+            ...this.state,
+        };
+    }
+
     #nodeOnline() {
         // Configure network connections
         const netTransports = this.env.get(ConnectionlessTransportSet);
         if (this.state.ble) {
+            // no try-catch needed because we already added the scanner in initialize()
             netTransports.add(this.env.get(Ble).centralInterface);
         }
-
-        // Clean up as the node goes offline
-        const node = Node.forEndpoint(this.endpoint);
-        this.reactTo(node.lifecycle.goingOffline, this.#nodeGoingOffline);
 
         // Add each pre-existing fabric to discovery criteria
         const authority = this.env.get(FabricAuthority);
@@ -140,6 +130,21 @@ export class ControllerBehavior extends Behavior {
 
     async #nodeGoingOffline() {
         await this.env.close(ClientSubscriptions);
+
+        // Configure each MDNS scanner with criteria
+        const scanners = this.env.get(ScannerSet);
+        for (const scanner of scanners) {
+            if (scanner instanceof MdnsClient) {
+                scanner.targetCriteriaProviders.delete(this.internal.mdnsTargetCriteria);
+            }
+        }
+        // Clear operational targets
+        this.internal.mdnsTargetCriteria.operationalTargets.length = 0;
+
+        const netTransports = this.env.get(ConnectionlessTransportSet);
+        if (this.state.ble) {
+            netTransports.delete(this.env.get(Ble).centralInterface);
+        }
     }
 
     #enableScanningForFabric(fabric: Fabric) {
@@ -191,5 +196,17 @@ export namespace ControllerBehavior {
          * If not provided, a random FabricId will be generated.
          */
         adminFabricId?: FabricId = undefined;
+
+        /**
+         * Contains the NodeId of the admin node when a defined number needs to be used because special Certificates
+         * are used.
+         * If not provided, a random NodeId will be generated.
+         */
+        adminNodeId?: NodeId = undefined;
+
+        /**
+         * Case Authenticated Tags to be used to commission and connect to devices.
+         */
+        caseAuthenticatedTags?: CaseAuthenticatedTag[] = undefined;
     }
 }

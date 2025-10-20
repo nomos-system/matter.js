@@ -19,8 +19,14 @@ import { FabricManager } from "./FabricManager.js";
  */
 export async function TestFabric(options: TestFabric.Options = {}) {
     const authority = await TestFabric.Authority(options);
+    const { index } = options;
 
-    return authority.createFabric();
+    return authority.createFabric({
+        adminFabricLabel: `mock-fabric-${index}`,
+        adminVendorId: VendorId(0xfff1),
+        adminFabricIndex: index !== undefined ? FabricIndex(index) : undefined,
+        adminFabricId: FabricId(1),
+    });
 }
 
 export namespace TestFabric {
@@ -31,35 +37,28 @@ export namespace TestFabric {
      *
      * Crypto matter is stable with respect to {@link index}.
      */
-    export async function Authority({ index, fabrics }: Options = {}) {
-        if (index === undefined) {
+    export async function Authority(options: Options = {}) {
+        let { fabrics } = options;
+        if (options.index === undefined) {
             if (fabrics) {
-                index = fabrics.allocateFabricIndex();
+                options.index = fabrics.allocateFabricIndex();
             } else {
-                index = 1;
+                options.index = 1;
             }
         }
 
-        if (index < 1 || index > 254) {
+        if (options.index < 1 || options.index > 254) {
             throw new ImplementationError("Test fabric indexes must be in the range 1-254");
         }
 
         if (!fabrics) {
-            fabrics = new FabricManager(MockCrypto(index));
+            fabrics = new FabricManager(MockCrypto(options.index));
         }
 
-        const authority = new FabricAuthority({
+        return new FabricAuthority({
             ca: await CertificateAuthority.create(fabrics.crypto),
-            config: {
-                adminFabricLabel: `mock-fabric-${index}`,
-                adminVendorId: VendorId(0xfff1),
-                fabricIndex: FabricIndex(index),
-                fabricId: FabricId(1),
-            },
             fabrics,
         });
-
-        return authority;
     }
 
     export interface Options {

@@ -70,6 +70,7 @@ export class ControllerTestInstance extends TestInstance {
         }
     >();
     #commandHandler: ChipToolWebSocketHandler;
+    #storages: Map<string, Map<string, StorageBackendAsyncJsonFile>> = new Map();
 
     constructor(config: ControllerTestInstanceConfig) {
         super(config);
@@ -78,19 +79,26 @@ export class ControllerTestInstance extends TestInstance {
 
     /** Prepare Controller identities alpha, beta and gamma used by tests. */
     #setupControllers() {
-        const initStorageService = () =>
+        const initStorageService = (identity: string) =>
             new StorageService(this.#env, namespace => {
-                logger.warn(`Storage service requested for namespace ${namespace}`);
+                const identityStore = this.#storages.get(identity) ?? new Map<string, StorageBackendAsyncJsonFile>();
                 const storageDir = getParameter("storage-directory") ?? "/tmp";
                 const storageName = `${storageDir}${getParameter("KVS") ?? "/chip_tool_kvs"}-${namespace}`;
-                return new StorageBackendAsyncJsonFile(storageName);
+                logger.info(`Storage service requested for namespace ${namespace}: ${storageName}`);
+                if (identityStore.has(namespace)) {
+                    return identityStore.get(namespace)!;
+                }
+                const storage = new StorageBackendAsyncJsonFile(storageName);
+                identityStore.set(namespace, storage);
+                this.#storages.set(identity, identityStore);
+                return storage;
             });
 
         // Each developer gets his own derived environment because should have it's own storage
         // TODO Enhance Controller to allow multiple Fabrics and then each identity is "just" an own Fabric
         //      But Let's do that later with ServerNode. For now it works like this.
         const envAlpha = new Environment(`${this.id}-alpha`, this.#env);
-        envAlpha.set(StorageService, initStorageService());
+        envAlpha.set(StorageService, initStorageService("alpha"));
 
         this.#controllerInstances.set("alpha", {
             env: envAlpha,
@@ -109,7 +117,7 @@ export class ControllerTestInstance extends TestInstance {
         });
 
         const envBeta = new Environment(`${this.id}-beta`, this.#env);
-        envBeta.set(StorageService, initStorageService());
+        envBeta.set(StorageService, initStorageService("beta"));
         this.#controllerInstances.set("beta", {
             env: envBeta,
             handler: new LegacyControllerCommandHandler(
@@ -127,7 +135,7 @@ export class ControllerTestInstance extends TestInstance {
         });
 
         const envGamma = new Environment(`${this.id}-gamma`, this.#env);
-        envGamma.set(StorageService, initStorageService());
+        envGamma.set(StorageService, initStorageService("gamma"));
         this.#controllerInstances.set("gamma", {
             env: envGamma,
             handler: new LegacyControllerCommandHandler(
@@ -177,7 +185,8 @@ export class ControllerTestInstance extends TestInstance {
 
         /*
         this.#env.vars.set("mdns.networkInterface", "en0");
-         */
+        */
+
         this.#commandHandler.start();
 
         logger.info("STARTED");
@@ -187,9 +196,16 @@ export class ControllerTestInstance extends TestInstance {
     override async stop() {
         this.#commandHandler.close();
         if (this.#controllerInstances.size > 0) {
-            for (const { handler, env } of this.#controllerInstances.values()) {
+            for (const [identity, { handler, env }] of this.#controllerInstances.entries()) {
                 await handler.close();
                 await env.close(ControllerStore); // Manually close ControllerStore to ensure data persistence
+                const identityStores = this.#storages.get(identity);
+                if (identityStores) {
+                    for (const storage of identityStores.values()) {
+                        console.info(`Closing storage for identity ${identity}`);
+                        await storage.close();
+                    }
+                }
             }
             this.#controllerInstances.clear();
         }
