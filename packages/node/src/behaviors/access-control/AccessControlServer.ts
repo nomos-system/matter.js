@@ -52,13 +52,9 @@ export class AccessControlServer extends AccessControlBehavior.with("Extension")
     override initialize(): MaybePromise {
         this.reactTo(this.events.acl$Changing, this.#validateAccessControlListChanges); // Enhanced Validation
         this.reactTo(this.events.acl$Changed, this.#handleAccessControlListChange); // Event handling for changes
-        if (
-            this.state.extension !== undefined &&
-            this.events.extension$Changing !== undefined &&
-            this.events.extension$Changed !== undefined
-        ) {
-            this.reactTo(this.events.extension$Changing, this.#validateAccessControlExtensionChanges); // Enhanced Validation
-            this.reactTo(this.events.extension$Changed, this.#handleAccessControlExtensionChange); // Event handling for changes
+        if (this.state.extension !== undefined) {
+            this.maybeReactTo(this.events.extension$Changing, this.#validateAccessControlExtensionChanges); // Enhanced Validation
+            this.maybeReactTo(this.events.extension$Changed, this.#handleAccessControlExtensionChange); // Event handling for changes
         }
 
         const lifecycle = this.endpoint.lifecycle as NodeLifecycle;
@@ -77,21 +73,14 @@ export class AccessControlServer extends AccessControlBehavior.with("Extension")
                 // Handle Backward compatibility to Matter.js before 0.9.1 and add the missing ACL entry if no entry was set
                 // so far by the controller
                 const fallbackAcl: AccessControlTypes.AccessControlEntry = {
-                    fabricIndex: fabric.fabricIndex,
                     privilege: AccessControlTypes.AccessControlEntryPrivilege.Administer,
                     authMode: AccessControlTypes.AccessControlEntryAuthMode.Case,
                     subjects: [fabric.rootNodeId],
                     targets: null, // entire node
+                    fabricIndex: fabric.fabricIndex,
                 };
                 this.state.acl.push(fallbackAcl);
                 fabricAcls.push(fallbackAcl);
-                logger.warn(
-                    "Added missing ACL entry for fabric",
-                    fabric.fabricIndex,
-                    "for Node ID",
-                    fabric.rootNodeId,
-                    ". This should only happen once after upgrading to matter.js 0.9.1",
-                );
             }
             fabric.accessControl.aclList = fabricAcls;
             fabric.accessControl.extensionEntryAccessCheck = this.extensionEntryAccessCheck.bind(this);

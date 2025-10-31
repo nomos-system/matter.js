@@ -39,8 +39,8 @@
         "@matter/types": "*"
     },
     "devDependencies": {
-        "@types/jsdom": "^21.1.7",
-        "jsdom": "^27.0.0",
+        "@types/jsdom": "^27.0.0",
+        "jsdom": "^27.0.1",
         "word-list": "^4.1.0",
         "yargs": "^18.0.0"
     },

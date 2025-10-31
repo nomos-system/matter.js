@@ -26,7 +26,7 @@ name: CHIP Image - Build and Test
 
 on:
   schedule:
-    - cron: 0 1 * * * # Every day at 01:00
+    - cron: 0 0 * * * # Every day at 00:00 (midnight)
   workflow_dispatch: # Manually on demand
     inputs:
       updateChipSha:
@@ -110,7 +110,7 @@ jobs:
 
       - name: Upload chip artifact
         if: needs.workflow-conditions.outputs.build-needed == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: chip-image
           path: /tmp/chip.tar
@@ -238,6 +238,6 @@ jobs:
           body: |
             New CHIP SHA from CI container build
           labels: |
-            automated-docker-release
+            automated-chip-image-release
           assignees: Automator77
           draft: false

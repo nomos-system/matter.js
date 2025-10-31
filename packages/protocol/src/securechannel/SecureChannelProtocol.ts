@@ -7,6 +7,7 @@
 import { FabricManager } from "#fabric/FabricManager.js";
 import { AsyncObservable, Environment, Environmental, Logger, MatterFlowError } from "#general";
 import { ExchangeManager } from "#protocol/ExchangeManager.js";
+import { NodeSession } from "#session/NodeSession.js";
 import { SessionManager } from "#session/SessionManager.js";
 import {
     GeneralStatusCode,
@@ -19,7 +20,6 @@ import {
 import { Message } from "../codec/MessageCodec.js";
 import { MessageExchange } from "../protocol/MessageExchange.js";
 import { ProtocolHandler } from "../protocol/ProtocolHandler.js";
-import { SecureSession } from "../session/SecureSession.js";
 import { CaseServer } from "../session/case/CaseServer.js";
 import { MaximumPasePairingErrorsReachedError, PaseServer } from "../session/pase/PaseServer.js";
 import { ChannelStatusResponseError, SecureChannelMessenger } from "./SecureChannelMessenger.js";
@@ -29,7 +29,9 @@ const logger = Logger.get("SecureChannelProtocol");
 
 export class StatusReportOnlySecureChannelProtocol implements ProtocolHandler {
     readonly id = SECURE_CHANNEL_PROTOCOL_ID;
-    readonly requiresSecureSession = false;
+
+    // We need to check the message details to decide if ok or not, so we take them all
+    readonly requiresSecureSession = undefined;
 
     async onNewExchange(exchange: MessageExchange, message: Message) {
         const messageType = message.payloadHeader.messageType;
@@ -70,6 +72,8 @@ export class StatusReportOnlySecureChannelProtocol implements ProtocolHandler {
                 protocolStatus,
             );
         }
+
+        // CloseSession is the only case where a StatusReport comes as initial message
         if (protocolStatus !== SecureChannelStatusCode.CloseSession) {
             throw new ChannelStatusResponseError(
                 `Received general success status, but protocol status is not CloseSession`,
@@ -79,10 +83,9 @@ export class StatusReportOnlySecureChannelProtocol implements ProtocolHandler {
         }
 
         const { session } = exchange;
-        SecureSession.assert(session);
+        NodeSession.assert(session);
         logger.debug(`Peer requested to close session ${session.name}. Remove session now.`);
-        // TODO: and do more - see Core Specs 5.5
-        await session.destroy(false, false);
+        await session.closeByPeer();
     }
 
     async close() {
@@ -118,7 +121,8 @@ export class SecureChannelProtocol extends StatusReportOnlySecureChannelProtocol
         this.#paseCommissioner = paseServer;
     }
 
-    removePaseCommissioner() {
+    async removePaseCommissioner() {
+        await this.#paseCommissioner?.close();
         this.#paseCommissioner = undefined;
     }
 

@@ -1,0 +1,38 @@
+# This workflow reacts on a PR that is labeled with "automated-chip-image-release", will automatically merge it
+name: Automatic CHIP Image Release
+
+permissions:
+  contents: write
+  pull-requests: write
+  
+on:
+  pull_request:
+    types: [labeled]
+
+# Cancel previous PR/branch runs when a new commit is pushed
+concurrency:
+  group: ${{ github.ref }}-auto-chip-image-release
+  cancel-in-progress: true
+
+jobs:
+  auto-merge:
+    if: |
+      always() &&
+      github.event_name == 'pull_request' &&
+      github.repository == 'matter-js/matter.js' &&
+      contains(github.event.pull_request.labels.*.name, 'automated-chip-image-release')
+    runs-on: ubuntu-latest
+    steps:
+      - id: automerge
+        name: automerge
+        uses: "pascalgn/automerge-action@v0.16.4"
+        env:
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+          MERGE_LABELS: "automated-chip-image-release"
+          MERGE_FILTER_AUTHOR: "Automator77"
+          MERGE_FORKS: "false"
+          MERGE_DELETE_BRANCH: "false"
+          UPDATE_LABELS: "automated-chip-image-release"
+          MERGE_METHOD: "squash"
+          MERGE_RETRIES: "30"
+          MERGE_RETRY_SLEEP: "180000"

@@ -106,6 +106,14 @@ export interface Observable<T extends any[] = any[], R = void> extends AsyncIter
     handlePromise: ObserverPromiseHandler | boolean;
 
     /**
+     * Creates a promise that resolves when next emitted.
+     */
+    then<TResult1 = T, TResult2 = never>(
+        onfulfilled?: ((value: T[0]) => TResult1 | PromiseLike<TResult1>) | null,
+        onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | null,
+    ): Promise<TResult1 | TResult2>;
+
+    /**
      * Observable supports standard "for await (const value of observable").
      *
      * Using an observer in this manner limits your listener to the first parameter normally emitted and your observer
@@ -120,6 +128,40 @@ export interface Observable<T extends any[] = any[], R = void> extends AsyncIter
 }
 
 /**
+ * An observable value.
+ *
+ * This is a stateful observable that remembers its last emitted value and maps to standard Promise semantics.
+ *
+ * Unlike a normal {@link Observable}, awaiting an {@link ObservableValue} will result in immediate resolution if the
+ * value is truthy, and immediately upon updating to a truthy value otherwise.
+ *
+ * Also unlike a normal {@link Observable}, an {@link ObservableValue} may be placed into an error state which will
+ * result in rejection if awaited.
+ */
+export interface ObservableValue<T extends [any, ...any[]] = [boolean], R extends MaybePromise<void> = void>
+    extends Observable<T, R>,
+        Promise<T[0]> {
+    value: T[0] | undefined;
+    error?: Error;
+
+    /**
+     * Place the observable into an error state.
+     *
+     * The error is cleared on next emit.
+     */
+    reject(cause: unknown): void;
+
+    then<TResult1 = T, TResult2 = never>(
+        onfulfilled?: ((value: T[0]) => TResult1 | PromiseLike<TResult1>) | null,
+        onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | null,
+    ): Promise<TResult1 | TResult2>;
+
+    catch<TResult = never>(
+        onrejected?: ((reason: any) => TResult | PromiseLike<TResult>) | null,
+    ): Promise<T[0] | TResult>;
+}
+
+/**
  * An observer may designate itself as "not observant" for the purposes of {@link Observable.isObserved} by returning
  * false from this field.
  */
@@ -129,6 +171,11 @@ export const observant = Symbol("consider-observed");
  * An {@link Observable} that explicitly supports asynchronous observers.
  */
 export interface AsyncObservable<T extends any[] = any[], R = void> extends Observable<T, MaybePromise<R>> {}
+
+/**
+ * An {@link ObservableValue} that explicitly supports asynchronous observers.
+ */
+export interface AsyncObservableValue<T extends [any, ...any[]] = [boolean]> extends ObservableValue<T, MaybePromise> {}
 
 function defaultErrorHandler(error: Error) {
     throw error;
@@ -315,12 +362,12 @@ export class BasicObservable<T extends any[] = any[], R = void> implements Obser
     }
 
     then<TResult1 = T, TResult2 = never>(
-        onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | null,
+        onfulfilled?: ((value: T[0]) => TResult1 | PromiseLike<TResult1>) | null,
         onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | null,
-    ): PromiseLike<TResult1 | TResult2> {
+    ): Promise<TResult1 | TResult2> {
         return new Promise<T>(resolve => {
             this.once((...payload): undefined => {
-                resolve(payload);
+                resolve(payload[0]);
             });
         }).then(onfulfilled, onrejected);
     }
@@ -385,10 +432,6 @@ export class BasicObservable<T extends any[] = any[], R = void> implements Obser
 
 type Next<T> = undefined | { value: T; promise: Promise<Next<T>> };
 
-function constructObservable(handleError?: ObserverErrorHandler) {
-    return new BasicObservable(handleError);
-}
-
 /**
  * Create an {@link Observable}.
  */
@@ -397,8 +440,8 @@ export const Observable = constructObservable as unknown as {
     <T extends any[], R = void>(errorHandler?: ObserverErrorHandler): Observable<T, R>;
 };
 
-function constructAsyncObservable(handleError?: ObserverErrorHandler) {
-    return new BasicObservable(handleError, true);
+function constructObservable(handleError?: ObserverErrorHandler) {
+    return new BasicObservable(handleError);
 }
 
 /**
@@ -409,12 +452,137 @@ export const AsyncObservable = constructAsyncObservable as unknown as {
     <T extends any[], R = void>(handleError?: ObserverErrorHandler): AsyncObservable<T, R>;
 };
 
+function constructAsyncObservable(handleError?: ObserverErrorHandler) {
+    return new BasicObservable(handleError, true);
+}
+
 function event<E, N extends string>(emitter: E, name: N) {
     const observer = (emitter as any)[name];
     if (typeof !observer?.on !== "function") {
         throw new ImplementationError(`Invalid event name ${name}`);
     }
     return observer as Observable;
+}
+
+/**
+ * A concrete {@link ObservableValue} implementation.
+ */
+export class BasicObservableValue<T extends [any, ...any[]] = [boolean]>
+    extends BasicObservable<T, void>
+    implements ObservableValue<T>
+{
+    #value: T | undefined;
+    #error?: Error;
+    #awaiters?: {
+        resolve?: ((value: T[0]) => void) | null;
+        reject?: ((reason: any) => void) | null;
+    }[];
+
+    constructor(value?: T[0], handleError?: ObserverErrorHandler, asyncConfig?: ObserverPromiseHandler | boolean) {
+        super(handleError, asyncConfig);
+        this.#value = value;
+        this.on(this.#maybeResolve.bind(this) as unknown as Observer<T, void>);
+    }
+
+    /**
+     * The current value.
+     *
+     * This will resolve the promise interface but you must use {@link emit} to also emit an event..
+     */
+    get value(): T[0] | undefined {
+        return this.#value;
+    }
+
+    set value(value: T[0] | undefined) {
+        this.#maybeResolve([value]);
+    }
+
+    get error() {
+        return this.#error;
+    }
+
+    reject(cause: unknown) {
+        cause = asError(cause);
+        this.#value = undefined;
+        this.#error = cause as Error;
+        const awaiters = this.#awaiters;
+        if (awaiters) {
+            this.#awaiters = undefined;
+            for (const awaiter of awaiters) {
+                awaiter.reject?.(cause as Error);
+            }
+        }
+    }
+
+    #maybeResolve(value: T[0] | undefined) {
+        this.#value = value;
+        if (!this.#value) {
+            return;
+        }
+
+        const awaiters = this.#awaiters;
+        if (awaiters) {
+            this.#awaiters = undefined;
+            for (const awaiter of awaiters) {
+                awaiter.resolve?.(this.#value);
+            }
+        }
+    }
+
+    override then<TResult1 = T, TResult2 = never>(
+        onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | null,
+        onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | null,
+    ): Promise<TResult1 | TResult2> {
+        if (this.#error) {
+            return Promise.reject(this.#error).then(onfulfilled, onrejected);
+        }
+        if (this.#value) {
+            return Promise.resolve(this.#value).then(onfulfilled, onrejected);
+        }
+
+        return new Promise<T>((resolve, reject) => {
+            if (!this.#awaiters) {
+                this.#awaiters = [];
+            }
+            this.#awaiters.push({ resolve, reject });
+        }).then(onfulfilled, onrejected);
+    }
+
+    catch<TResult = never>(
+        onrejected?: ((reason: any) => TResult | PromiseLike<TResult>) | null,
+    ): Promise<T | TResult> {
+        return this.then(undefined, onrejected);
+    }
+
+    finally(onfinally?: (() => void) | null): Promise<T> {
+        return Promise.resolve(this).finally(onfinally);
+    }
+
+    [Symbol.toStringTag] = "Promise";
+}
+
+/**
+ * Create an {@link ObservableValue}.
+ */
+export const ObservableValue = constructObservableValue as unknown as {
+    new <T extends [any, ...any[]]>(value?: T[0], errorHandler?: ObserverErrorHandler): ObservableValue<T>;
+    <T extends [any, ...any[]]>(value?: T[0], errorHandler?: ObserverErrorHandler): ObservableValue<T>;
+};
+
+function constructObservableValue(value?: unknown, handleError?: ObserverErrorHandler) {
+    return new BasicObservableValue<any>(value, handleError);
+}
+
+/**
+ * Create an {@link AsyncObservableValue}.
+ */
+export const AsyncObservableValue = constructAsyncObservableValue as unknown as {
+    new <T extends [any, ...any[]]>(value?: T[0], errorHandler?: ObserverErrorHandler): AsyncObservableValue<T>;
+    <T extends [any, ...any[]]>(value?: T[0], errorHandler?: ObserverErrorHandler): AsyncObservableValue<T>;
+};
+
+function constructAsyncObservableValue(value?: unknown, handleError?: ObserverErrorHandler) {
+    return new BasicObservableValue<any>(value, handleError, true);
 }
 
 /**

@@ -11,6 +11,7 @@ import { OnOffClient } from "#behaviors/on-off";
 import { OnOffLightDevice } from "#devices/on-off-light";
 import { Endpoint } from "#endpoint/Endpoint.js";
 import { b$, deepCopy, Seconds, Time, TimeoutError } from "#general";
+import { Specification } from "#model";
 import { MockSite } from "./mock-site.js";
 
 describe("ClientNode", () => {
@@ -211,7 +212,7 @@ describe("ClientNode", () => {
 
         // Toggle should now complete
         await MockTime.resolve(toggle);
-    }).timeout(1e9);
+    });
 
     it("emits Matter events", async () => {
         // *** SETUP ***
@@ -246,6 +247,12 @@ describe("ClientNode", () => {
     it("removes node after leave event", () => {
         // TODO
     });
+
+    it("disconnect from/disables the node", () => {
+        // TODO
+        // TODO Also include validation that the session is closed correctly on the device side on session close and
+        //  all subscriptions ended and such
+    });
 });
 
 const PEER1_STATE = {
@@ -255,8 +262,22 @@ const PEER1_STATE = {
         longIdleTimeOperatingMode: false,
         peerAddress: { fabricIndex: 1, nodeId: expect.BIGINT },
         addresses: [
-            { type: "udp", ip: "1111:2222:3333:4444:5555:6666:7777:8802", port: 0x15a4, peripheralAddress: undefined },
-            { type: "udp", ip: "10.10.10.2", port: 0x15a4, peripheralAddress: undefined },
+            {
+                type: "udp",
+                ip: "1111:2222:3333:4444:5555:6666:7777:8802",
+                port: 0x15a4,
+                peripheralAddress: undefined,
+                discoveredAt: undefined,
+                ttl: undefined,
+            },
+            {
+                type: "udp",
+                ip: "10.10.10.2",
+                port: 0x15a4,
+                peripheralAddress: undefined,
+                discoveredAt: undefined,
+                ttl: undefined,
+            },
         ],
         discoveredAt: expect.NUMBER,
         onlineAt: undefined,
@@ -272,9 +293,8 @@ const PEER1_STATE = {
         rotatingIdentifier: undefined,
         pairingHint: 0x21,
         pairingInstructions: undefined,
-        sessionParameters: { idleInterval: 500, activeInterval: 300, activeThreshold: 4000 },
+        sessionIntervals: { idleInterval: 500, activeInterval: 300, activeThreshold: 4000 },
         tcpSupport: 0,
-        longIdleOperatingMode: undefined,
     },
     network: {
         isDisabled: false,
@@ -285,8 +305,9 @@ const PEER1_STATE = {
         autoSubscribe: true,
     },
     basicInformation: {
-        clusterRevision: 4,
-        dataModelRevision: 0x12,
+        clusterRevision: 5,
+        configurationVersion: 1,
+        dataModelRevision: Specification.DATA_MODEL_REVISION,
         vendorName: "Matter.js Test Vendor",
         vendorId: 0xfff1,
         productName: "Matter.js Test Product",
@@ -307,11 +328,11 @@ const PEER1_STATE = {
         uniqueId: expect.STRING,
         capabilityMinima: { caseSessionsPerFabric: 3, subscriptionsPerFabric: 3 },
         productAppearance: undefined,
-        specificationVersion: 0x1040100,
+        specificationVersion: 0x1040200,
         maxPathsPerInvoke: 10,
         featureMap: {},
         attributeList: [
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0xe, 0x12, 0x13, 0x15, 0x16, 0xfffd, 0xfffc, 0xfffb, 0xfff9, 0xfff8,
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0xe, 0x12, 0x13, 0x15, 0x16, 0x18, 0xfffd, 0xfffc, 0xfffb, 0xfff9, 0xfff8,
         ],
         eventList: undefined,
         acceptedCommandList: [],
@@ -374,18 +395,20 @@ const PEER1_STATE = {
         generatedCommandList: [],
     },
     operationalCredentials: {
-        clusterRevision: 1,
+        clusterRevision: 2,
         nocs: [
             {
                 noc: expect.BYTES,
                 icac: null,
                 fabricIndex: 1,
+                vvsc: undefined,
             },
         ],
         fabrics: [
             {
                 rootPublicKey: expect.BYTES,
                 vendorId: 0xfff1,
+                vidVerificationStatement: undefined,
                 fabricId: 0x1n,
                 nodeId: expect.BIGINT,
                 label: "matter.js",
@@ -417,7 +440,7 @@ const PEER1_STATE = {
                 type: 2,
             },
         ],
-        rebootCount: 0,
+        rebootCount: 1,
         upTime: expect.NUMBER,
         totalOperationalHours: 0,
         bootReason: undefined,
@@ -432,7 +455,8 @@ const PEER1_STATE = {
         generatedCommandList: [2, 4],
     },
     descriptor: {
-        clusterRevision: 2,
+        clusterRevision: 3,
+        endpointUniqueId: undefined,
         featureMap: { tagList: false },
         deviceTypeList: [{ deviceType: 0x16, revision: 3 }],
         serverList: [0x28, 0x1f, 0x3f, 0x30, 0x3c, 0x3e, 0x33, 0x1d],
@@ -448,7 +472,7 @@ const PEER1_STATE = {
 
 const EP1_STATE = {
     identify: {
-        clusterRevision: 5,
+        clusterRevision: 6,
         identifyTime: 0,
         identifyType: 0,
         featureMap: {},
@@ -460,7 +484,7 @@ const EP1_STATE = {
     groups: {
         clusterRevision: 4,
         featureMap: { groupNames: true },
-        nameSupport: { nameSupport: true, groupNames: true },
+        nameSupport: { groupNames: true },
         attributeList: [0, 0xfffd, 0xfffc, 0xfffb, 0xfff9, 0xfff8],
         eventList: undefined,
         acceptedCommandList: [0, 1, 2, 3, 4, 5],
@@ -470,7 +494,7 @@ const EP1_STATE = {
         clusterRevision: 6,
         featureMap: { lighting: true, deadFrontBehavior: false, offOnly: false },
         onOff: false,
-        globalSceneControl: true,
+        globalSceneControl: false,
         onTime: 0,
         offWaitTime: 0,
         startUpOnOff: null,
@@ -480,10 +504,11 @@ const EP1_STATE = {
         generatedCommandList: [],
     },
     descriptor: {
-        clusterRevision: 2,
+        clusterRevision: 3,
         featureMap: { tagList: false },
         deviceTypeList: [{ deviceType: 0x100, revision: 3 }],
-        serverList: [3, 4, 6, 0x1d],
+        endpointUniqueId: undefined,
+        serverList: [3, 4, 0x62, 6, 0x1d],
         clientList: [],
         partsList: [],
         tagList: undefined,
@@ -491,5 +516,18 @@ const EP1_STATE = {
         eventList: undefined,
         acceptedCommandList: [],
         generatedCommandList: [],
+    },
+    scenesManagement: {
+        acceptedCommandList: [],
+        attributeList: [1, 2, 0xfffd, 0xfffc, 0xfffb, 0xfff9, 0xfff8],
+        clusterRevision: 1,
+        fabricSceneInfo: [],
+        featureMap: {
+            sceneNames: false,
+        },
+        generatedCommandList: [],
+        sceneTableSize: 0,
+        doNotUse: undefined,
+        eventList: undefined,
     },
 };

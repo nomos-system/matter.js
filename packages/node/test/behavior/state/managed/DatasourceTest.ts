@@ -51,7 +51,7 @@ function createDatasource<const T extends StateType = typeof MyState>(
     options: Partial<Datasource.Options<T>> = {},
 ): Datasource<T> {
     return Datasource({
-        crypto: MockCrypto(),
+        entropy: MockCrypto(),
         location: {
             endpoint: EndpointNumber(1),
             path: DataModelPath("TestDatasource"),
@@ -159,6 +159,57 @@ describe("Datasource", () => {
             state.foo = "goodbye";
             expect(state.foo).equals("goodbye");
             expect(dynamic.foo).equals("goodbye");
+        });
+    });
+
+    it("handles dynamic properties with getter and setter", async () => {
+        let readByHandler = 0;
+        let writtenByHandler = 0;
+
+        let value = "hello";
+        const dynamic = {
+            get foo() {
+                readByHandler++;
+                return value;
+            },
+            set foo(newValue: string) {
+                writtenByHandler++;
+                value = newValue;
+            },
+        };
+        class State {
+            foo = "";
+
+            [Val.properties](_endpoint: any, _session: ValueSupervisor.Session) {
+                return dynamic;
+            }
+        }
+
+        const supervisor = BehaviorSupervisor({ id: "test", State });
+
+        await withDatasourceAndReference({ type: State, supervisor }, ({ state }) => {
+            expect(state.foo).equals("hello");
+            state.foo = "goodbye";
+            expect(state.foo).equals("goodbye");
+            expect(dynamic.foo).equals("goodbye");
+            expect(readByHandler).equals(3);
+            expect(writtenByHandler).equals(1);
+
+            state.foo = "goodbye2";
+            expect(state.foo).equals("goodbye2");
+            expect(dynamic.foo).equals("goodbye2");
+            expect(readByHandler).equals(5);
+            expect(writtenByHandler).equals(2);
+
+            value = "changed";
+            expect(state.foo).equals("changed");
+            expect(dynamic.foo).equals("changed");
+            expect(readByHandler).equals(7);
+            expect(writtenByHandler).equals(2);
+        });
+
+        await withDatasourceAndReference({ type: State, supervisor }, ({ state }) => {
+            expect(state.foo).equals("changed");
         });
     });
 

@@ -105,7 +105,19 @@ const DATA_REPORT_MAX_QUEUED_ATTRIBUTE_MESSAGES = 20;
 const DATA_REPORT_MIN_AVAILABLE_BYTES_BEFORE_SENDING = 40;
 
 class InteractionMessenger {
-    constructor(protected exchange: MessageExchange) {}
+    #exchange: MessageExchange;
+
+    constructor(exchange: MessageExchange) {
+        this.#exchange = exchange;
+    }
+
+    get exchange() {
+        return this.#exchange;
+    }
+
+    protected set exchange(value: MessageExchange) {
+        this.#exchange = value;
+    }
 
     send(messageType: number, payload: Bytes, options?: ExchangeSendOptions) {
         return this.exchange.send(messageType, payload, options);
@@ -197,8 +209,8 @@ class InteractionMessenger {
             );
     }
 
-    getExchangeChannelName() {
-        return this.exchange.channel.name;
+    get session() {
+        return this.exchange.session;
     }
 }
 
@@ -1184,15 +1196,23 @@ export class InteractionClientMessenger extends IncomingInteractionClientMesseng
         request: RequestT,
         expectedProcessingTime?: Duration,
     ): Promise<void> {
-        await this.send(requestMessageType, requestSchema.encode(request), {
-            expectAckOnly: true,
-            expectedProcessingTime: expectedProcessingTime,
-            logContext: {
-                invokeFlags: Diagnostic.asFlags({
-                    suppressResponse: true,
-                }),
-            },
-        });
+        try {
+            await this.send(requestMessageType, requestSchema.encode(request), {
+                expectAckOnly: true,
+                expectedProcessingTime: expectedProcessingTime,
+                logContext: {
+                    invokeFlags: Diagnostic.asFlags({
+                        suppressResponse: true,
+                    }),
+                },
+            });
+        } catch (e) {
+            // If we got anything other than a standalone ack, we throw when receiving a status response, otherwise we ignore it
+            // Mainly needed because of a Matter-SDK bug where a command response is sent even when suppressResponse is true
+            UnexpectedMessageError.accept(e);
+            const { receivedMessage } = e;
+            this.throwIfErrorStatusMessage(receivedMessage);
+        }
     }
 
     private async request<RequestT, ResponseT>(

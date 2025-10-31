@@ -10,8 +10,8 @@ import {
     Channel,
     ConnectionlessTransport,
     ConnectionlessTransportSet,
-    Crypto,
     Diagnostic,
+    Entropy,
     Environment,
     Environmental,
     ImplementationError,
@@ -48,7 +48,7 @@ const MAXIMUM_CONCURRENT_EXCHANGES_PER_SESSION = 5;
  * Interfaces {@link ExchangeManager} with other components.
  */
 export interface ExchangeManagerContext {
-    crypto: Crypto;
+    entropy: Entropy;
     netInterface: ConnectionlessTransportSet;
     sessionManager: SessionManager;
     channelManager: ChannelManager;
@@ -70,7 +70,7 @@ export class ExchangeManager {
         this.#transports = context.netInterface;
         this.#sessionManager = context.sessionManager;
         this.#channelManager = context.channelManager;
-        this.#exchangeCounter = new ExchangeCounter(context.crypto);
+        this.#exchangeCounter = new ExchangeCounter(context.entropy);
 
         for (const netInterface of this.#transports) {
             this.#addListener(netInterface);
@@ -89,7 +89,7 @@ export class ExchangeManager {
 
     static [Environmental.create](env: Environment) {
         const instance = new ExchangeManager({
-            crypto: env.get(Crypto),
+            entropy: env.get(Entropy),
             netInterface: env.get(ConnectionlessTransportSet),
             sessionManager: env.get(SessionManager),
             channelManager: env.get(ChannelManager),
@@ -225,6 +225,12 @@ export class ExchangeManager {
             message.payloadHeader.protocolId,
             message.payloadHeader.messageType,
         );
+        const messageDiagnostics = Diagnostic.dict({
+            message: messageId,
+            protocol: message.payloadHeader.protocolId,
+            exId: message.payloadHeader.exchangeId,
+            via: channel.name,
+        });
         if (exchange !== undefined) {
             if (
                 exchange.requiresSecureSession !== session.isSecure ||
@@ -232,14 +238,15 @@ export class ExchangeManager {
                 (exchange.isClosing && !isStandaloneAck)
             ) {
                 logger.debug(
-                    `Ignoring message ${messageId} for protocol ${message.payloadHeader.protocolId} and exchange id ${message.payloadHeader.exchangeId} on channel ${channel.name} because ${
-                        exchange.isClosing
-                            ? "exchange is closing"
-                            : exchange.session.id !== packet.header.sessionId
-                              ? `session ID mismatch ${exchange.session.id} vs ${packet.header.sessionId}`
-                              : `session security requirements (${exchange.requiresSecureSession}) not fulfilled`
-                    }`,
+                    "Ignore « message because",
+                    exchange.isClosing
+                        ? "exchange is closing"
+                        : exchange.session.id !== packet.header.sessionId
+                          ? `session ID mismatch ${exchange.session.id} vs ${packet.header.sessionId}`
+                          : `session security requirements (${exchange.requiresSecureSession}) not fulfilled`,
+                    messageDiagnostics,
                 );
+
                 await exchange.send(SecureMessageType.StandaloneAck, new Uint8Array(0), {
                     includeAcknowledgeMessageId: message.packetHeader.messageId,
                     protocolId: SECURE_CHANNEL_PROTOCOL_ID,
@@ -259,15 +266,15 @@ export class ExchangeManager {
 
             const protocolHandler = this.#protocols.get(message.payloadHeader.protocolId);
 
+            const handlerSecurityMismatch =
+                protocolHandler?.requiresSecureSession !== undefined &&
+                protocolHandler.requiresSecureSession !== session.isSecure;
             // Having a "Secure Session" means it is encrypted in our internal working
             // TODO When adding Group sessions, we need to check how to adjust that handling
-            if (
-                protocolHandler !== undefined &&
-                protocolHandler.requiresSecureSession !== session.isSecure &&
-                !isStandaloneAck
-            ) {
+            if (handlerSecurityMismatch) {
                 logger.debug(
-                    `Ignoring message ${messageId} for protocol ${message.payloadHeader.protocolId} and exchange id ${message.payloadHeader.exchangeId} on channel ${channel.name} because not matching the security requirements.`,
+                    `Ignore « message because not matching the security requirements (${protocolHandler.requiresSecureSession} vs. ${session.isSecure})`,
+                    messageDiagnostics,
                 );
             }
 
@@ -275,12 +282,10 @@ export class ExchangeManager {
                 protocolHandler !== undefined &&
                 message.payloadHeader.isInitiatorMessage &&
                 !isDuplicate &&
-                protocolHandler.requiresSecureSession === session.isSecure
+                !handlerSecurityMismatch
             ) {
                 if (isStandaloneAck && !message.payloadHeader.requiresAck) {
-                    logger.debug(
-                        `Ignoring unsolicited standalone ack message ${messageId} for protocol ${message.payloadHeader.protocolId} and exchange id ${message.payloadHeader.exchangeId} on channel ${channel.name}`,
-                    );
+                    logger.debug("Ignore « unsolicited standalone ack message", messageDiagnostics);
                     return;
                 }
 
@@ -302,9 +307,7 @@ export class ExchangeManager {
                     protocolId: SECURE_CHANNEL_PROTOCOL_ID,
                 });
                 await exchange.close();
-                logger.debug(
-                    `Ignoring unsolicited message ${messageId} for protocol ${message.payloadHeader.protocolId} on channel ${channel.name}`,
-                );
+                logger.debug("Ignore « unsolicited message", messageDiagnostics);
             } else {
                 if (protocolHandler === undefined) {
                     throw new MatterFlowError(`Unsupported protocol ${message.payloadHeader.protocolId}`);
@@ -312,17 +315,12 @@ export class ExchangeManager {
                 if (isDuplicate) {
                     if (message.packetHeader.destGroupId === undefined) {
                         // Duplicate Non-Group messages are still interesting to log to know them
-                        logger.info(
-                            `Ignoring duplicate message ${messageId} (requires no ack) for protocol ${message.payloadHeader.protocolId} on channel ${channel.name}`,
-                        );
+                        logger.debug("Ignore « duplicate message", messageDiagnostics);
                     }
                     return;
-                } else if (!isStandaloneAck) {
-                    logger.info(
-                        `Discarding unexpected message ${messageId} for protocol ${
-                            message.payloadHeader.protocolId
-                        }, exchangeIndex ${exchangeIndex} and sessionId ${session.id} on channel ${channel.name}: ${Diagnostic.json(message)}`,
-                    );
+                }
+                if (!isStandaloneAck) {
+                    logger.info("Discard « unexpected message", messageDiagnostics, Diagnostic.json(message));
                 }
             }
         }
@@ -482,8 +480,8 @@ export class ExchangeManager {
 export class ExchangeCounter {
     #exchangeCounter: number;
 
-    constructor(crypto: Crypto) {
-        this.#exchangeCounter = crypto.randomUint16;
+    constructor(entropy: Entropy) {
+        this.#exchangeCounter = entropy.randomUint16;
     }
 
     getIncrementedCounter() {

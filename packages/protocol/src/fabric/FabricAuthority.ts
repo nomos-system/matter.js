@@ -24,21 +24,15 @@ const logger = Logger.get("FabricAuthority");
 /**
  * Configuration for fabrics controlled by a FabricAuthority.
  */
-interface FabricAuthorityConfiguration {
-    adminVendorId?: VendorId;
-    fabricIndex?: FabricIndex;
-    fabricId?: FabricId;
-    caseAuthenticatedTags?: CaseAuthenticatedTag[];
-    adminFabricLabel: string;
-}
+export interface FabricAuthorityConfiguration {
+    readonly adminFabricLabel: string;
+    readonly adminVendorId?: VendorId;
+    readonly adminNodeId?: NodeId;
 
-/**
- * Concrete {@link FabricAuthorityConfiguration} for environmental configuration.
- */
-export class FabricAuthorityConfigurationProvider implements FabricAuthorityConfiguration {
-    get adminFabricLabel(): string {
-        throw new ImplementationError("Admin Fabric Label must be set for FabricAuthorityConfigurationProvider.");
-    }
+    /** @deprecated Fabric index is assigned automatically, please do not specify this. */
+    readonly adminFabricIndex?: FabricIndex;
+    readonly adminFabricId?: FabricId;
+    readonly caseAuthenticatedTags?: CaseAuthenticatedTag[];
 }
 
 /**
@@ -47,7 +41,6 @@ export class FabricAuthorityConfigurationProvider implements FabricAuthorityConf
 export interface FabricAuthorityContext {
     ca: CertificateAuthority;
     fabrics: FabricManager;
-    config: FabricAuthorityConfiguration;
 }
 
 export const DEFAULT_ADMIN_VENDOR_ID = VendorId(0xfff1);
@@ -59,13 +52,11 @@ export class FabricAuthority {
     #construction: Construction<FabricAuthority>;
     #ca: CertificateAuthority;
     #fabrics: FabricManager;
-    #config: FabricAuthorityConfiguration;
     #fabricAdded = new Observable<[Fabric]>();
 
-    constructor({ ca, fabrics, config }: FabricAuthorityContext) {
+    constructor({ ca, fabrics }: FabricAuthorityContext) {
         this.#ca = ca;
         this.#fabrics = fabrics;
-        this.#config = config;
 
         this.#construction = Construction(this, async () => {
             await this.#ca.construction;
@@ -87,18 +78,19 @@ export class FabricAuthority {
     /**
      * Obtain the default fabric for this authority.
      */
-    async defaultFabric() {
+    async defaultFabric(config: FabricAuthorityConfiguration) {
         // First search for a fabric associated with the CA's root certificate
-        const fabric = this.fabrics[0];
+        const caRootCert = this.#ca.rootCert;
+        const fabric = this.fabrics.find(fabric => Bytes.areEqual(fabric.rootCert, caRootCert));
         if (fabric !== undefined) {
-            if (fabric.label !== this.#config.adminFabricLabel) {
-                await fabric.setLabel(this.#config.adminFabricLabel);
+            if (fabric.label !== config.adminFabricLabel) {
+                await fabric.setLabel(config.adminFabricLabel);
             }
             return fabric;
         }
 
         // Create a new fabric
-        return await this.createFabric();
+        return await this.createFabric(config);
     }
 
     /**
@@ -125,11 +117,11 @@ export class FabricAuthority {
     /**
      * Create a new fabric under our control.
      */
-    async createFabric() {
-        const rootNodeId = NodeId.randomOperationalNodeId(this.#fabrics.crypto);
+    async createFabric(config: FabricAuthorityConfiguration) {
+        const rootNodeId = config.adminNodeId ?? NodeId.randomOperationalNodeId(this.#fabrics.crypto);
         const ipkValue = this.#fabrics.crypto.randomBytes(CRYPTO_SYMMETRIC_KEY_LENGTH);
 
-        let vendorId = this.#config.adminVendorId;
+        let vendorId = config.adminVendorId;
         if (vendorId === undefined) {
             vendorId = DEFAULT_ADMIN_VENDOR_ID;
             logger.warn(`Using test vendor ID 0x${vendorId.toString(16)} for controller fabric`);
@@ -140,20 +132,15 @@ export class FabricAuthority {
         fabricBuilder
             .setRootNodeId(rootNodeId)
             .setIdentityProtectionKey(ipkValue)
-            .setRootVendorId(this.#config.adminVendorId ?? DEFAULT_ADMIN_VENDOR_ID)
-            .setLabel(this.#config.adminFabricLabel);
+            .setRootVendorId(vendorId)
+            .setLabel(config.adminFabricLabel);
 
-        const fabricId = this.#config.fabricId ?? FabricId(this.#fabrics.crypto.randomBigInt(8));
+        const fabricId = config.adminFabricId ?? FabricId(this.#fabrics.crypto.randomBigInt(8));
         await fabricBuilder.setOperationalCert(
-            await this.#ca.generateNoc(
-                fabricBuilder.publicKey,
-                fabricId,
-                rootNodeId,
-                this.#config.caseAuthenticatedTags,
-            ),
+            await this.#ca.generateNoc(fabricBuilder.publicKey, fabricId, rootNodeId, config.caseAuthenticatedTags),
         );
 
-        let index = this.#config.fabricIndex;
+        let index = config.adminFabricIndex;
         if (index === undefined) {
             index = this.#fabrics.allocateFabricIndex();
         } else if (this.#fabrics.findByIndex(index) !== undefined) {
@@ -173,7 +160,6 @@ export class FabricAuthority {
         const instance = new FabricAuthority({
             ca: env.get(CertificateAuthority),
             fabrics: env.get(FabricManager),
-            config: env.get(FabricAuthorityConfigurationProvider),
         });
         env.set(FabricAuthority, instance);
         return instance;

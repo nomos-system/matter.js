@@ -14,12 +14,11 @@ import {
     Observable,
     Transaction,
 } from "#general";
-import { Schema } from "#model";
+import { ClassSemantics, Schema, Semantics } from "#model";
 import type { ClusterType } from "#types";
 import { Reactor } from "./Reactor.js";
 import type { BehaviorBacking } from "./internal/BehaviorBacking.js";
 import { DerivedState, EmptyState } from "./state/StateType.js";
-import { BehaviorSupervisor } from "./supervision/BehaviorSupervisor.js";
 import { RootSupervisor } from "./supervision/RootSupervisor.js";
 
 // Internal fields
@@ -68,7 +67,9 @@ export abstract class Behavior {
      * Schema is inferred from the methods and properties of the behavior but you can specify explicitly for additional
      * control.
      */
-    static readonly schema?: Schema;
+    static get schema() {
+        return Schema(this);
+    }
 
     /**
      * By default behaviors load lazily as they are accessed.  You can set this flag to true to force behaviors to load
@@ -139,7 +140,7 @@ export abstract class Behavior {
         if (Object.hasOwn(this, SUPERVISOR)) {
             return (this as StaticInternal)[SUPERVISOR] as RootSupervisor;
         }
-        return ((this as StaticInternal)[SUPERVISOR] = BehaviorSupervisor(this));
+        return ((this as StaticInternal)[SUPERVISOR] = RootSupervisor.for(Schema(this) ?? Schema.empty));
     }
 
     /**
@@ -190,6 +191,16 @@ export abstract class Behavior {
         options?: Reactor.Options,
     ) {
         (this as unknown as Internal)[BACKING].reactTo(observable, reactor, options);
+    }
+
+    protected maybeReactTo<O extends Observable<any[], any>>(
+        observable: O | undefined,
+        reactor: Reactor<Parameters<O["emit"]>, ReturnType<O["emit"]>>,
+        options?: Reactor.Options,
+    ) {
+        if (observable) {
+            this.reactTo(observable, reactor, options);
+        }
     }
 
     /**
@@ -307,6 +318,43 @@ Object.defineProperties(Behavior.prototype, {
         },
 
         enumerable: true,
+    },
+});
+
+/**
+ * Install {@link ClassSemantics} extension logic to integrate schema metadata.
+ */
+Object.defineProperties(Behavior, {
+    [ClassSemantics.extend]: {
+        value(this: Behavior.Type, decoration: ClassSemantics) {
+            const type = decoration.new as Behavior.Type;
+
+            // Support static override of schema
+            if (Object.hasOwn(type, "schema") && type.schema !== undefined) {
+                decoration.mutableModel = type.schema;
+            }
+
+            // Obtain state and base schema
+            const { State, Events, defaults } = type;
+            if (!State || !defaults) {
+                return;
+            }
+
+            // Merge state properties into my schema
+            if (ClassSemantics.hasOwnSemantics(State)) {
+                const stateSemantics = Semantics.classOf(State);
+                stateSemantics.mutableModel = decoration.mutableModel;
+            }
+
+            // Merge events into my schema
+            if (ClassSemantics.hasOwnSemantics(Events)) {
+                const eventSemantics = Semantics.classOf(Events);
+                eventSemantics.mutableModel = decoration.mutableModel;
+            }
+
+            // Augment with fields for untyped state members
+            decoration.defineUnknownMembers(defaults);
+        },
     },
 });
 

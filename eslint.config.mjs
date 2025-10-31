@@ -116,6 +116,8 @@ export default [
             "import/no-unresolved": "off",
             "regexp/optimal-quantifier-concatenation": "off",
             "no-sparse-arrays": "off",
+            "@typescript-eslint/no-unsafe-function-type": "off",
+            "no-unexpected-multiline": "off",
         },
     },
     {

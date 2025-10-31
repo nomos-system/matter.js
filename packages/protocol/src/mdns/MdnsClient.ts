@@ -184,9 +184,10 @@ export class MdnsClient implements Scanner {
         this.#updateScanTargets();
         logger.info(
             "MDNS Scan targets updated :",
-            `commissionable = ${this.#scanForCommissionableDevices}`,
-            "Targets:",
-            this.#operationalScanTargets,
+            Diagnostic.dict({
+                commissionable: this.#scanForCommissionableDevices,
+                operational: this.#operationalScanTargets,
+            }),
         );
     }
 
@@ -220,7 +221,7 @@ export class MdnsClient implements Scanner {
         this.#updateListeningStatus();
     }
 
-    /** Update the status of we care about MDNS messages or not */
+    /** Update the status if we care about MDNS messages or not */
     #updateListeningStatus() {
         const formerListenStatus = this.#listening;
         // Are we interested in MDNS traffic or not?
@@ -786,25 +787,41 @@ export class MdnsClient implements Scanner {
             },
         );
 
-        while (!canceled) {
-            this.#getCommissionableDeviceRecords(identifier).forEach(device => {
-                const { deviceIdentifier } = device;
-                if (!discoveredDevices.has(deviceIdentifier)) {
-                    discoveredDevices.add(deviceIdentifier);
-                    callback(device);
-                }
-            });
+        // We scan continuously, so make sure we are registered for commissionable devices
+        const criteria: MdnsScannerTargetCriteria = { commissionable: true, operationalTargets: [] };
+        this.targetCriteriaProviders.add(criteria);
 
-            let remainingTime;
-            if (discoveryEndTime !== undefined) {
-                remainingTime = Seconds.ceil(Timespan(Time.nowMs, discoveryEndTime).duration);
-                if (remainingTime <= 0) {
-                    break;
+        try {
+            let lastDiscoveredDevices: CommissionableDevice[] | undefined = undefined;
+            while (!canceled) {
+                this.#getCommissionableDeviceRecords(identifier).forEach(device => {
+                    const { deviceIdentifier } = device;
+                    if (!discoveredDevices.has(deviceIdentifier)) {
+                        discoveredDevices.add(deviceIdentifier);
+                        callback(device);
+                    }
+                });
+
+                let remainingTime;
+                if (discoveryEndTime !== undefined) {
+                    remainingTime = Seconds.ceil(Timespan(Time.nowMs, discoveryEndTime).duration);
+                    if (remainingTime <= 0) {
+                        break;
+                    }
                 }
+                lastDiscoveredDevices = await this.#registerWaiterPromise(
+                    queryId,
+                    true,
+                    remainingTime,
+                    () => this.#getCommissionableDeviceRecords(identifier),
+                    false,
+                    queryResolver,
+                );
             }
-            await this.#registerWaiterPromise(queryId, true, remainingTime, undefined, false, queryResolver);
+            return lastDiscoveredDevices ?? this.#getCommissionableDeviceRecords(identifier);
+        } finally {
+            this.targetCriteriaProviders.delete(criteria);
         }
-        return this.#getCommissionableDeviceRecords(identifier);
     }
 
     getDiscoveredCommissionableDevices(identifier: CommissionableDeviceIdentifiers) {

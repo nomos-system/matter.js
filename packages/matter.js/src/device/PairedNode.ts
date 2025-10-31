@@ -294,6 +294,8 @@ export class PairedNode {
     readonly #reconnectFunc: ReconnectionCallback;
     #currentSubscriptionIntervalS?: number;
     #crypto: Crypto;
+    #deviceInformationUpdateNeeded = false;
+    #nodeShutdownDetected = false;
 
     /**
      * Endpoint structure change information that are checked when updating structure
@@ -305,6 +307,7 @@ export class PairedNode {
     readonly events: PairedNode.Events = {
         initialized: AsyncObservable<[details: DeviceInformationData]>(),
         initializedFromRemote: AsyncObservable<[details: DeviceInformationData]>(),
+        deviceInformationChanged: AsyncObservable<[details: DeviceInformationData]>(),
         stateChanged: Observable<[nodeState: NodeStates]>(),
         attributeChanged: Observable<[data: DecodedAttributeReportValue<any>, oldValue: any]>(),
         eventTriggered: Observable<[DecodedEventReportValue<any>]>(),
@@ -807,7 +810,7 @@ export class PairedNode {
                 asClusterClientInternal(cluster)._triggerAttributeUpdate(attributeId, value);
                 attributeChangedCallback?.(data, oldValue);
 
-                this.#checkAttributesForNeededStructureUpdate(endpointId, clusterId, attributeId);
+                this.#checkAttributesForNeededUpdates(endpointId, clusterId, attributeId);
             },
             eventListener: data => {
                 if (ignoreInitialTriggers) return;
@@ -874,9 +877,28 @@ export class PairedNode {
                 ) {
                     logger.info(`Node ${this.nodeId}: Endpoint structure needs to be updated ...`);
                     this.#updateEndpointStructureTimer.stop().start();
+                } else if (this.#deviceInformationUpdateNeeded) {
+                    const rootEndpoint = this.getRootEndpoint();
+                    if (rootEndpoint !== undefined) {
+                        this.#nodeDetails
+                            .enhanceDeviceDetailsFromCache(rootEndpoint)
+                            .then(() => this.events.deviceInformationChanged.emit(this.#nodeDetails.toStorageData()))
+                            .catch(error =>
+                                logger.warn(
+                                    `Node ${this.nodeId}: Error updating device information from root endpoint`,
+                                    error,
+                                ),
+                            );
+                    }
                 }
+                this.#deviceInformationUpdateNeeded = false;
 
-                this.events.connectionAlive.emit();
+                if (this.#nodeShutdownDetected) {
+                    this.#nodeShutdownDetected = false;
+                    this.#scheduleReconnect(RECONNECT_DELAY_AFTER_SHUTDOWN);
+                } else {
+                    this.events.connectionAlive.emit();
+                }
             },
         };
         this.#currentSubscriptionHandler = subscriptionHandler;
@@ -921,11 +943,7 @@ export class PairedNode {
         });
     }
 
-    #checkAttributesForNeededStructureUpdate(
-        endpointId: EndpointNumber,
-        clusterId: ClusterId,
-        attributeId: AttributeId,
-    ) {
+    #checkAttributesForNeededUpdates(endpointId: EndpointNumber, clusterId: ClusterId, attributeId: AttributeId) {
         // Any change in the Descriptor Cluster partsList attribute requires a reinitialization of the endpoint structure
         if (clusterId === Descriptor.Complete.id) {
             switch (attributeId) {
@@ -936,6 +954,8 @@ export class PairedNode {
                     this.#registeredEndpointStructureChanges.set(endpointId, null); // full endpoint update needed
                     return;
             }
+        } else if (clusterId === BasicInformation.Cluster.id) {
+            this.#deviceInformationUpdateNeeded = true;
         }
         switch (attributeId) {
             case FeatureMap.id:
@@ -964,7 +984,7 @@ export class PairedNode {
     /** Handles a node shutDown event (if supported by the node and received). */
     #handleNodeShutdown() {
         logger.info(`Node ${this.nodeId}: Node shutdown detected, trying to reconnect ...`);
-        this.#scheduleReconnect(RECONNECT_DELAY_AFTER_SHUTDOWN);
+        this.#nodeShutdownDetected = true;
     }
 
     #scheduleReconnect(delay?: Duration) {
@@ -988,6 +1008,12 @@ export class PairedNode {
     async #updateEndpointStructure() {
         const allClusterAttributes = this.#interactionClient.getAllCachedClusterData();
         await this.#initializeEndpointStructure(allClusterAttributes, true);
+
+        const rootEndpoint = this.getRootEndpoint();
+        if (rootEndpoint !== undefined) {
+            await this.#nodeDetails.enhanceDeviceDetailsFromCache(rootEndpoint);
+            await this.events.deviceInformationChanged.emit(this.#nodeDetails.toStorageData());
+        }
     }
 
     /**
@@ -1656,6 +1682,11 @@ export namespace PairedNode {
          * This event can also be awaited if code needs to be blocked until the node is fully initialized.
          */
         initializedFromRemote: AsyncObservable<[details: DeviceInformationData]>;
+
+        /**
+         * Emitted when the device information changes.
+         */
+        deviceInformationChanged: AsyncObservable<[details: DeviceInformationData]>;
 
         /** Emitted when the state of the node changes. */
         stateChanged: Observable<[nodeState: NodeStates]>;

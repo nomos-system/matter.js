@@ -6,8 +6,8 @@
 
 import {
     camelize,
-    Crypto,
     deepCopy,
+    Entropy,
     ImplementationError,
     InternalError,
     isDeepEqual,
@@ -16,8 +16,7 @@ import {
     Observable,
     Transaction,
 } from "#general";
-import type { Val } from "#protocol";
-import { AccessControl, ExpiredReferenceError, hasRemoteActor } from "#protocol";
+import { AccessControl, ExpiredReferenceError, hasRemoteActor, Val } from "#protocol";
 import { RootSupervisor } from "../../supervision/RootSupervisor.js";
 import { ValueSupervisor } from "../../supervision/ValueSupervisor.js";
 import { StateType } from "../StateType.js";
@@ -154,9 +153,9 @@ export namespace Datasource {
         location: AccessControl.Location;
 
         /**
-         * Used for random data.
+         * Used to generate initial version numbers.
          */
-        crypto: Crypto;
+        entropy: Entropy;
 
         /**
          * Events triggered automatically.
@@ -328,7 +327,7 @@ function configure(options: Datasource.Options): Internals {
         ...options,
         primaryKey: options.primaryKey === "id" ? "id" : "name",
         events,
-        version: options.crypto.randomUint32,
+        version: options.entropy.randomUint32,
         values,
         featuresKey,
         manageVersion: true,
@@ -557,8 +556,16 @@ function createReference(resource: Transaction.Resource, internals: Internals, s
             if (values === internals.values) {
                 const old = values;
                 values = new internals.type();
+
+                const properties = (values as Val.Dynamic)[Val.properties]
+                    ? (values as Val.Dynamic)[Val.properties](this.rootOwner, session)
+                    : undefined;
                 for (const index of fields) {
-                    values[index] = old[index];
+                    if (properties && index in properties) {
+                        // Property is dynamic anyway, so do nothing
+                    } else {
+                        values[index] = old[index];
+                    }
                 }
 
                 // Point subreferences to the clone

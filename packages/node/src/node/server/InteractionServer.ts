@@ -46,6 +46,7 @@ import {
     DEFAULT_MAX_PATHS_PER_INVOKE,
     INTERACTION_PROTOCOL_ID,
     ReceivedStatusResponseError,
+    Status,
     StatusCode,
     StatusResponseError,
     TlvAny,
@@ -256,14 +257,20 @@ export class InteractionServer implements ProtocolHandler, InteractionRecipient 
             eventFilters,
             interactionModelRevision,
         } = readRequest;
-        logger.debug(
-            () =>
-                `Received read request from ${exchange.channel.name}: attributes:${
+
+        logger.debug(() => [
+            "Read «",
+            exchange.via,
+            Diagnostic.asFlags({ fabricFiltered: isFabricFiltered }),
+            Diagnostic.dict({
+                attributes: `${
                     attributeRequests?.map(path => this.#node.protocol.inspectPath(path)).join(", ") ?? "none"
-                }${dataVersionFilters?.length ? ` with ${dataVersionFilters?.length} filters` : ""}, events:${
+                }${dataVersionFilters?.length ? ` with ${dataVersionFilters?.length} filters` : ""}`,
+                events: `${
                     eventRequests?.map(path => this.#node.protocol.inspectPath(path)).join(", ") ?? "none"
-                }${eventFilters?.length ? `, ${eventFilters?.length} filters` : ""}, isFabricFiltered=${isFabricFiltered}`,
-        );
+                }${eventFilters?.length ? `, ${eventFilters?.length} filters` : ""}`,
+            }),
+        ]);
 
         if (interactionModelRevision > Specification.INTERACTION_MODEL_REVISION) {
             logger.debug(
@@ -303,12 +310,13 @@ export class InteractionServer implements ProtocolHandler, InteractionRecipient 
         const { suppressResponse, timedRequest, writeRequests, interactionModelRevision, moreChunkedMessages } =
             writeRequest;
         const sessionType = message.packetHeader.sessionType;
-        logger.debug(
-            () =>
-                `Received write request from ${exchange.channel.name}: ${writeRequests
-                    .map(req => this.#node.protocol.inspectPath(req.path))
-                    .join(", ")}, suppressResponse=${suppressResponse}, moreChunkedMessages=${moreChunkedMessages}`,
-        );
+
+        logger.info(() => [
+            "Write «",
+            exchange.via,
+            Diagnostic.asFlags({ suppressResponse, moreChunkedMessages }),
+            Diagnostic.weak(writeRequests.map(req => this.#node.protocol.inspectPath(req.path)).join(", ")),
+        ]);
 
         if (moreChunkedMessages && suppressResponse) {
             throw new StatusResponseError(
@@ -345,9 +353,7 @@ export class InteractionServer implements ProtocolHandler, InteractionRecipient 
         }
 
         if (receivedWithinTimedInteraction) {
-            logger.debug(
-                `Write request from ${exchange.channel.name} successfully received while timed interaction is running.`,
-            );
+            logger.debug("Write request for timed interaction on", exchange.channel.name);
             exchange.clearTimedInteraction();
             if (sessionType !== SessionType.Unicast) {
                 throw new StatusResponseError(
@@ -402,9 +408,16 @@ export class InteractionServer implements ProtocolHandler, InteractionRecipient 
             isFabricFiltered,
             interactionModelRevision,
         } = request;
-        logger.debug(
-            `Received subscribe request from ${exchange.channel.name} (keepSubscriptions=${keepSubscriptions}, isFabricFiltered=${isFabricFiltered})`,
-        );
+
+        logger.info(() => [
+            "Subscribe «",
+            exchange.via,
+            Diagnostic.asFlags({ fabricFiltered: isFabricFiltered, keepSubscriptions }),
+            Diagnostic.dict({
+                attributePaths: attributeRequests?.length,
+                eventPaths: eventRequests?.length,
+            }),
+        ]);
 
         if (interactionModelRevision > Specification.INTERACTION_MODEL_REVISION) {
             logger.debug(
@@ -442,27 +455,29 @@ export class InteractionServer implements ProtocolHandler, InteractionRecipient 
             throw new StatusResponseError("No attributes or events requested", StatusCode.InvalidAction);
         }
 
-        logger.debug(
-            () =>
-                `Subscribe to attributes: ${
-                    attributeRequests?.map(path => this.#node.protocol.inspectPath(path)).join(", ") ?? "none"
-                }, events: ${eventRequests?.map(path => this.#node.protocol.inspectPath(path)).join(", ") ?? "none"}`,
-        );
-
-        if (dataVersionFilters !== undefined && dataVersionFilters.length > 0) {
-            logger.debug(
-                `DataVersionFilters: ${dataVersionFilters
-                    .map(
-                        ({ path: { nodeId, endpointId, clusterId }, dataVersion }) =>
-                            `${clusterPathToId({ nodeId, endpointId, clusterId })}=${dataVersion}`,
-                    )
-                    .join(", ")}`,
-            );
-        }
-        if (eventFilters !== undefined && eventFilters.length > 0)
-            logger.debug(
-                `Event filters: ${eventFilters.map(filter => `${filter.nodeId}/${filter.eventMin}`).join(", ")}`,
-            );
+        logger.debug(() => [
+            "Subscribe request details «",
+            exchange.via,
+            Diagnostic.dict({
+                attributes: attributeRequests?.length
+                    ? attributeRequests?.map(path => this.#node.protocol.inspectPath(path)).join(", ")
+                    : undefined,
+                dataVersionFilters: dataVersionFilters?.length
+                    ? dataVersionFilters
+                          .map(
+                              ({ path: { nodeId, endpointId, clusterId }, dataVersion }) =>
+                                  `${clusterPathToId({ nodeId, endpointId, clusterId })}=${dataVersion}`,
+                          )
+                          .join(", ")
+                    : undefined,
+                events: eventRequests?.length
+                    ? eventRequests.map(path => this.#node.protocol.inspectPath(path)).join(", ")
+                    : undefined,
+                eventFilters: eventFilters?.length
+                    ? eventFilters.map(filter => `${filter.nodeId}/${filter.eventMin}`).join(", ")
+                    : undefined,
+            }),
+        ]);
 
         // Validate of the paths before proceeding
         attributeRequests?.forEach(path => validateReadAttributesPath(path));
@@ -507,7 +522,14 @@ export class InteractionServer implements ProtocolHandler, InteractionRecipient 
                 error instanceof MatterError ? error.message : error,
             );
             if (error instanceof StatusResponseError && !(error instanceof ReceivedStatusResponseError)) {
-                logger.info(`Sending status response ${error.code} for interaction error: ${error.message}`);
+                logger.info(
+                    "Status",
+                    Diagnostic.strong(`${Status[error.code]}(${error.code})`),
+                    "»",
+                    exchange.via,
+                    "Error:",
+                    Diagnostic.errorMessage(error),
+                );
                 await messenger.sendStatus(error.code, {
                     logContext: {
                         for: "I/SubscriptionSeed-Status",
@@ -588,10 +610,15 @@ export class InteractionServer implements ProtocolHandler, InteractionRecipient 
         }
 
         logger.info(
-            `Successfully created subscription ${id} for Session ${
-                session.id
-            } to ${session.peerAddress}. Updates: ${minIntervalFloorSeconds} - ${maxIntervalCeilingSeconds} => ${Duration.format(subscription.maxInterval)} (sendInterval = ${Duration.format(subscription.sendInterval)})`,
+            "Subscribe successful »",
+            exchange.via,
+            Diagnostic.dict({
+                subId: id,
+                timing: `${Duration.format(Seconds(minIntervalFloorSeconds))} - ${Duration.format(Seconds(maxIntervalCeilingSeconds))} => ${Duration.format(subscription.maxInterval)}`,
+                sendInterval: Duration.format(subscription.sendInterval),
+            }),
         );
+
         return subscription;
     }
 
@@ -610,10 +637,18 @@ export class InteractionServer implements ProtocolHandler, InteractionRecipient 
     ) {
         const exchange = this.#context.exchangeManager.initiateExchange(session.peerAddress, INTERACTION_PROTOCOL_ID);
         const message = {} as Message;
-        logger.debug(
-            `Send DataReports to re-establish subscription ${subscriptionId} to `,
-            Diagnostic.dict({ isFabricFiltered, maxInterval, sendInterval }),
+
+        logger.info(
+            `Reestablish subscription »`,
+            exchange.via,
+            Diagnostic.dict({
+                subId: subscriptionId,
+                isFabricFiltered,
+                maxInterval: Duration.format(maxInterval),
+                sendInterval: Duration.format(sendInterval),
+            }),
         );
+
         const context: ServerSubscriptionContext = {
             session,
             node: this.#node,
@@ -645,10 +680,15 @@ export class InteractionServer implements ProtocolHandler, InteractionRecipient 
                 true, // Do not send status responses because we simulate that the subscription is still established
             );
             subscription.activate();
+
             logger.info(
-                `Successfully re-established subscription ${subscriptionId} for Session ${
-                    session.id
-                } to ${session.peerAddress}. Updates: ${minIntervalFloor} - ${maxIntervalCeiling} => ${Duration.format(subscription.maxInterval)} (sendInterval = ${Duration.format(subscription.sendInterval)})`,
+                `Subscription successfully reestablished »`,
+                exchange.via,
+                Diagnostic.dict({
+                    subId: subscriptionId,
+                    timing: `${Duration.format(minIntervalFloor)} - ${Duration.format(maxIntervalCeiling)} => ${Duration.format(subscription.maxInterval)}`,
+                    sendInterval: Duration.format(subscription.sendInterval),
+                }),
             );
         } catch (error) {
             await subscription.close(); // Cleanup
@@ -664,14 +704,18 @@ export class InteractionServer implements ProtocolHandler, InteractionRecipient 
         message: Message,
     ): Promise<void> {
         const { invokeRequests, timedRequest, suppressResponse, interactionModelRevision } = request;
-        logger.debug(
-            () =>
-                `Received invoke request from ${exchange.channel.name}${invokeRequests.length > 0 ? ` with ${invokeRequests.length} commands` : ""}: ${invokeRequests
+        logger.info(() => [
+            "Invoke «",
+            exchange.via,
+            Diagnostic.asFlags({ suppressResponse, timedRequest }),
+            Diagnostic.dict({
+                invokes: invokeRequests
                     .map(({ commandPath: { endpointId, clusterId, commandId } }) =>
                         this.#node.protocol.inspectPath({ endpointId, clusterId, commandId }),
                     )
-                    .join(", ")}, suppressResponse=${suppressResponse}`,
-        );
+                    .join(", "),
+            }),
+        ]);
 
         if (interactionModelRevision > Specification.INTERACTION_MODEL_REVISION) {
             logger.debug(
@@ -693,7 +737,7 @@ export class InteractionServer implements ProtocolHandler, InteractionRecipient 
         }
 
         if (receivedWithinTimedInteraction) {
-            logger.debug(`Invoke request from ${exchange.channel.name} received while timed interaction is running.`);
+            logger.debug("Invoke request for timed interaction on", exchange.channel.name);
             exchange.clearTimedInteraction();
             if (message.packetHeader.sessionType !== SessionType.Unicast) {
                 throw new StatusResponseError(
@@ -750,7 +794,8 @@ export class InteractionServer implements ProtocolHandler, InteractionRecipient 
                 if (invokeResponseMessage.invokeResponses.length > 0) {
                     if (invokeRequests.length > 1) {
                         logger.debug(
-                            `Send ${lastMessageProcessed ? "final " : ""}invoke response for ${invokeResponseMessage.invokeResponses.length} commands`,
+                            `${lastMessageProcessed ? "Final " : ""}Invoke response »`,
+                            Diagnostic.dict({ commands: invokeResponseMessage.invokeResponses.length }),
                         );
                     }
                     const moreChunkedMessages = lastMessageProcessed ? undefined : true;
@@ -817,7 +862,13 @@ export class InteractionServer implements ProtocolHandler, InteractionRecipient 
     handleTimedRequest(exchange: MessageExchange, { timeout, interactionModelRevision }: TimedRequest) {
         const interval = Millis(timeout);
 
-        logger.debug(`Received timed request (${Duration.format(interval)}) from ${exchange.channel.name}`);
+        logger.debug(() => [
+            "Timed request «",
+            exchange.via,
+            Diagnostic.dict({
+                interval: Duration.format(interval),
+            }),
+        ]);
 
         if (interactionModelRevision > Specification.INTERACTION_MODEL_REVISION) {
             logger.debug(

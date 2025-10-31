@@ -7,6 +7,7 @@
 import {
     Bytes,
     Crypto,
+    Diagnostic,
     ec,
     Logger,
     MatterFlowError,
@@ -37,8 +38,10 @@ export class PaseServer implements ProtocolHandler {
     readonly id = SECURE_CHANNEL_PROTOCOL_ID;
     readonly requiresSecureSession = false;
 
-    #pairingTimer: Timer | undefined;
+    #pairingTimer?: Timer;
+    #pairingMessenger?: PaseServerMessenger;
     #pairingErrors = 0;
+    #closed = false;
 
     static async fromPin(sessions: SessionManager, setupPinCode: number, pbkdfParameters: PbkdfParameters) {
         const { w0, L } = await Spake2p.computeW0L(sessions.crypto, pbkdfParameters, setupPinCode);
@@ -64,6 +67,10 @@ export class PaseServer implements ProtocolHandler {
     ) {}
 
     async onNewExchange(exchange: MessageExchange) {
+        if (this.#closed) {
+            logger.warn("Pase server: Received new exchange but server is closed, ignoring exchange.");
+            return;
+        }
         const messenger = new PaseServerMessenger(exchange);
         try {
             // When a Commissioner is either in the process of establishing a PASE session with the Commissionee or has
@@ -77,9 +84,12 @@ export class PaseServer implements ProtocolHandler {
                 logger.info(
                     "Pase server: Pairing already in progress (PASE establishment Timer running), ignoring new exchange.",
                 );
+            } else if (this.#pairingMessenger !== undefined) {
+                logger.info("Already handling a pairing request, ignoring new exchange.");
             } else {
+                this.#pairingMessenger = messenger;
                 // Ok new pairing try, handle it
-                await this.handlePairingRequest(this.sessions.crypto, messenger);
+                await this.handlePairingRequest(this.sessions.crypto);
             }
         } catch (error) {
             this.#pairingErrors++;
@@ -98,13 +108,16 @@ export class PaseServer implements ProtocolHandler {
                 );
             }
         } finally {
+            this.#pairingMessenger = undefined;
             // Destroy the unsecure session used to establish the Pase session
             await exchange.session.destroy();
         }
     }
 
-    private async handlePairingRequest(crypto: Crypto, messenger: PaseServerMessenger) {
-        logger.info(`Received pairing request from ${messenger.channelName}.`);
+    private async handlePairingRequest(crypto: Crypto) {
+        const messenger = this.#pairingMessenger!;
+
+        logger.info("Received pairing request «", Diagnostic.via(messenger.channelName));
 
         this.#pairingTimer = Time.getTimer("PASE pairing timeout", PASE_PAIRING_TIMEOUT_MS, () =>
             this.cancelPairing(messenger),
@@ -167,7 +180,7 @@ export class PaseServer implements ProtocolHandler {
             isResumption: false,
             peerSessionParameters: initiatorSessionParams,
         });
-        logger.info(`Session ${responderSessionId} created with ${messenger.channelName}.`);
+        logger.info(Diagnostic.strong(`Session ${responderSessionId} created`), "with", messenger.channelName);
 
         await messenger.sendSuccess();
         await messenger.close();
@@ -187,6 +200,7 @@ export class PaseServer implements ProtocolHandler {
     }
 
     async close() {
-        // Nothing to do
+        this.#closed = true;
+        await this.#pairingMessenger?.close();
     }
 }
