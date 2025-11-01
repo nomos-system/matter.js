@@ -9,6 +9,7 @@ import { ActionContext } from "#behavior/context/ActionContext.js";
 import { Transitions } from "#behavior/Transitions.js";
 import { GeneralDiagnosticsBehavior } from "#behaviors/general-diagnostics";
 import { OnOffServer } from "#behaviors/on-off";
+import { ScenesManagementServer } from "#behaviors/scenes-management";
 import { ColorControl } from "#clusters/color-control";
 import { GeneralDiagnostics } from "#clusters/general-diagnostics";
 import { Endpoint } from "#endpoint/Endpoint.js";
@@ -361,6 +362,8 @@ export class ColorControlBaseServer extends ColorControlBase {
         if (this.features.colorTemperature) {
             this.initializeColorTemperature();
         }
+
+        this.agent.maybeGet(ScenesManagementServer)?.implementScenes(this, this.#applySceneValues);
     }
 
     /**
@@ -592,6 +595,7 @@ export class ColorControlBaseServer extends ColorControlBase {
         if (!this.#optionsAllowExecution(optionsMask, optionsOverride)) {
             return;
         }
+        this.#invalidateScenes();
         return MaybePromise.then(this.setColorMode(ColorControl.ColorMode.CurrentHueAndCurrentSaturation), () =>
             this.moveToSaturationLogic(saturation, transitionTime),
         );
@@ -726,6 +730,7 @@ export class ColorControlBaseServer extends ColorControlBase {
         if (!this.#optionsAllowExecution(optionsMask, optionsOverride)) {
             return;
         }
+        this.#invalidateScenes();
         return MaybePromise.then(this.setColorMode(ColorControl.ColorMode.CurrentHueAndCurrentSaturation), () =>
             this.moveToHueAndSaturationLogic(hue, saturation, transitionTime),
         );
@@ -734,7 +739,7 @@ export class ColorControlBaseServer extends ColorControlBase {
     /**
      * Default implementation of the moveToHueAndSaturation logic.
      * If the managed transition time handling is disabled the method directly sets the new hue and saturation values.
-     * Otherwise the method initiates a transition with the given rate.
+     * Otherwise, the method initiates a transition with the given rate.
      * This method internally uses {@link moveToHueLogic} and {@link moveToSaturationLogic} to handle the hue and
      * saturation changes, so if you have implemented them already you might not need to override this method.
      *
@@ -772,6 +777,7 @@ export class ColorControlBaseServer extends ColorControlBase {
         if (!this.#optionsAllowExecution(optionsMask, optionsOverride)) {
             return;
         }
+        this.#invalidateScenes();
         return MaybePromise.then(this.setColorMode(ColorControl.ColorMode.CurrentXAndCurrentY), () =>
             this.moveToColorLogic(colorX, colorY, transitionTime),
         );
@@ -780,7 +786,7 @@ export class ColorControlBaseServer extends ColorControlBase {
     /**
      * Default implementation of the moveToColor logic.
      * If the managed transition time handling is disabled the method directly sets the new x and y values.
-     * Otherwise the method initiates a transition with the given rate.
+     * Otherwise, the method initiates a transition with the given rate.
      * This method internally uses {@link moveToColorLogic} to handle the x and y changes, so if you have implemented it
      * already you might not need to override this method.
      *
@@ -845,7 +851,7 @@ export class ColorControlBaseServer extends ColorControlBase {
     /**
      * Default implementation of the moveColor logic.
      * If the managed transition time handling is disabled the method directly sets the new x and y values.
-     * Otherwise the method initiates a transition with the given rate.
+     * Otherwise, the method initiates a transition with the given rate.
      *
      * @param rateX The rate to move the x value up or down (positive values mean up, negative down)
      * @param rateY The rate to move the y value up or down (positive values mean up, negative down)
@@ -1071,6 +1077,7 @@ export class ColorControlBaseServer extends ColorControlBase {
         if (!this.#optionsAllowExecution(optionsMask, optionsOverride)) {
             return;
         }
+        this.#invalidateScenes();
         return MaybePromise.then(
             this.setEnhancedColorMode(ColorControl.EnhancedColorMode.EnhancedCurrentHueAndCurrentSaturation),
             () => this.moveToEnhancedHueAndSaturationLogic(enhancedHue, saturation, transitionTime),
@@ -1135,6 +1142,8 @@ export class ColorControlBaseServer extends ColorControlBase {
         if (updateFlags.updateStartHue) {
             this.state.colorLoopStartEnhancedHue = startHue;
         }
+
+        this.#invalidateScenes();
         if (updateFlags.updateAction) {
             if (action === ColorControl.ColorLoopAction.Deactivate) {
                 if (this.state.colorLoopActive === ColorControl.ColorLoopActive.Active) {
@@ -1759,6 +1768,126 @@ export class ColorControlBaseServer extends ColorControlBase {
             this.minimumColorTemperatureMireds,
             this.maximumColorTemperatureMireds,
         );
+    }
+
+    #supportsColorMode(targetMode: ColorControl.EnhancedColorMode) {
+        switch (targetMode) {
+            case ColorControl.EnhancedColorMode.EnhancedCurrentHueAndCurrentSaturation:
+                return this.features.enhancedHue;
+            case ColorControl.EnhancedColorMode.CurrentHueAndCurrentSaturation:
+                return this.features.hueSaturation;
+            case ColorControl.EnhancedColorMode.CurrentXAndCurrentY:
+                return this.features.xy;
+            case ColorControl.EnhancedColorMode.ColorTemperatureMireds:
+                return this.features.colorTemperature;
+        }
+        return false;
+    }
+
+    /** Apply Scene values when requested from ScenesManagement cluster */
+    #applySceneValues(values: Val.Struct, transitionTime: number): MaybePromise {
+        let targetEnhancedColorMode = ColorControl.EnhancedColorMode.CurrentHueAndCurrentSaturation;
+        let targetColorLoopActive = ColorControl.ColorLoopActive.Inactive;
+        let targetColorLoopDirection = ColorControl.ColorLoopDirection.Decrement;
+        let targetColorLoopTime = 25; // Default or 0??
+
+        let targetCurrentX: number | undefined; // 0
+        let targetCurrentY: number | undefined; // 0
+        let targetEnhancedCurrentHue: number | undefined; // null
+        let targetCurrentSaturation: number | undefined; // null
+        let targetColorTemperatureMireds: number | undefined; // null
+
+        if (this.features.xy) {
+            if (typeof values.currentX === "number") {
+                targetCurrentX = cropValueRange(values.currentX, 0, MAX_CIE_XY_VALUE);
+            }
+            if (typeof values.currentY === "number") {
+                targetCurrentY = cropValueRange(values.currentY, 0, MAX_CIE_XY_VALUE);
+            }
+        }
+
+        if (this.features.enhancedHue && typeof values.enhancedCurrentHue === "number") {
+            targetEnhancedCurrentHue = values.enhancedCurrentHue;
+        }
+        if (this.features.hueSaturation && typeof values.currentSaturation === "number") {
+            targetCurrentSaturation = cropValueRange(values.currentSaturation, 0, MAX_SATURATION_VALUE);
+        }
+        if (this.features.colorLoop) {
+            if (typeof values.colorLoopActive === "number") {
+                targetColorLoopActive = values.colorLoopActive;
+            }
+            if (typeof values.colorLoopDirection === "number") {
+                targetColorLoopDirection = values.colorLoopDirection;
+            }
+            if (typeof values.colorLoopTime === "number") {
+                targetColorLoopTime = values.colorLoopTime;
+            }
+        }
+        if (this.features.colorTemperature && typeof values.colorTemperatureMireds === "number") {
+            targetColorTemperatureMireds = cropValueRange(values.colorTemperatureMireds, 0, MAX_TEMPERATURE_VALUE);
+        }
+        if (
+            this.features.enhancedHue &&
+            typeof values.enhancedColorMode === "number" &&
+            values.enhancedColorMode <= ColorControl.EnhancedColorMode.EnhancedCurrentHueAndCurrentSaturation
+        ) {
+            targetEnhancedColorMode = values.enhancedColorMode;
+        }
+
+        if (!this.#supportsColorMode(targetEnhancedColorMode)) {
+            logger.info(
+                `Can not apply scene with unsupported color mode: ${ColorControl.EnhancedColorMode[targetEnhancedColorMode]} (${targetEnhancedColorMode})`,
+            );
+        }
+
+        if (this.features.colorLoop && targetColorLoopActive === ColorControl.ColorLoopActive.Active) {
+            return this.colorLoopSet({
+                updateFlags: { updateDirection: true, updateTime: true, updateAction: true },
+                action: ColorControl.ColorLoopAction.ActivateFromEnhancedCurrentHue,
+                direction: targetColorLoopDirection,
+                time: targetColorLoopTime,
+                optionsMask: { executeIfOff: true },
+                optionsOverride: { executeIfOff: true },
+                startHue: this.state.colorLoopStartEnhancedHue, // Will be ignored
+            });
+        }
+
+        switch (targetEnhancedColorMode) {
+            case ColorControl.EnhancedColorMode.CurrentHueAndCurrentSaturation:
+                if (targetCurrentSaturation !== undefined) {
+                    return this.moveToSaturationLogic(targetCurrentSaturation, transitionTime / 100);
+                }
+                break;
+            case ColorControl.EnhancedColorMode.CurrentXAndCurrentY:
+                if (targetCurrentX !== undefined && targetCurrentY !== undefined) {
+                    return this.moveToColorLogic(targetCurrentX, targetCurrentY, transitionTime);
+                }
+                break;
+            case ColorControl.EnhancedColorMode.ColorTemperatureMireds:
+                if (targetColorTemperatureMireds !== undefined) {
+                    return this.moveToColorTemperatureLogic(targetColorTemperatureMireds, transitionTime);
+                }
+                break;
+            case ColorControl.EnhancedColorMode.EnhancedCurrentHueAndCurrentSaturation:
+                if (targetEnhancedCurrentHue !== undefined && targetCurrentSaturation !== undefined) {
+                    return this.moveToEnhancedHueAndSaturationLogic(
+                        targetEnhancedCurrentHue,
+                        targetCurrentSaturation,
+                        transitionTime,
+                    );
+                }
+                break;
+            default:
+                logger.info(
+                    `No supported color mode found to apply scene: ${ColorControl.EnhancedColorMode[targetEnhancedColorMode]} (${targetEnhancedColorMode})`,
+                );
+                break;
+        }
+    }
+
+    /** Invalidate all stored scenes manually for this endpoint in the Scenesmanagement cluster because SDK behavior. */
+    #invalidateScenes() {
+        this.agent.maybeGet(ScenesManagementServer)?.makeAllFabricSceneInfoEntriesInvalid();
     }
 
     override async [Symbol.asyncDispose]() {

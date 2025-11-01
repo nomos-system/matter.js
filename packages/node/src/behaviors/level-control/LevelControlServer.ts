@@ -10,10 +10,11 @@ import { Transitions } from "#behavior/Transitions.js";
 import { ColorControlServer } from "#behaviors/color-control";
 import { GeneralDiagnosticsBehavior } from "#behaviors/general-diagnostics";
 import { OnOffServer } from "#behaviors/on-off";
+import { ScenesManagementServer } from "#behaviors/scenes-management";
 import { GeneralDiagnostics } from "#clusters/general-diagnostics";
 import { LevelControl } from "#clusters/level-control";
 import { Endpoint } from "#endpoint/Endpoint.js";
-import { AsyncObservable, Identity, Logger, MaybePromise, Millis } from "#general";
+import { AsyncObservable, cropValueRange, Identity, Logger, MaybePromise, Millis } from "#general";
 import { ServerNode } from "#node/ServerNode.js";
 import { Val } from "#protocol";
 import { ClusterType, StatusCode, StatusResponseError, TypeFromPartialBitSchema } from "#types";
@@ -105,6 +106,8 @@ export class LevelControlBaseServer extends LevelControlBase {
         if (this.features.onOff && this.agent.has(OnOffServer)) {
             this.initializeOnOff();
         }
+
+        this.agent.maybeGet(ScenesManagementServer)?.implementScenes(this, this.#applySceneValues);
     }
 
     /**
@@ -230,8 +233,9 @@ export class LevelControlBaseServer extends LevelControlBase {
             return;
         }
 
-        this.#assertLevelValue(level);
+        level = cropValueRange(level, this.minLevel, this.maxLevel);
 
+        this.#invalidateScenes();
         return this.moveToLevelLogic(level, transitionTime, false, effectiveOptions);
     }
 
@@ -241,8 +245,9 @@ export class LevelControlBaseServer extends LevelControlBase {
      * To replace this logic, override {@link moveToLevelLogic} whicih also implements {@link moveToLevel}.
      */
     override moveToLevelWithOnOff({ level, transitionTime }: LevelControl.MoveToLevelRequest): MaybePromise {
-        this.#assertLevelValue(level);
+        level = cropValueRange(level, this.minLevel, this.maxLevel);
 
+        this.#invalidateScenes();
         return this.moveToLevelLogic(level, transitionTime, true);
     }
 
@@ -280,9 +285,11 @@ export class LevelControlBaseServer extends LevelControlBase {
 
         let effectiveRate;
         if (effectiveTransitionTime) {
-            effectiveRate = ((level - this.currentLevel) / effectiveTransitionTime) * 10;
+            // Delay the calculation of the effective rate because the coupling to OnOff might change the currentLevel
+            effectiveRate = (currentLevel: number) => ((level - currentLevel) / effectiveTransitionTime) * 10;
         }
 
+        this.#invalidateScenes();
         return this.transition(level, effectiveRate, withOnOff, options);
     }
 
@@ -301,6 +308,7 @@ export class LevelControlBaseServer extends LevelControlBase {
             return;
         }
 
+        this.#invalidateScenes();
         return this.moveLogic(moveMode, rate, false, effectiveOptions);
     }
 
@@ -314,6 +322,7 @@ export class LevelControlBaseServer extends LevelControlBase {
     override moveWithOnOff({ moveMode, rate }: LevelControl.MoveRequest): MaybePromise {
         rate = this.#assertRateValue(rate);
 
+        this.#invalidateScenes();
         return this.moveLogic(moveMode, rate, true);
     }
 
@@ -365,6 +374,8 @@ export class LevelControlBaseServer extends LevelControlBase {
         if (!this.#optionsAllowExecution(effectiveOptions)) {
             return;
         }
+
+        this.#invalidateScenes();
         return this.stepLogic(stepMode, stepSize, transitionTime, false, effectiveOptions);
     }
 
@@ -374,6 +385,7 @@ export class LevelControlBaseServer extends LevelControlBase {
      * To replace default beahavior, override {@link stepLogic} which also implements {@link step}.
      */
     override stepWithOnOff({ stepMode, stepSize, transitionTime }: LevelControl.StepRequest): MaybePromise {
+        this.#invalidateScenes();
         return this.stepLogic(stepMode, stepSize, transitionTime, true);
     }
 
@@ -412,6 +424,7 @@ export class LevelControlBaseServer extends LevelControlBase {
             return;
         }
 
+        this.#invalidateScenes();
         return this.stopLogic(effectiveOptions);
     }
 
@@ -430,17 +443,20 @@ export class LevelControlBaseServer extends LevelControlBase {
      * Change to a designated level.
      *
      * @param targetLevel the new level once transition completes; if omitted transition will stop at min or max value
-     * @param changePerS the move rate; 0 or nullish means transition instantly
+     * @param changePerS the move rate; 0 or nullish means transition instantly; use function to calculate rate based on current level after coupling logics
      * @param withOnOff if true follows rules for On/Off command variants
      * @param options additional options supplied by the client
      */
     protected transition(
         targetLevel?: number,
-        changePerS?: number | null,
+        changePerS?: number | null | ((currentLevel: number) => number),
         withOnOff = false,
         options: TypeFromPartialBitSchema<typeof LevelControl.Options> = {},
     ): MaybePromise {
-        return MaybePromise.then(this.couple(withOnOff, options, targetLevel), () =>
+        return MaybePromise.then(this.couple(withOnOff, options, targetLevel), () => {
+            if (typeof changePerS === "function") {
+                changePerS = changePerS(this.currentLevel);
+            }
             this.internal.transitions?.start({
                 name: "currentLevel",
                 owner: this,
@@ -450,8 +466,8 @@ export class LevelControlBaseServer extends LevelControlBase {
                 onStep() {
                     this.couple(withOnOff, options, targetLevel);
                 },
-            }),
-        );
+            });
+        });
     }
 
     /**
@@ -464,6 +480,8 @@ export class LevelControlBaseServer extends LevelControlBase {
         options: TypeFromPartialBitSchema<typeof LevelControl.Options> = {},
         targetLevel?: number,
     ): MaybePromise {
+        let result: MaybePromise = undefined;
+
         // Couple with On/Off state
         if (this.features.onOff && withOnOff && this.agent.has(OnOffServer)) {
             if (targetLevel === undefined) {
@@ -491,8 +509,18 @@ export class LevelControlBaseServer extends LevelControlBase {
                 if (!onOff.state.onOff) {
                     onOff.state.onOff = true;
 
-                    // Ensure we move to "on" level before initiating any transition
-                    this.handleOnOffChange(true);
+                    if (this.state.onLevel !== null) {
+                        // Ensure we move to "on" level before initiating any transition
+                        result = this.handleOnOffChange(true);
+                        this.internal.blockOnOffCouplingOnce = true; // But block the second call by listener
+                        this.context.transaction.addParticipants({
+                            postCommit: () => {
+                                if (this.internal.blockOnOffCouplingOnce) {
+                                    this.internal.blockOnOffCouplingOnce = false;
+                                }
+                            },
+                        });
+                    }
                 }
             }
         }
@@ -513,6 +541,8 @@ export class LevelControlBaseServer extends LevelControlBase {
                 },
             });
         }
+
+        return result;
     }
 
     /**
@@ -526,9 +556,16 @@ export class LevelControlBaseServer extends LevelControlBase {
      * @param onOff The new onOff state
      */
     protected handleOnOffChange(onOff: boolean): MaybePromise {
+        if (this.internal.blockOnOffCouplingOnce) {
+            this.internal.blockOnOffCouplingOnce = false;
+            return;
+        }
+
         if (!onOff || this.state.onLevel === null) {
             return;
         }
+
+        logger.debug(`OnOff changed to ON, setting level to onLevel value of ${this.state.onLevel}`);
         this.state.currentLevel = this.state.onLevel;
     }
 
@@ -556,26 +593,31 @@ export class LevelControlBaseServer extends LevelControlBase {
         );
     }
 
-    #assertLevelValue(level: number) {
-        if (level < this.minLevel) {
-            throw new StatusResponseError(
-                `The level value of ${level} is invalid. It must be greater or equal to ${this.minLevel}.`,
-                StatusCode.ConstraintError,
-            );
-        }
-        if (level > this.maxLevel) {
-            throw new StatusResponseError(
-                `The level value of ${level} is invalid. It must be less or equal to ${this.maxLevel}.`,
-                StatusCode.ConstraintError,
-            );
-        }
-    }
-
     #getBootReason() {
         const rootEndpoint = this.env.get(ServerNode);
         if (rootEndpoint.behaviors.has(GeneralDiagnosticsBehavior)) {
             return rootEndpoint.stateOf(GeneralDiagnosticsBehavior).bootReason;
         }
+    }
+
+    /** Apply Scene values when requested from ScenesManagement cluster */
+    #applySceneValues(values: Val.Struct, transitionTime: number): MaybePromise {
+        const level = values.currentLevel;
+        // If no number (including null), or already current level or outside our range, ignore
+        // This is the only supported sceneable attribute in Level Control, so ignore all others for now
+        if (
+            typeof level !== "number" ||
+            this.state.currentLevel === level ||
+            cropValueRange(level, this.minLevel, this.maxLevel) !== level
+        ) {
+            return;
+        }
+        return this.moveToLevelLogic(level, transitionTime / 100, false, { executeIfOff: true });
+    }
+
+    /** Invalidate all stored scenes manually for this endpoint in the Scenesmanagement cluster because SDK behavior. */
+    #invalidateScenes() {
+        this.agent.maybeGet(ScenesManagementServer)?.makeAllFabricSceneInfoEntriesInvalid();
     }
 
     override async [Symbol.asyncDispose]() {
@@ -589,10 +631,11 @@ export class LevelControlBaseServer extends LevelControlBase {
 
 export namespace LevelControlBaseServer {
     export class Internal {
-        /**
-         * Transition management.
-         */
+        /** Transition management. */
         transitions?: Transitions<LevelControlBaseServer>;
+
+        /** Internal flag to avoid on/off coupling during transitions */
+        blockOnOffCouplingOnce = false;
     }
 
     export class State extends LevelControlBase.State {
