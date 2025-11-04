@@ -88,6 +88,11 @@ export class Icac extends OperationalBase<OperationalCertificate.Icac> {
             throw new CertificateError(`Ica certificate must not contain a caseAuthenticatedTags.`);
         }
 
+        // The subject DN SHALL NOT encode any matter-vvs-id attribute.
+        if ("vvsId" in subject) {
+            throw new CertificateError(`Ica certificate must not contain a vvsId.`);
+        }
+
         // When any matter-fabric-id attributes are present in either the Matter Root CA Certificate or the Matter ICA
         // Certificate, the value SHALL match the one present in the Matter Node Operational Certificate (NOC) within
         // the same certificate chain.

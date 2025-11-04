@@ -89,6 +89,11 @@ export class Noc extends OperationalBase<OperationalCertificate.Noc> {
             throw new CertificateError(`Noc certificate must not contain an rcacId.`);
         }
 
+        // The subject DN SHALL NOT encode any matter-vvs-id attribute.
+        if ("vvsId" in subject) {
+            throw new CertificateError(`Noc certificate must not contain a vvsId.`);
+        }
+
         // The subject DN MAY encode at most three matter-noc-cat attributes.
         if (caseAuthenticatedTags !== undefined) {
             CaseAuthenticatedTag.validateNocTagList(caseAuthenticatedTags); // throws ValidationError
