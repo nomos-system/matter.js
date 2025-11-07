@@ -112,6 +112,8 @@ export namespace AccessControl {
         readonly fabricSensitive: boolean;
 
         readonly timed: boolean;
+
+        readonly largeMessage: boolean;
     }
 
     /**
@@ -191,6 +193,11 @@ export namespace AccessControl {
          * active.
          */
         readonly command?: boolean;
+
+        /**
+         * If this is true the data transfer supports large messages.
+         */
+        readonly largeMessage?: boolean;
     }
 
     /**
@@ -517,6 +524,7 @@ function limitsFor(schema: Schema) {
         fabricScoped: access.fabric === Access.Fabric.Scoped || access.fabric === Access.Fabric.Sensitive,
         fabricSensitive: access.fabric === Access.Fabric.Sensitive,
         timed: access.timed === true,
+        largeMessage: quality?.largeMessage === true,
 
         // Official Matter defaults are View for read and Operate for write. However, the schema's effective access
         // should already have these defaults.  Here we just adopt minimum needed rights as a safe fallback access level.

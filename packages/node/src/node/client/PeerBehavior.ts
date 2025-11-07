@@ -172,6 +172,7 @@ function generateType(analysis: ShapeAnalysis, baseType: Behavior.Type): Cluster
         return async function (this: ClusterBehavior, fields?: {}) {
             const node = this.env.get(Node) as ClientNode;
 
+            // TODO when implementing TCP add needed logic for Large messages
             const chunks = (node.interaction as ClientInteraction).invoke(
                 Invoke({
                     commands: [

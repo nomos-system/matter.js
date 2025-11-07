@@ -422,7 +422,7 @@ export class ClientInteraction<SessionT extends InteractionSession = Interaction
         }
     }
 
-    async #begin(request: Read | Write | Invoke | Subscribe, session?: SessionT) {
+    async #begin(request: Read | Write | Invoke | Subscribe, session: SessionT | undefined) {
         if (this.#abort.aborted) {
             throw new ImplementationError("Client interaction unavailable after close");
         }

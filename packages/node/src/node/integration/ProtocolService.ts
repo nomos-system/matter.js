@@ -504,6 +504,7 @@ function clusterTypeProtocolOf(backing: BehaviorBacking): ClusterTypeProtocol | 
                 } = behavior.supervisor.get(member);
 
                 const command = { id: id as CommandId, responseId, requestTlv, responseTlv, limits, name };
+
                 commandList.push(command);
                 commands[id] = command;
                 if (!member.effectiveConformance.isMandatory) {
