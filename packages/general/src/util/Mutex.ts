@@ -4,18 +4,24 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { MatterError } from "#MatterError.js";
 import { Logger } from "../log/Logger.js";
 import { asError } from "./Error.js";
 
 const logger = Logger.get("Mutex");
+
+export class MutexClosedError extends MatterError {
+    constructor() {
+        super("Cannot schedule task because mutex is closed");
+    }
+}
 
 /**
  * A mutex is a task queue where at most one task is active at a time.
  */
 export class Mutex implements PromiseLike<unknown> {
     #owner: {};
-    #cancel?: () => void;
-    #canceled = false;
+    #closed = false;
     #promise?: Promise<unknown>;
 
     constructor(owner: {}, initial?: PromiseLike<unknown>) {
@@ -23,6 +29,14 @@ export class Mutex implements PromiseLike<unknown> {
         if (initial) {
             this.run(() => initial);
         }
+    }
+
+    /**
+     * Prevent new tasks and wait for remaining tasks to complete.
+     */
+    async close() {
+        this.#closed = true;
+        await this.#promise;
     }
 
     /**
@@ -43,25 +57,16 @@ export class Mutex implements PromiseLike<unknown> {
      * If {@link task} is a function it runs when current activity completes.  If it is a promise then the mutex will
      * not clear until {@link task} resolves.
      */
-    run(task: PromiseLike<unknown> | (() => PromiseLike<unknown>), cancel?: () => void) {
-        if (this.#canceled) {
-            cancel?.();
-            return;
+    run(task: PromiseLike<unknown> | (() => PromiseLike<unknown>)) {
+        if (this.#closed) {
+            throw new MutexClosedError();
         }
 
         if (!this.#promise) {
             this.#promise = this.initiateTask(task);
         } else {
             this.#promise = this.#promise.then(() => {
-                if (this.#canceled) {
-                    cancel?.();
-                    return;
-                }
-
-                this.#cancel = cancel;
-                return this.initiateTask(task).finally(() => {
-                    this.#cancel = undefined;
-                });
+                return this.initiateTask(task);
             });
         }
     }
@@ -69,7 +74,11 @@ export class Mutex implements PromiseLike<unknown> {
     /**
      * Enqueue work with an awaitable result.
      */
-    produce<T>(task: () => PromiseLike<T>, cancel?: () => void): Promise<T> {
+    produce<T>(task: () => PromiseLike<T>): Promise<T> {
+        if (this.#closed) {
+            throw new MutexClosedError();
+        }
+
         return new Promise<T>((resolve, reject) => {
             this.run(async () => {
                 try {
@@ -77,31 +86,35 @@ export class Mutex implements PromiseLike<unknown> {
                 } catch (e) {
                     reject(asError(e));
                 }
-            }, cancel);
+            });
         });
     }
 
     /**
-     * Cancel remaining work and perform one last task with the Mutex held.
+     * Acquire the lock.
+     *
+     * This offers more natural mutex handling via a disposable.  The returned object must be disposed to unlock the
+     * mutex.
+     *
+     * Note that acquiring the lock is async but releasing is not, so you must use `using _lock = await mutex.lock()`
+     * rather than `await using _lock = mutex.lock()`.
+     *
+     * TODO - add abort support
      */
-    terminate(cleanup?: () => PromiseLike<void>) {
-        if (this.#canceled) {
-            return;
+    async lock(): Promise<Disposable> {
+        if (this.#closed) {
+            throw new MutexClosedError();
         }
 
-        this.#canceled = true;
-
-        if (this.#cancel) {
-            this.#cancel();
-        }
-
-        if (cleanup) {
-            if (!this.#promise) {
-                this.#promise = this.initiateTask(cleanup);
-            } else {
-                this.#promise = this.#promise.then(() => this.initiateTask(cleanup));
-            }
-        }
+        return new Promise(lockObtained => {
+            this.run(async () => {
+                await new Promise<void>(lockReleased => {
+                    lockObtained({
+                        [Symbol.dispose]: lockReleased,
+                    });
+                });
+            });
+        });
     }
 
     /**
