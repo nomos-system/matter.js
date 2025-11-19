@@ -12,7 +12,7 @@ import { Entropy } from "#util/Entropy.js";
 import { MaybePromise } from "#util/Promises.js";
 import { describeList } from "#util/String.js";
 import { Ccm } from "./aes/Ccm.js";
-import { Crypto, CRYPTO_SYMMETRIC_KEY_LENGTH } from "./Crypto.js";
+import { Crypto, CRYPTO_SYMMETRIC_KEY_LENGTH, HashAlgorithm } from "./Crypto.js";
 import { CryptoVerifyError, KeyInputError } from "./CryptoError.js";
 import { EcdsaSignature } from "./EcdsaSignature.js";
 import { CurveType, Key, KeyType, PrivateKey, PublicKey } from "./Key.js";
@@ -97,14 +97,21 @@ export class StandardCrypto extends Crypto {
         });
     }
 
-    computeSha256(buffer: Bytes | Bytes[] | ReadableStreamDefaultReader<Bytes> | AsyncIterator<Bytes>) {
+    computeHash(
+        buffer: Bytes | Bytes[] | ReadableStreamDefaultReader<Bytes> | AsyncIterator<Bytes>,
+        algorithm: HashAlgorithm = "SHA-256",
+    ) {
+        // Normalize buffer input
         if (Array.isArray(buffer)) {
             buffer = Bytes.concat(...buffer);
         }
         if (!Bytes.isBytes(buffer)) {
-            throw new NotImplementedError("Streamed SHA-256 computation is not supported in StandardCrypto");
+            throw new NotImplementedError(
+                `Streamed hash computation is not supported in StandardCrypto for ${algorithm}`,
+            );
         }
-        return this.#subtle.digest("SHA-256", Bytes.exclusive(buffer));
+
+        return this.#subtle.digest(algorithm, Bytes.exclusive(buffer));
     }
 
     async createPbkdf2Key(secret: Bytes, salt: Bytes, iteration: number, keyLength: number) {

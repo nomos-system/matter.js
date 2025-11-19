@@ -29,6 +29,32 @@ export const CRYPTO_EC_KEY_BYTES = 32;
 export const CRYPTO_AUTH_TAG_LENGTH = 16;
 export const CRYPTO_SYMMETRIC_KEY_LENGTH = 16;
 
+/**
+ * Hash algorithms identified by IANA Hash Function identifiers.
+ * Based on FIPS 180-4 Section 6.2 and FIPS 202.
+ *
+ * The enum values are the FIPS-defined algorithm IDs.
+ */
+export type HashAlgorithm = "SHA-256" | "SHA-512" | "SHA-384" | "SHA-512/224" | "SHA-512/256" | "SHA3-256";
+
+export const HASH_ALGORITHM_OUTPUT_LENGTHS: Record<HashAlgorithm, number> = {
+    "SHA-256": 32,
+    "SHA-512": 64,
+    "SHA-384": 48,
+    "SHA-512/224": 28,
+    "SHA-512/256": 32,
+    "SHA3-256": 32,
+};
+
+export enum HashFipsAlgorithmId {
+    "SHA-256" = 1,
+    "SHA-512" = 7,
+    "SHA-384" = 8,
+    "SHA-512/224" = 10,
+    "SHA-512/256" = 11,
+    "SHA3-256" = 12,
+}
+
 const logger = Logger.get("Crypto");
 
 /**
@@ -59,10 +85,11 @@ export abstract class Crypto extends Entropy {
     abstract decrypt(key: Bytes, data: Bytes, nonce: Bytes, aad?: Bytes): Bytes;
 
     /**
-     * Compute the SHA-256 hash of a buffer.
+     * Compute a cryptographic hash using the specified algorithm. If no algorithm is specified, SHA-256 is used.
      */
-    abstract computeSha256(
+    abstract computeHash(
         data: Bytes | Bytes[] | ReadableStreamDefaultReader<Bytes> | AsyncIterator<Bytes>,
+        algorithm?: HashAlgorithm,
     ): MaybePromise<Bytes>;
 
     /**

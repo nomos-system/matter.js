@@ -46,7 +46,7 @@ import { CertificateExtension } from "./definitions/operational.js";
  * It also provides two static methods to create a certificate signing request (CSR) and to extract the public key
  * from a CSR.
  */
-export abstract class X509Base<CT extends X509Certificate> {
+export abstract class Certificate<CT extends X509Certificate> {
     #signature?: EcdsaSignature;
     #cert: Unsigned<CT>;
 
@@ -328,7 +328,7 @@ export abstract class X509Base<CT extends X509Certificate> {
     }
 }
 
-export namespace X509Base {
+export namespace Certificate {
     /**
      * Create a Certificate Signing Request (CSR) in ASN.1 DER format.
      */
@@ -473,10 +473,19 @@ export namespace X509Base {
         return result;
     }
 
+    /** These extensions are minimum required for all Matter certificates. */
+    export const REQUIRED_PAA_EXTENSIONS = ["basicConstraints", "keyUsage", "subjectKeyIdentifier"];
+
+    /** These extensions are usually required for all Matter certificates, beside a PAA. */
+    export const REQUIRED_EXTENSIONS = [...REQUIRED_PAA_EXTENSIONS, "authorityKeyIdentifier"];
+
     /**
      * Parse extensions from ASN.1 DER format.
      */
-    function parseExtensions(extensionsNode: DerNode): X509Certificate["extensions"] & {
+    function parseExtensions(
+        extensionsNode: DerNode,
+        requiredExtensions: string[],
+    ): X509Certificate["extensions"] & {
         [oid: string]: unknown; // For unrecognized extensions
     } {
         const result = {
@@ -599,12 +608,7 @@ export namespace X509Base {
             }
         }
 
-        if (
-            result.basicConstraints === undefined ||
-            result.keyUsage === undefined ||
-            result.subjectKeyIdentifier === undefined ||
-            result.authorityKeyIdentifier === undefined
-        ) {
+        if (requiredExtensions.some(ext => result[ext] === undefined)) {
             throw new CertificateError("Missing required extensions in certificate");
         }
 
@@ -658,7 +662,10 @@ export namespace X509Base {
      * Parse an ASN.1/DER encoded certificate into the internal format.
      * This extracts the certificate data without the signature.
      */
-    export function parseAsn1Certificate(encodedCert: Bytes): X509Certificate {
+    export function parseAsn1Certificate(
+        encodedCert: Bytes,
+        requiredExtensions = REQUIRED_EXTENSIONS,
+    ): X509Certificate {
         const { [DerKey.Elements]: rootElements } = DerCodec.decode(encodedCert);
 
         if (!rootElements || rootElements.length !== 3) {
@@ -736,7 +743,7 @@ export namespace X509Base {
         }
         const extensionsBytes = certElements[idx][DerKey.Bytes];
         const extensionsSequence = DerCodec.decode(extensionsBytes);
-        const extensions = parseExtensions(extensionsSequence);
+        const extensions = parseExtensions(extensionsSequence, requiredExtensions);
 
         // Extract signature from BIT STRING
         // Note: DerKey.Bytes for BIT STRING returns data without the padding byte

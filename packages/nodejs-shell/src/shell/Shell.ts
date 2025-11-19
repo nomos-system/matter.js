@@ -13,6 +13,7 @@ import yargs from "yargs/yargs";
 import { MatterNode } from "../MatterNode.js";
 import { exit } from "../app";
 import { commandlineParser } from "../util/CommandlineParser.js";
+import cmdCert from "./cmd_cert.js";
 import cmdAttributes from "./cmd_cluster-attributes";
 import cmdCommands from "./cmd_cluster-commands";
 import cmdEvents from "./cmd_cluster-events";
@@ -22,6 +23,7 @@ import cmdDcl from "./cmd_dcl.js";
 import cmdDiscover from "./cmd_discover.js";
 import cmdIdentify from "./cmd_identify.js";
 import cmdNodes from "./cmd_nodes.js";
+import cmdOta from "./cmd_ota.js";
 import cmdSession from "./cmd_session.js";
 import cmdSubscribe from "./cmd_subscribe.js";
 import cmdTlv from "./cmd_tlv";
@@ -149,6 +151,8 @@ export class Shell {
                     cmdAttributes(this.theNode),
                     cmdEvents(this.theNode),
                     cmdCommands(this.theNode),
+                    cmdOta(this.theNode),
+                    cmdCert(this.theNode),
                     cmdTlv(),
                     cmdDcl(),
                     exitCommand(),

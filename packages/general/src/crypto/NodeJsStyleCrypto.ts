@@ -17,6 +17,7 @@ import {
     CRYPTO_ENCRYPT_ALGORITHM,
     CRYPTO_HASH_ALGORITHM,
     CRYPTO_SYMMETRIC_KEY_LENGTH,
+    HashAlgorithm,
 } from "./Crypto.js";
 import { CryptoDecryptError, CryptoVerifyError } from "./CryptoError.js";
 import { EcdsaSignature } from "./EcdsaSignature.js";
@@ -114,22 +115,26 @@ export class NodeJsStyleCrypto extends Crypto {
         }
     }
 
-    computeSha256(
+    computeHash(
         data: Bytes | Bytes[] | ReadableStreamDefaultReader<Bytes> | AsyncIterator<Bytes>,
+        algorithm: HashAlgorithm = "SHA-256",
     ): MaybePromise<Bytes> {
-        const hasher = this.#crypto.createHash(CRYPTO_HASH_ALGORITHM);
+        const hasher = this.#crypto.createHash(algorithm);
+
+        // Handle different data types with full streaming support
         if (Array.isArray(data)) {
             data.forEach(chunk => hasher.update(Bytes.of(chunk)));
         } else if (Bytes.isBytes(data)) {
             hasher.update(Bytes.of(data));
         } else {
+            // Handle streaming data (ReadableStreamDefaultReader or AsyncIterator)
             let iteratorFunc: () => Promise<IteratorResult<Bytes>>;
             if ("read" in data && typeof data.read === "function") {
                 iteratorFunc = data.read.bind(data);
             } else if ("next" in data && typeof data.next === "function") {
                 iteratorFunc = data.next.bind(data);
             } else {
-                throw new ImplementationError("Invalid data type for computeSha256");
+                throw new ImplementationError(`Invalid data type for computeHash with algorithm ${algorithm}`);
             }
             return this.#hashAsyncIteratorData(hasher, iteratorFunc).then(() => Bytes.of(hasher.digest()));
         }
