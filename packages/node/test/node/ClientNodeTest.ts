@@ -428,6 +428,14 @@ describe("ClientNode", () => {
         expect((state as Val.Struct).attr$1).equals("hello");
     });
 
+    it("handles structure change and cluster recreation while device online", () => {
+        // TODO
+    });
+
+    it("handles structure change and cluster recreation while device offline", () => {
+        // TODO
+    });
+
     it("handles shutdown event and reestablishes connection", () => {
         // TODO
     });
@@ -487,6 +495,7 @@ const PEER1_STATE = {
         operationalPort: -1,
         defaultSubscription: undefined,
         caseAuthenticatedTags: undefined,
+        maxEventNumber: 3n,
     },
     basicInformation: {
         clusterRevision: 5,
