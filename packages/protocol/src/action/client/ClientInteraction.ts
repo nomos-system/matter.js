@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { ClientRead } from "#action/client/ClientRead.js";
 import { Interactable, InteractionSession } from "#action/Interactable.js";
 import { ClientInvoke, Invoke } from "#action/request/Invoke.js";
 import { Read } from "#action/request/Read.js";
@@ -28,6 +29,8 @@ import {
     Minutes,
     RetrySchedule,
     Seconds,
+    Time,
+    TimeoutError,
 } from "#general";
 import { InteractionClientMessenger, MessageType } from "#interaction/InteractionMessenger.js";
 import { Subscription } from "#interaction/Subscription.js";
@@ -35,6 +38,7 @@ import { PeerAddress } from "#peer/index.js";
 import { ExchangeProvider } from "#protocol/ExchangeProvider.js";
 import { SecureSession } from "#session/SecureSession.js";
 import { Status, TlvAttributeReport, TlvNoResponse, TlvSubscribeResponse, TypeFromSchema } from "#types";
+import { ClientWrite } from "./ClientWrite.js";
 import { InputChunk } from "./InputChunk.js";
 import { ClientSubscribe } from "./subscription/ClientSubscribe.js";
 import { ClientSubscription } from "./subscription/ClientSubscription.js";
@@ -53,6 +57,7 @@ export interface ClientInteractionContext {
     abort?: Abort.Signal;
     sustainRetries?: RetrySchedule.Configuration;
     exchangeProvider?: ExchangeProvider;
+    address?: PeerAddress;
 }
 
 export const DEFAULT_MIN_INTERVAL_FLOOR = Seconds(1);
@@ -74,16 +79,17 @@ const DEFAULT_MINIMUM_RESPONSE_TIMEOUT_WITH_FAILSAFE = Seconds(30);
 export class ClientInteraction<
     SessionT extends InteractionSession = InteractionSession,
 > implements Interactable<SessionT> {
-    readonly #environment: Environment;
+    protected readonly environment: Environment;
     readonly #lifetime: Lifetime;
     readonly #exchanges: ExchangeProvider;
     readonly #interactions = new BasicSet<Read | Write | Invoke | Subscribe>();
     #subscriptions?: ClientSubscriptions;
     readonly #abort: Abort;
     readonly #sustainRetries: RetrySchedule;
+    readonly #address?: PeerAddress;
 
-    constructor({ environment, abort, sustainRetries, exchangeProvider }: ClientInteractionContext) {
-        this.#environment = environment;
+    constructor({ environment, abort, sustainRetries, exchangeProvider, address }: ClientInteractionContext) {
+        this.environment = environment;
         this.#exchanges = exchangeProvider ?? environment.get(ExchangeProvider);
         if (environment.has(ClientSubscriptions)) {
             this.#subscriptions = environment.get(ClientSubscriptions);
@@ -93,6 +99,7 @@ export class ClientInteraction<
             environment.get(Entropy),
             RetrySchedule.Configuration(SustainedSubscription.DefaultRetrySchedule, sustainRetries),
         );
+        this.#address = address;
 
         this.#lifetime = environment.join("interactions");
         Object.defineProperties(this.#lifetime.details, {
@@ -126,7 +133,7 @@ export class ClientInteraction<
 
     get subscriptions() {
         if (this.#subscriptions === undefined) {
-            this.#subscriptions = this.#environment.get(ClientSubscriptions);
+            this.#subscriptions = this.environment.get(ClientSubscriptions);
         }
         return this.#subscriptions;
     }
@@ -134,7 +141,7 @@ export class ClientInteraction<
     /**
      * Read attributes and events.
      */
-    async *read(request: Read, session?: SessionT): ReadResult {
+    async *read(request: ClientRead, session?: SessionT): ReadResult {
         const readPathsCount = (request.attributeRequests?.length ?? 0) + (request.eventRequests?.length ?? 0);
         if (readPathsCount === 0) {
             throw new ImplementationError("When reading attributes and events, at least one must be specified.");
@@ -182,7 +189,7 @@ export class ClientInteraction<
      * Writes with the Matter protocol are generally not atomic, so this method only throws if the entire action fails.
      * You must check each {@link WriteResult.AttributeStatus} to determine whether individual updates failed.
      */
-    async write<T extends Write>(request: T, session?: SessionT): WriteResult<T> {
+    async write<T extends ClientWrite>(request: T, session?: SessionT): WriteResult<T> {
         await using context = await this.#begin("writing", request, session);
         const { checkAbort, messenger } = context;
 
@@ -419,16 +426,6 @@ export class ClientInteraction<
             const responseMessage = await messenger.nextMessage(MessageType.SubscribeResponse);
             const response = TlvSubscribeResponse.decode(responseMessage.payload);
 
-            logger.info(
-                "Subscription successful",
-                Mark.INBOUND,
-                messenger.exchange.via,
-                Diagnostic.dict({
-                    id: response.subscriptionId,
-                    interval: Duration.format(Seconds(response.maxInterval)),
-                }),
-            );
-
             const subscription = new PeerSubscription({
                 lifetime: this.subscriptions,
                 request,
@@ -439,6 +436,17 @@ export class ClientInteraction<
                 maxPeerResponseTime: this.#exchanges.maximumPeerResponseTime(),
             });
             this.subscriptions.addPeer(subscription);
+
+            logger.info(
+                "Subscription successful",
+                Mark.INBOUND,
+                messenger.exchange.via,
+                Diagnostic.dict({
+                    id: Subscription.idStrOf(response.subscriptionId),
+                    interval: Duration.format(Seconds(response.maxInterval)),
+                    timeout: Duration.format(subscription.timeout),
+                }),
+            );
 
             return subscription;
         };
@@ -482,13 +490,28 @@ export class ClientInteraction<
         if (this.#abort.aborted) {
             throw new ImplementationError("Client interaction unavailable after close");
         }
-        this.#interactions.add(request);
 
         const checkAbort = Abort.checkerFor(session);
 
-        const messenger = await InteractionClientMessenger.create(this.#exchanges);
+        const now = Time.nowMs;
+        let messenger: InteractionClientMessenger;
+        try {
+            messenger = await InteractionClientMessenger.create(this.#exchanges);
+        } catch (error) {
+            TimeoutError.accept(error);
 
-        // Provide via dynamically so is up-to-date if exchange changes due to retry
+            // This logic implements a very basic automatic reconnection mechanism which is a bit like PairedNode
+            // The exchange creation fails only when the node is considered to be unavailable, so in this case we
+            // either try the last addresses again (if existing), or do a short-timed re-discovery. This would block
+            // the execution max 10s. What's missing is that one layer (like Sustained Subscription) would trigger a
+            // FullDiscovery instead of just a timed one, but for the tests and currently this should be enough.
+            await this.exchanges.reconnectChannel({ asOf: now, resetInitialState: true });
+            messenger = await InteractionClientMessenger.create(this.#exchanges);
+        }
+
+        this.#interactions.add(request);
+
+        // Provide via dynamically so is up to date if exchange changes due to retry
         Object.defineProperty(lifetime.details, "via", {
             get() {
                 return messenger.exchange.via;
@@ -512,6 +535,22 @@ export class ClientInteraction<
         }
 
         return context;
+    }
+
+    get channelType() {
+        return this.#exchanges.channelType;
+    }
+
+    /** Calculates the current maximum response time for a message use in additional logic like timers. */
+    maximumPeerResponseTime(expectedProcessingTime?: Duration) {
+        return this.#exchanges.maximumPeerResponseTime(expectedProcessingTime);
+    }
+
+    get address() {
+        if (this.#address === undefined) {
+            throw new ImplementationError("This InteractionClient is not bound to a specific peer.");
+        }
+        return this.#address;
     }
 }
 

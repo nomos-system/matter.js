@@ -4,6 +4,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { ClientInteraction } from "#action/client/ClientInteraction.js";
+import { ClientRead } from "#action/client/ClientRead.js";
+import { Invoke } from "#action/request/Invoke.js";
+import { Read } from "#action/request/Read.js";
 import { Certificate } from "#certificate/kinds/Certificate.js";
 import { BasicInformation } from "#clusters/basic-information";
 import { Descriptor } from "#clusters/descriptor";
@@ -16,9 +20,9 @@ import {
     ChannelType,
     Diagnostic,
     Duration,
+    ImplementationError,
     Instant,
     Logger,
-    MatterError,
     Millis,
     Minutes,
     repackErrorAs,
@@ -33,17 +37,17 @@ import {
     ClusterType,
     EndpointNumber,
     FabricIndex,
+    Status,
     StatusResponseError,
     TypeFromPartialBitSchema,
     TypeFromSchema,
     VendorId,
 } from "#types";
 import { CertificateAuthority } from "../certificate/CertificateAuthority.js";
-import { ClusterClient } from "../cluster/client/ClusterClient.js";
 import { ClusterClientObj } from "../cluster/client/ClusterClientTypes.js";
 import { TlvCertSigningRequest } from "../common/OperationalCredentialsTypes.js";
 import { Fabric } from "../fabric/Fabric.js";
-import { InteractionClient } from "../interaction/InteractionClient.js";
+import { CommissioningError } from "./CommissioningError.js";
 import { PeerAddress } from "./PeerAddress.js";
 
 const logger = Logger.get("ControllerCommissioner");
@@ -146,12 +150,6 @@ type CollectedCommissioningData = {
     fabricIndex?: FabricIndex;
 };
 
-/**
- * Error that throws when Commissioning fails and a process cannot be continued, and no more specific error
- * information is available.
- */
-export class CommissioningError extends MatterError {}
-
 /** The number of fabrics that can be commissioned is already reached. */
 export class MaximumCommissionedFabricsReachedError extends CommissioningError {}
 
@@ -176,9 +174,6 @@ export class ThreadNetworkSetupFailedError extends CommissioningError {}
 /** Error that throws when the NodeId is already used in the fabric. */
 export class NodeIdConflictError extends CommissioningError {}
 
-/** Error that throws when the device could not be discovered using the provided details. */
-export class CommissionableDeviceDiscoveryFailedError extends CommissioningError {}
-
 /** Error that throws when the device could not be connected using the operational discovery and no session could be created. */
 export class OperativeConnectionFailedError extends CommissioningError {}
 
@@ -187,17 +182,19 @@ class RecoverableCommissioningError extends CommissioningError {}
 
 const DEFAULT_FAILSAFE_TIME = Minutes.one;
 
+const RootEndpointNumber = EndpointNumber(0);
+
 /**
  * Class to abstract the Device commission flow in a step wise way as defined in Specs. The specs are not 100%
  */
 export class ControllerCommissioningFlow {
-    protected interactionClient: InteractionClient;
+    protected interaction: ClientInteraction;
     protected readonly ca: CertificateAuthority;
     protected readonly fabric: Fabric;
     protected readonly transitionToCase: (
         peerAddress: PeerAddress,
         supportsConcurrentConnections: boolean,
-    ) => Promise<InteractionClient | undefined>;
+    ) => Promise<ClientInteraction | undefined>;
     protected readonly commissioningOptions: ControllerCommissioningFlowOptions;
     protected readonly commissioningSteps = new Array<CommissioningStep>();
     protected readonly commissioningStepResults = new Map<string, CommissioningStepResult>();
@@ -210,8 +207,8 @@ export class ControllerCommissioningFlow {
     #defaultFailSafeTime = DEFAULT_FAILSAFE_TIME;
 
     constructor(
-        /** InteractionClient for the initiated PASE session */
-        interactionClient: InteractionClient,
+        /** ClientInteraction for the initiated PASE session */
+        interaction: ClientInteraction,
 
         /** CertificateAuthority of the controller. */
         ca: CertificateAuthority,
@@ -226,9 +223,9 @@ export class ControllerCommissioningFlow {
         transitionToCase: (
             peerAddress: PeerAddress,
             supportsConcurrentConnections: boolean,
-        ) => Promise<InteractionClient | undefined>,
+        ) => Promise<ClientInteraction | undefined>,
     ) {
-        this.interactionClient = interactionClient;
+        this.interaction = interaction;
         this.ca = ca;
         this.fabric = fabric;
         this.transitionToCase = transitionToCase;
@@ -327,28 +324,65 @@ export class ControllerCommissioningFlow {
     }
 
     /**
-     * Helper method to create ClusterClients. If not feature specific and for the Root Endpoint they are also reused.
+     * Convenience method to get a number of attributes in a read and return exactly these values in the order as
+     * defined in the request
      */
-    #getClusterClient<const T extends ClusterType>(
-        cluster: T,
-        endpointId = EndpointNumber(0),
-        isFeatureSpecific = false,
-    ): ClusterClientObj<T> {
-        if (!isFeatureSpecific && endpointId === 0) {
-            const clusterClient = this.#clusterClients.get(cluster.id);
-            if (clusterClient !== undefined) {
-                logger.debug(
-                    `Returning existing cluster client for cluster ${cluster.name} (endpoint ${endpointId}, isFeatureSpecific ${isFeatureSpecific})`,
-                );
-                return clusterClient as ClusterClientObj<T>;
+    async #readConcreteAttributeValues(request: ClientRead) {
+        const attributeMap = new Map<string, any>();
+        if (request.attributeRequests === undefined) {
+            throw new ImplementationError("Can only handle Attribute reads");
+        }
+
+        for (const { endpointId, clusterId, attributeId } of request.attributeRequests) {
+            if (endpointId === undefined || clusterId === undefined) {
+                continue;
+            }
+            attributeMap.set(`${endpointId}-${clusterId}-${attributeId}`, undefined);
+        }
+        for await (const data of this.interaction.read(request)) {
+            for (const entry of data) {
+                if (entry.kind !== "attr-value") {
+                    continue;
+                }
+                const {
+                    path: { endpointId, clusterId, attributeId },
+                    value,
+                } = entry;
+                const key = `${endpointId}-${clusterId}-${attributeId}`;
+                if (!attributeMap.has(key)) {
+                    continue;
+                }
+                attributeMap.set(key, value);
             }
         }
-        logger.debug(
-            `Creating new cluster client for cluster ${cluster.name} (endpoint ${endpointId}, isFeatureSpecific ${isFeatureSpecific})`,
-        );
-        const client = ClusterClient(cluster, endpointId, this.interactionClient);
-        this.#clusterClients.set(cluster.id, client);
-        return client;
+        return [...attributeMap.values()];
+    }
+
+    // TODO improve response typing
+    async #invokeCommand<const C extends ClusterType>(
+        request: Invoke.ConcreteCommandRequest<C>,
+        options: Omit<Invoke.Definition, "commands"> = {},
+    ) {
+        for await (const data of this.interaction.invoke(
+            Invoke({
+                commands: [request],
+                ...options,
+            }),
+        )) {
+            for (const entry of data) {
+                // We send only one command, so we only get one response back
+                switch (entry.kind) {
+                    case "cmd-status":
+                        if (entry.status !== Status.Success) {
+                            throw StatusResponseError.create(entry.status, undefined, entry.clusterStatus);
+                        }
+                        return;
+
+                    case "cmd-response":
+                        return entry.data;
+                }
+            }
+        }
     }
 
     /**
@@ -415,7 +449,7 @@ export class ControllerCommissioningFlow {
         });
 
         // Care about Network commissioning only when we are on BLE, because else we are already on IP network
-        if (this.interactionClient.channelType === ChannelType.BLE) {
+        if (this.interaction.channelType === ChannelType.BLE) {
             this.commissioningSteps.push({
                 stepNumber: 16,
                 subStepNumber: 1,
@@ -442,7 +476,7 @@ export class ControllerCommissioningFlow {
             }
         } else {
             logger.info(
-                `Skipping NetworkCommissioning steps because the device is already on IP network (${this.interactionClient.channelType})`,
+                `Skipping NetworkCommissioning steps because the device is already on IP network (${this.interaction.channelType})`,
             );
         }
 
@@ -533,31 +567,62 @@ export class ControllerCommissioningFlow {
      * Initial Step to receive some common data used by other steps
      */
     async #getInitialData() {
-        const operationalCredentialsClient = this.#getClusterClient(OperationalCredentials.Cluster);
-        const supportedFabrics = await operationalCredentialsClient.getSupportedFabricsAttribute();
-        const commissionedFabrics = await operationalCredentialsClient.getCommissionedFabricsAttribute();
+        const [
+            supportedFabrics,
+            commissionedFabrics,
+            rootPartsList,
+            rootServerList,
+            vendorId,
+            productId,
+            productName,
+            supportsConcurrentConnection,
+        ] = await this.#readConcreteAttributeValues(
+            Read(
+                Read.Attribute({
+                    endpoint: RootEndpointNumber,
+                    cluster: OperationalCredentials.Complete,
+                    attributes: ["supportedFabrics", "commissionedFabrics"],
+                }),
+                Read.Attribute({
+                    endpoint: RootEndpointNumber,
+                    cluster: Descriptor.Complete,
+                    attributes: ["partsList", "serverList"],
+                }),
+                Read.Attribute({
+                    endpoint: RootEndpointNumber,
+                    cluster: BasicInformation.Complete,
+                    attributes: ["vendorId", "productId", "productName"],
+                }),
+                Read.Attribute({
+                    endpoint: RootEndpointNumber,
+                    cluster: GeneralCommissioning.Complete,
+                    attributes: ["supportsConcurrentConnection"],
+                }),
+            ),
+        );
+
         if (commissionedFabrics >= supportedFabrics) {
             throw new MaximumCommissionedFabricsReachedError(
                 `Commissioned fabrics (${commissionedFabrics}) exceed supported fabrics (${supportedFabrics}). Please remove some fabrics before commissioning.`,
             );
         }
 
-        const descriptorClient = this.#getClusterClient(Descriptor.Cluster);
-        this.collectedCommissioningData.rootPartsList = await descriptorClient.getPartsListAttribute();
-        this.collectedCommissioningData.rootServerList = await descriptorClient.getServerListAttribute();
+        this.collectedCommissioningData.rootPartsList = rootPartsList;
+        this.collectedCommissioningData.rootServerList = rootServerList;
 
-        const networkData = await this.interactionClient.getMultipleAttributes({
-            attributes: [
-                {
-                    clusterId: NetworkCommissioning.Complete.id,
-                    attributeId: NetworkCommissioning.Complete.attributes.featureMap.id,
-                },
-                {
-                    clusterId: NetworkCommissioning.Complete.id,
-                    attributeId: NetworkCommissioning.Complete.attributes.networks.id,
-                },
-            ],
-        });
+        this.collectedCommissioningData.vendorId = vendorId;
+        this.collectedCommissioningData.productId = productId;
+        this.collectedCommissioningData.productName = productName;
+        this.collectedCommissioningData.supportsConcurrentConnection = supportsConcurrentConnection;
+
+        const networkData = this.interaction.read(
+            Read(
+                Read.Attribute({
+                    cluster: NetworkCommissioning.Complete,
+                    attributes: ["featureMap", "networks"],
+                }),
+            ),
+        );
         const networkFeatures = new Array<{
             endpointId: number;
             value: TypeFromPartialBitSchema<typeof NetworkCommissioning.Complete.features>;
@@ -566,27 +631,32 @@ export class ControllerCommissioningFlow {
             endpointId: number;
             value: TypeFromSchema<typeof NetworkCommissioning.TlvNetworkInfo>[];
         }>();
-        for (const {
-            path: { endpointId, attributeId },
-            value,
-        } of networkData) {
-            if (attributeId === NetworkCommissioning.Complete.attributes.featureMap.id) {
-                networkFeatures.push({ endpointId, value });
-            } else if (attributeId === NetworkCommissioning.Complete.attributes.networks.id) {
-                networkStatus.push({ endpointId, value });
+
+        for await (const data of networkData) {
+            for (const entry of data) {
+                if (entry.kind !== "attr-value") {
+                    continue;
+                }
+                const {
+                    path: { endpointId, attributeId },
+                    value,
+                } = entry;
+                if (attributeId === NetworkCommissioning.Complete.attributes.featureMap.id) {
+                    networkFeatures.push({
+                        endpointId,
+                        value: value as TypeFromPartialBitSchema<typeof NetworkCommissioning.Complete.features>,
+                    });
+                } else if (attributeId === NetworkCommissioning.Complete.attributes.networks.id) {
+                    networkStatus.push({
+                        endpointId,
+                        value: value as TypeFromSchema<typeof NetworkCommissioning.TlvNetworkInfo>[],
+                    });
+                }
             }
         }
+
         this.collectedCommissioningData.networkFeatures = networkFeatures;
         this.collectedCommissioningData.networkStatus = networkStatus;
-
-        const basicInfoClient = this.#getClusterClient(BasicInformation.Cluster);
-        this.collectedCommissioningData.vendorId = await basicInfoClient.getVendorIdAttribute();
-        this.collectedCommissioningData.productId = await basicInfoClient.getProductIdAttribute();
-        this.collectedCommissioningData.productName = await basicInfoClient.getProductNameAttribute();
-
-        const generalCommissioningClient = this.#getClusterClient(GeneralCommissioning.Cluster);
-        this.collectedCommissioningData.supportsConcurrentConnection =
-            await generalCommissioningClient.getSupportsConcurrentConnectionAttribute();
 
         return {
             code: CommissioningStepResultCode.Success,
@@ -604,9 +674,17 @@ export class ControllerCommissioningFlow {
      * Attribute”) prior to invoking the ArmFailSafe command.
      */
     async #armFailsafe(time?: Duration) {
-        const client = this.#getClusterClient(GeneralCommissioning.Cluster);
         if (this.collectedCommissioningData.basicCommissioningInfo === undefined) {
-            const basicCommissioningInfo = await client.getBasicCommissioningInfoAttribute();
+            const [basicCommissioningInfo] = await this.#readConcreteAttributeValues(
+                Read(
+                    Read.Attribute({
+                        endpoint: RootEndpointNumber,
+                        cluster: GeneralCommissioning.Complete,
+                        attributes: ["basicCommissioningInfo"],
+                    }),
+                ),
+            );
+
             this.collectedCommissioningData.basicCommissioningInfo = basicCommissioningInfo;
             this.#defaultFailSafeTime = Seconds(basicCommissioningInfo.failSafeExpiryLengthSeconds);
             this.#commissioningStartedTime = Time.nowMs;
@@ -617,9 +695,14 @@ export class ControllerCommissioningFlow {
         const expiryLength = time ?? this.#defaultFailSafeTime;
         this.#ensureGeneralCommissioningSuccess(
             "armFailSafe",
-            await client.armFailSafe({
-                breadcrumb: this.lastBreadcrumb,
-                expiryLengthSeconds: Seconds.of(expiryLength),
+            await this.#invokeCommand({
+                endpoint: RootEndpointNumber,
+                cluster: GeneralCommissioning.Complete,
+                command: "armFailSafe",
+                fields: {
+                    breadcrumb: this.lastBreadcrumb,
+                    expiryLengthSeconds: Seconds.of(expiryLength),
+                },
             }),
         );
         this.#currentFailSafeEndTime = Timestamp(Time.nowMs + expiryLength);
@@ -637,24 +720,28 @@ export class ControllerCommissioningFlow {
     }
 
     async #ensureFailsafeTimerFor(maxProcessingTime: Duration) {
-        const minFailsafeTime = this.interactionClient.maximumPeerResponseTime(maxProcessingTime);
+        const minFailsafeTime = this.interaction.maximumPeerResponseTime(maxProcessingTime);
 
         const timeLeft = this.#failSafeTimeLeft;
         if (timeLeft < minFailsafeTime) {
             logger.debug(`Failsafe timer has only ${timeLeft}s left, re-arming for at least ${minFailsafeTime}`);
             await this.#armFailsafe(Duration.max(minFailsafeTime, this.#defaultFailSafeTime));
         } else {
-            logger.debug(`Failsafe timer is already set for at least ${timeLeft}s`);
+            logger.debug(`Failsafe timer is already set for at least ${Seconds.of(timeLeft)}s`);
         }
     }
 
     async #resetFailsafeTimer() {
         if (this.#currentFailSafeEndTime === undefined) return;
         try {
-            const client = this.#getClusterClient(GeneralCommissioning.Cluster);
-            await client.armFailSafe({
-                breadcrumb: this.lastBreadcrumb,
-                expiryLengthSeconds: 0,
+            await this.#invokeCommand({
+                endpoint: RootEndpointNumber,
+                cluster: GeneralCommissioning.Complete,
+                command: "armFailSafe",
+                fields: {
+                    breadcrumb: this.lastBreadcrumb,
+                    expiryLengthSeconds: 0,
+                },
             });
             this.#currentFailSafeEndTime = undefined; // No failsafe active anymore
         } catch (error) {
@@ -682,8 +769,16 @@ export class ControllerCommissioningFlow {
         );
 
         if (hasRadioNetwork) {
-            const client = this.#getClusterClient(GeneralCommissioning.Cluster);
-            let locationCapability = await client.getLocationCapabilityAttribute();
+            let [locationCapability] = await this.#readConcreteAttributeValues(
+                Read(
+                    Read.Attribute({
+                        endpoint: RootEndpointNumber,
+                        cluster: GeneralCommissioning.Complete,
+                        attributes: ["locationCapability"],
+                    }),
+                ),
+            );
+
             if (locationCapability === GeneralCommissioning.RegulatoryLocationType.IndoorOutdoor) {
                 locationCapability = this.commissioningOptions.regulatoryLocation;
             } else {
@@ -694,13 +789,20 @@ export class ControllerCommissioningFlow {
                 );
             }
             let countryCode = this.commissioningOptions.regulatoryCountryCode;
-            const regulatoryResult = await client.setRegulatoryConfig(
+            const regulatoryResult = await this.#invokeCommand(
                 {
-                    breadcrumb: this.lastBreadcrumb++,
-                    newRegulatoryConfig: locationCapability,
-                    countryCode,
+                    endpoint: RootEndpointNumber,
+                    cluster: GeneralCommissioning.Complete,
+                    command: "setRegulatoryConfig",
+                    fields: {
+                        breadcrumb: this.lastBreadcrumb++,
+                        newRegulatoryConfig: locationCapability,
+                        countryCode,
+                    },
                 },
-                { useExtendedFailSafeMessageResponseTimeout: true },
+                {
+                    useExtendedFailSafeMessageResponseTimeout: true,
+                },
             );
             if (
                 regulatoryResult.errorCode === GeneralCommissioning.CommissioningError.ValueOutsideRange &&
@@ -712,13 +814,20 @@ export class ControllerCommissioningFlow {
                 countryCode = "XX";
                 this.#ensureGeneralCommissioningSuccess(
                     "setRegulatoryConfig",
-                    await client.setRegulatoryConfig(
+                    await this.#invokeCommand(
                         {
-                            breadcrumb: this.lastBreadcrumb,
-                            newRegulatoryConfig: locationCapability,
-                            countryCode,
+                            endpoint: RootEndpointNumber,
+                            cluster: GeneralCommissioning.Complete,
+                            command: "setRegulatoryConfig",
+                            fields: {
+                                breadcrumb: this.lastBreadcrumb,
+                                newRegulatoryConfig: locationCapability,
+                                countryCode,
+                            },
                         },
-                        { useExtendedFailSafeMessageResponseTimeout: true },
+                        {
+                            useExtendedFailSafeMessageResponseTimeout: true,
+                        },
                     ),
                 );
             } else {
@@ -766,28 +875,50 @@ export class ControllerCommissioningFlow {
      * (see Section 6.2.3, “Device Attestation Procedure”).
      */
     async #deviceAttestation() {
-        const operationalCredentialsClusterClient = this.#getClusterClient(OperationalCredentials.Cluster);
-        const { certificate: deviceAttestation } = await operationalCredentialsClusterClient.certificateChainRequest(
+        const { certificate: deviceAttestation } = await this.#invokeCommand(
             {
-                certificateType: OperationalCredentials.CertificateChainType.DacCertificate,
+                endpoint: RootEndpointNumber,
+                cluster: OperationalCredentials.Complete,
+                command: "certificateChainRequest",
+                fields: {
+                    certificateType: OperationalCredentials.CertificateChainType.DacCertificate,
+                },
             },
-            { useExtendedFailSafeMessageResponseTimeout: true },
+            {
+                useExtendedFailSafeMessageResponseTimeout: true,
+            },
         );
+
         // TODO: extract device public key from deviceAttestation
-        const { certificate: productAttestation } = await operationalCredentialsClusterClient.certificateChainRequest(
+        const { certificate: productAttestation } = await this.#invokeCommand(
             {
-                certificateType: OperationalCredentials.CertificateChainType.PaiCertificate,
+                endpoint: RootEndpointNumber,
+                cluster: OperationalCredentials.Complete,
+                command: "certificateChainRequest",
+                fields: {
+                    certificateType: OperationalCredentials.CertificateChainType.PaiCertificate,
+                },
             },
-            { useExtendedFailSafeMessageResponseTimeout: true },
+            {
+                useExtendedFailSafeMessageResponseTimeout: true,
+            },
         );
+
         // TODO: validate deviceAttestation and productAttestation
-        const { attestationElements, attestationSignature } =
-            await operationalCredentialsClusterClient.attestationRequest(
-                {
+        const { attestationElements, attestationSignature } = await this.#invokeCommand(
+            {
+                endpoint: RootEndpointNumber,
+                cluster: OperationalCredentials.Complete,
+                command: "attestationRequest",
+                fields: {
                     attestationNonce: this.fabric.crypto.randomBytes(32),
                 },
-                { useExtendedFailSafeMessageResponseTimeout: true },
-            );
+            },
+            {
+                useExtendedFailSafeMessageResponseTimeout: true,
+            },
+        );
+
         // TODO: validate attestationSignature using device public key
         if (
             deviceAttestation.byteLength === 0 ||
@@ -823,12 +954,18 @@ export class ControllerCommissioningFlow {
      *     DCL contains the name and other information of the Commissioner’s manufacturer.
      */
     async #certificates() {
-        const operationalCredentialsClusterClient = this.#getClusterClient(OperationalCredentials.Cluster);
-        const { nocsrElements, attestationSignature: csrSignature } =
-            await operationalCredentialsClusterClient.csrRequest(
-                { csrNonce: this.fabric.crypto.randomBytes(32) },
-                { useExtendedFailSafeMessageResponseTimeout: true },
-            );
+        const { nocsrElements, attestationSignature: csrSignature } = await this.#invokeCommand(
+            {
+                endpoint: RootEndpointNumber,
+                cluster: OperationalCredentials.Complete,
+                command: "csrRequest",
+                fields: { csrNonce: this.fabric.crypto.randomBytes(32) },
+            },
+            {
+                useExtendedFailSafeMessageResponseTimeout: true,
+            },
+        );
+
         if (nocsrElements.byteLength === 0 || csrSignature.byteLength === 0) {
             // TODO: validate the data really
             throw new UnexpectedDataError("Invalid response from device");
@@ -837,27 +974,42 @@ export class ControllerCommissioningFlow {
         const { certSigningRequest } = TlvCertSigningRequest.decode(nocsrElements);
         const operationalPublicKey = await Certificate.getPublicKeyFromCsr(this.ca.crypto, certSigningRequest);
 
-        await operationalCredentialsClusterClient.addTrustedRootCertificate(
+        await this.#invokeCommand(
             {
-                rootCaCertificate: this.ca.rootCert,
+                endpoint: RootEndpointNumber,
+                cluster: OperationalCredentials.Complete,
+                command: "addTrustedRootCertificate",
+                fields: {
+                    rootCaCertificate: this.ca.rootCert,
+                },
             },
-            { useExtendedFailSafeMessageResponseTimeout: true },
+            {
+                useExtendedFailSafeMessageResponseTimeout: true,
+            },
         );
+
         const peerOperationalCert = await this.ca.generateNoc(
             operationalPublicKey,
             this.fabric.fabricId,
-            this.interactionClient.address.nodeId,
+            this.interaction.address.nodeId,
         );
 
-        const addNocResponse = await operationalCredentialsClusterClient.addNoc(
+        const addNocResponse = await this.#invokeCommand(
             {
-                nocValue: peerOperationalCert,
-                icacValue: this.ca.icacCert ?? new Uint8Array(0),
-                ipkValue: this.fabric.identityProtectionKey,
-                adminVendorId: this.fabric.rootVendorId,
-                caseAdminSubject: this.fabric.rootNodeId,
+                endpoint: RootEndpointNumber,
+                cluster: OperationalCredentials.Complete,
+                command: "addNoc",
+                fields: {
+                    nocValue: peerOperationalCert,
+                    icacValue: this.ca.icacCert ?? new Uint8Array(0),
+                    ipkValue: this.fabric.identityProtectionKey,
+                    adminVendorId: this.fabric.rootVendorId,
+                    caseAdminSubject: this.fabric.rootNodeId,
+                },
             },
-            { useExtendedFailSafeMessageResponseTimeout: true },
+            {
+                useExtendedFailSafeMessageResponseTimeout: true,
+            },
         );
 
         this.#ensureOperationalCredentialsSuccess("addNoc", addNocResponse);
@@ -887,13 +1039,17 @@ export class ControllerCommissioningFlow {
                 breadcrumb: this.lastBreadcrumb,
             };
         }
-        const operationalCredentialCluster = this.#getClusterClient(OperationalCredentials.Cluster);
         try {
             this.#ensureOperationalCredentialsSuccess(
                 "updateFabricLabel",
-                await operationalCredentialCluster.updateFabricLabel({
-                    label: this.fabric.label,
-                    fabricIndex,
+                await this.#invokeCommand({
+                    endpoint: RootEndpointNumber,
+                    cluster: OperationalCredentials.Complete,
+                    command: "updateFabricLabel",
+                    fields: {
+                        label: this.fabric.label,
+                        fabricIndex,
+                    },
                 }),
             );
         } catch (error) {
@@ -915,7 +1071,7 @@ export class ControllerCommissioningFlow {
      * its desired access control policies.
      */
     async #configureAccessControlLists() {
-        // Standard entry is sufficient in our case
+        // Standard entry is enough in our case
 
         return {
             code: CommissioningStepResultCode.Skipped,
@@ -1018,27 +1174,39 @@ export class ControllerCommissioningFlow {
         }
 
         logger.debug("Configuring WiFi network ...");
-        const networkCommissioningClusterClient = this.#getClusterClient(
-            NetworkCommissioning.Cluster.with("WiFiNetworkInterface"),
-            EndpointNumber(0),
-            true,
-        );
         const ssid = Bytes.fromString(this.commissioningOptions.wifiNetwork.wifiSsid);
         const credentials = Bytes.fromString(this.commissioningOptions.wifiNetwork.wifiCredentials);
 
+        const [scanMaxTimeSeconds, connectMaxTimeSeconds] = await this.#readConcreteAttributeValues(
+            Read(
+                Read.Attribute({
+                    endpoint: RootEndpointNumber,
+                    cluster: NetworkCommissioning.Complete,
+                    attributes: ["scanMaxTimeSeconds", "connectMaxTimeSeconds"],
+                }),
+            ),
+        );
+
         // Only Scan when the device supports concurrent connections
         if (this.collectedCommissioningData.supportsConcurrentConnection !== false) {
-            const scanMaxTime = Seconds(await networkCommissioningClusterClient.getScanMaxTimeSecondsAttribute());
-            await this.#ensureFailsafeTimerFor(scanMaxTime);
+            // TODO add message transmission time
+            await this.#ensureFailsafeTimerFor(Seconds(scanMaxTimeSeconds));
 
-            const { networkingStatus, wiFiScanResults, debugText } =
-                await networkCommissioningClusterClient.scanNetworks(
-                    {
+            const { networkingStatus, wiFiScanResults, debugText } = await this.#invokeCommand(
+                {
+                    endpoint: RootEndpointNumber,
+                    cluster: NetworkCommissioning.Complete,
+                    command: "scanNetworks",
+                    fields: {
                         ssid,
                         breadcrumb: this.lastBreadcrumb++,
                     },
-                    { expectedProcessingTime: scanMaxTime },
-                );
+                },
+                {
+                    expectedProcessingTime: Seconds(scanMaxTimeSeconds),
+                },
+            );
+
             if (networkingStatus !== NetworkCommissioning.NetworkCommissioningStatus.Success) {
                 throw new WifiNetworkSetupFailedError(`Commissionee failed to scan for WiFi networks: ${debugText}`);
             }
@@ -1053,14 +1221,22 @@ export class ControllerCommissioningFlow {
             networkingStatus: addNetworkingStatus,
             debugText: addDebugText,
             networkIndex,
-        } = await networkCommissioningClusterClient.addOrUpdateWiFiNetwork(
+        } = await this.#invokeCommand(
             {
-                ssid,
-                credentials,
-                breadcrumb: this.lastBreadcrumb++,
+                endpoint: RootEndpointNumber,
+                cluster: NetworkCommissioning.Complete,
+                command: "addOrUpdateWiFiNetwork",
+                fields: {
+                    ssid,
+                    credentials,
+                    breadcrumb: this.lastBreadcrumb++,
+                },
             },
-            { useExtendedFailSafeMessageResponseTimeout: true },
+            {
+                useExtendedFailSafeMessageResponseTimeout: true,
+            },
         );
+
         if (addNetworkingStatus !== NetworkCommissioning.NetworkCommissioningStatus.Success) {
             throw new WifiNetworkSetupFailedError(`Commissionee failed to add WiFi network: ${addDebugText}`);
         }
@@ -1071,7 +1247,15 @@ export class ControllerCommissioningFlow {
             `Commissionee added WiFi network ${this.commissioningOptions.wifiNetwork.wifiSsid} with network index ${networkIndex}`,
         );
 
-        const updatedNetworks = await networkCommissioningClusterClient.getNetworksAttribute();
+        const [updatedNetworks] = await this.#readConcreteAttributeValues(
+            Read(
+                Read.Attribute({
+                    endpoint: RootEndpointNumber,
+                    cluster: NetworkCommissioning.Complete,
+                    attributes: ["networks"],
+                }),
+            ),
+        );
         if (updatedNetworks[networkIndex] === undefined) {
             throw new WifiNetworkSetupFailedError(`Commissionee did not return network with index ${networkIndex}`);
         }
@@ -1089,15 +1273,22 @@ export class ControllerCommissioningFlow {
             };
         }
 
-        const connectMaxTime = Seconds(await networkCommissioningClusterClient.getConnectMaxTimeSecondsAttribute());
-        await this.#ensureFailsafeTimerFor(connectMaxTime);
+        // TODO Add retransmission time
+        await this.#ensureFailsafeTimerFor(Seconds(connectMaxTimeSeconds));
 
-        const connectResult = await networkCommissioningClusterClient.connectNetwork(
+        const connectResult = await this.#invokeCommand(
             {
-                networkId: networkId,
-                breadcrumb: this.lastBreadcrumb++,
+                endpoint: RootEndpointNumber,
+                cluster: NetworkCommissioning.Complete,
+                command: "connectNetwork",
+                fields: {
+                    networkId: networkId,
+                    breadcrumb: this.lastBreadcrumb++,
+                },
             },
-            { expectedProcessingTime: connectMaxTime },
+            {
+                expectedProcessingTime: Seconds(connectMaxTimeSeconds),
+            },
         );
 
         if (connectResult.networkingStatus !== NetworkCommissioning.NetworkCommissioningStatus.Success) {
@@ -1165,22 +1356,34 @@ export class ControllerCommissioningFlow {
         }
 
         logger.debug("Configuring Thread network ...");
-        const networkCommissioningClusterClient = this.#getClusterClient(
-            NetworkCommissioning.Cluster.with("ThreadNetworkInterface"),
-            EndpointNumber(0),
-            true,
+        const [scanMaxTimeSeconds, connectMaxTimeSeconds] = await this.#readConcreteAttributeValues(
+            Read(
+                Read.Attribute({
+                    endpoint: RootEndpointNumber,
+                    cluster: NetworkCommissioning.Complete,
+                    attributes: ["scanMaxTimeSeconds", "connectMaxTimeSeconds"],
+                }),
+            ),
         );
 
-        // Only Scan when the device supports concurrent connections
-        if (this.collectedCommissioningData.supportsConcurrentConnection !== false) {
-            const scanMaxTime = Seconds(await networkCommissioningClusterClient.getScanMaxTimeSecondsAttribute());
-            await this.#ensureFailsafeTimerFor(scanMaxTime);
+        if (!this.commissioningOptions.threadNetwork?.networkName) {
+            logger.info("Thread network name is not configured. Skip scanning for it.");
+        } else if (this.collectedCommissioningData.supportsConcurrentConnection !== false) {
+            // Only Scan when the device supports concurrent connections
+            await this.#ensureFailsafeTimerFor(Seconds(scanMaxTimeSeconds));
 
-            const { networkingStatus, threadScanResults, debugText } =
-                await networkCommissioningClusterClient.scanNetworks(
-                    { breadcrumb: this.lastBreadcrumb++ },
-                    { expectedProcessingTime: scanMaxTime },
-                );
+            const { networkingStatus, threadScanResults, debugText } = (await this.#invokeCommand(
+                {
+                    endpoint: RootEndpointNumber,
+                    cluster: NetworkCommissioning.Complete,
+                    command: "scanNetworks",
+                    fields: { breadcrumb: this.lastBreadcrumb++ },
+                },
+                {
+                    expectedProcessingTime: Seconds(scanMaxTimeSeconds),
+                },
+            )) as NetworkCommissioning.ScanNetworksResponse;
+
             if (networkingStatus !== NetworkCommissioning.NetworkCommissioningStatus.Success) {
                 throw new ThreadNetworkSetupFailedError(
                     `Commissionee failed to scan for Thread networks: ${debugText}`,
@@ -1212,13 +1415,21 @@ export class ControllerCommissioningFlow {
             networkingStatus: addNetworkingStatus,
             debugText: addDebugText,
             networkIndex,
-        } = await networkCommissioningClusterClient.addOrUpdateThreadNetwork(
+        } = await this.#invokeCommand(
             {
-                operationalDataset: Bytes.fromHex(this.commissioningOptions.threadNetwork.operationalDataset),
-                breadcrumb: this.lastBreadcrumb++,
+                endpoint: RootEndpointNumber,
+                cluster: NetworkCommissioning.Complete,
+                command: "addOrUpdateThreadNetwork",
+                fields: {
+                    operationalDataset: Bytes.fromHex(this.commissioningOptions.threadNetwork.operationalDataset),
+                    breadcrumb: this.lastBreadcrumb++,
+                },
             },
-            { useExtendedFailSafeMessageResponseTimeout: true },
+            {
+                useExtendedFailSafeMessageResponseTimeout: true,
+            },
         );
+
         if (addNetworkingStatus !== NetworkCommissioning.NetworkCommissioningStatus.Success) {
             throw new ThreadNetworkSetupFailedError(`Commissionee failed to add Thread network: ${addDebugText}`);
         }
@@ -1229,7 +1440,16 @@ export class ControllerCommissioningFlow {
             `Commissionee added Thread network ${this.commissioningOptions.threadNetwork.networkName} with network index ${networkIndex}`,
         );
 
-        const updatedNetworks = await networkCommissioningClusterClient.getNetworksAttribute();
+        const updatedNetworks = await this.#readConcreteAttributeValues(
+            Read(
+                Read.Attribute({
+                    endpoint: RootEndpointNumber,
+                    cluster: NetworkCommissioning.Complete,
+                    attributes: ["networks"],
+                }),
+            ),
+        );
+
         if (updatedNetworks[networkIndex] === undefined) {
             throw new ThreadNetworkSetupFailedError(`Commissionee did not return network with index ${networkIndex}`);
         }
@@ -1246,15 +1466,21 @@ export class ControllerCommissioningFlow {
             };
         }
 
-        const connectMaxTime = Seconds(await networkCommissioningClusterClient.getConnectMaxTimeSecondsAttribute());
-        await this.#ensureFailsafeTimerFor(connectMaxTime);
+        await this.#ensureFailsafeTimerFor(Seconds(connectMaxTimeSeconds));
 
-        const connectResult = await networkCommissioningClusterClient.connectNetwork(
+        const connectResult = await this.#invokeCommand(
             {
-                networkId: networkId,
-                breadcrumb: this.lastBreadcrumb++,
+                endpoint: RootEndpointNumber,
+                cluster: NetworkCommissioning.Complete,
+                command: "connectNetwork",
+                fields: {
+                    networkId: networkId,
+                    breadcrumb: this.lastBreadcrumb++,
+                },
             },
-            { expectedProcessingTime: connectMaxTime },
+            {
+                expectedProcessingTime: Seconds(connectMaxTimeSeconds),
+            },
         );
 
         if (connectResult.networkingStatus !== NetworkCommissioning.NetworkCommissioningStatus.Success) {
@@ -1314,10 +1540,10 @@ export class ControllerCommissioningFlow {
             reArmFailsafeInterval.start();
         }
 
-        let transitionResult: InteractionClient | undefined;
+        let transitionResult: ClientInteraction | undefined;
         try {
             transitionResult = await this.transitionToCase(
-                this.interactionClient.address,
+                this.interaction.address,
                 // Assume concurrent connections are supported if not know (which should not be the case when we came here)
                 isConcurrentFlow,
             );
@@ -1335,7 +1561,7 @@ export class ControllerCommissioningFlow {
             };
         }
 
-        this.interactionClient = transitionResult;
+        this.interaction = transitionResult;
         this.#clusterClients.clear();
 
         logger.debug("Successfully reconnected with device ...");
@@ -1354,12 +1580,18 @@ export class ControllerCommissioningFlow {
      * the commissioning process.
      */
     async #completeCommissioning() {
-        const generalCommissioningClusterClient = this.#getClusterClient(GeneralCommissioning.Cluster);
         this.#ensureGeneralCommissioningSuccess(
             "commissioningComplete",
-            await generalCommissioningClusterClient.commissioningComplete(undefined, {
-                useExtendedFailSafeMessageResponseTimeout: true,
-            }),
+            await this.#invokeCommand(
+                {
+                    endpoint: RootEndpointNumber,
+                    cluster: GeneralCommissioning.Complete,
+                    command: "commissioningComplete",
+                },
+                {
+                    useExtendedFailSafeMessageResponseTimeout: true,
+                },
+            ),
         );
         this.#currentFailSafeEndTime = undefined; // gets deactivated when successful
 

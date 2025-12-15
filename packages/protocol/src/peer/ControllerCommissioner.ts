@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { ClientInteraction } from "#action/client/ClientInteraction.js";
 import { CertificateAuthority } from "#certificate/CertificateAuthority.js";
 import { GeneralCommissioning } from "#clusters/general-commissioning";
 import { CommissionableDevice, CommissionableDeviceIdentifiers, DiscoveryData, ScannerSet } from "#common/Scanner.js";
@@ -27,10 +28,9 @@ import {
     Seconds,
     ServerAddress,
 } from "#general";
-import { InteractionClient, InteractionClientProvider } from "#interaction/InteractionClient.js";
 import { MdnsClient } from "#mdns/MdnsClient.js";
+import { CommissioningError } from "#peer/CommissioningError.js";
 import {
-    CommissioningError,
     ControllerCommissioningFlow,
     ControllerCommissioningFlowOptions,
     NodeIdConflictError,
@@ -128,12 +128,12 @@ export interface DiscoveryAndCommissioningOptions extends CommissioningOptions {
  */
 export interface ControllerCommissionerContext {
     peers: PeerSet;
-    clients: InteractionClientProvider;
     scanners: ScannerSet;
     transports: ConnectionlessTransportSet;
     sessions: SessionManager;
     exchanges: ExchangeManager;
     ca: CertificateAuthority;
+    environment: Environment;
 }
 
 /**
@@ -151,19 +151,19 @@ export class ControllerCommissioner {
     static [Environmental.create](env: Environment) {
         const instance = new ControllerCommissioner({
             peers: env.get(PeerSet),
-            clients: env.get(InteractionClientProvider),
             scanners: env.get(ScannerSet),
             transports: env.get(ConnectionlessTransportSet),
             sessions: env.get(SessionManager),
             exchanges: env.get(ExchangeManager),
             ca: env.get(CertificateAuthority),
+            environment: env,
         });
         env.set(ControllerCommissioner, instance);
         return instance;
     }
 
     /**
-     * Commmission a previously discovered node.
+     * Commission a previously discovered node.
      */
     async commission(options: LocatedNodeCommissioningOptions): Promise<PeerAddress> {
         const { passcode, addresses, discoveryData, fabric, nodeId } = options;
@@ -463,13 +463,14 @@ export class ControllerCommissioner {
         logger.info(
             `Start commissioning of node ${address.nodeId} into fabric ${fabric.fabricId} (index ${address.fabricIndex})`,
         );
+        const exchangeProvider = new DedicatedChannelExchangeProvider(this.#context.exchanges, paseSession);
         const commissioningManager = new commissioningFlowImpl(
             // Use the created secure session to do the commissioning
-            new InteractionClient(
-                new DedicatedChannelExchangeProvider(this.#context.exchanges, paseSession),
-                undefined,
+            new ClientInteraction({
+                environment: this.#context.environment,
+                exchangeProvider,
                 address,
-            ),
+            }),
             this.#context.ca,
             fabric,
             commissioningOptions,
@@ -489,14 +490,21 @@ export class ControllerCommissioner {
                 }
 
                 // Look for the device broadcast over MDNS and do CASE pairing
-                return await this.#context.clients.connect(address, {
+                await this.#context.peers.connect(address, {
                     discoveryOptions: {
                         discoveryType: NodeDiscoveryType.TimedDiscovery,
                         timeout: Minutes(2),
                         discoveryData,
                     },
-                    allowUnknownPeer: true,
-                }); // Wait maximum 120s to find the operational device for commissioning process
+                }); // Wait maximum 120s to find the operational device for the commissioning process
+
+                // And we use a ClientInteraction backed Interaction client to finish the commissioning because
+                const exchangeProvider = await this.#context.peers.exchangeProviderFor(address);
+                return new ClientInteraction({
+                    environment: this.#context.environment,
+                    exchangeProvider,
+                    address,
+                });
             },
         );
 
@@ -504,7 +512,7 @@ export class ControllerCommissioner {
             await commissioningManager.executeCommissioning();
         } catch (error) {
             // We might have added data for an operational address that we need to cleanup
-            await this.#context.clients.peers.get(address)?.delete();
+            await this.#context.peers.get(address)?.delete();
             throw error;
         } finally {
             /*
