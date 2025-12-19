@@ -45,6 +45,7 @@ import {
 import {
     ClientNode,
     CommissioningClient,
+    ControllerBehavior,
     Endpoint,
     NetworkClient,
     NodePhysicalProperties,
@@ -296,7 +297,7 @@ export class MatterController {
                 environment,
                 id,
                 network: {
-                    ble,
+                    ble: false,
                     ipv4,
                     listeningAddressIpv4,
                     listeningAddressIpv6,
@@ -310,6 +311,7 @@ export class MatterController {
                     adminFabricId,
                     adminNodeId: rootNodeId,
                     caseAuthenticatedTags,
+                    ble,
                 },
                 commissioning: {
                     enabled: false, // The node is never commissionable directly
@@ -388,7 +390,7 @@ export class MatterController {
     }
 
     get ble() {
-        return this.node.state.network.ble ?? false;
+        return this.node.state.controller.ble ?? false;
     }
 
     get fabric() {
@@ -608,6 +610,7 @@ export class MatterController {
     async start() {
         await this.node.start();
         this.#clients = new InteractionClientProvider(this.node);
+        await this.node.act(agent => agent.load(ControllerBehavior));
     }
 
     async close() {
