@@ -6,7 +6,7 @@
 
 import { Behavior } from "#behavior/Behavior.js";
 import { BasicInformationBehavior } from "#behaviors/basic-information";
-import { ConnectionlessTransportSet, ImplementationError, Logger } from "#general";
+import { ConnectionlessTransportSet, ImplementationError, Logger, SharedEnvironmentServices } from "#general";
 import { Node } from "#node/Node.js";
 import {
     Ble,
@@ -49,12 +49,15 @@ export class ControllerBehavior extends Behavior {
             throw new ImplementationError("adminFabricLabel must be set for ControllerBehavior");
         }
 
+        const node = Node.forEndpoint(this.endpoint);
+
         // Configure discovery transports
         if (this.state.ip === undefined) {
             this.state.ip = true;
         }
         if (this.state.ip !== false) {
-            this.env.get(ScannerSet).add((await this.env.load(MdnsService)).client);
+            this.internal.services = this.env.asDependent();
+            this.env.get(ScannerSet).add((await this.internal.services.load(MdnsService)).client);
         }
 
         if (this.state.ble === undefined) {
@@ -83,10 +86,9 @@ export class ControllerBehavior extends Behavior {
             }
         }
 
-        const node = Node.forEndpoint(this.endpoint);
         this.reactTo(node.lifecycle.online, this.#nodeOnline);
         if (node.lifecycle.isOnline) {
-            this.#nodeOnline();
+            await this.#nodeOnline();
         }
         this.reactTo(node.lifecycle.goingOffline, this.#nodeGoingOffline);
     }
@@ -95,6 +97,7 @@ export class ControllerBehavior extends Behavior {
         await this.env.close(ActiveDiscoveries);
         this.env.delete(FabricAuthority);
         this.env.delete(ScannerSet);
+        await this.internal.services?.close();
     }
 
     get fabricAuthorityConfig(): FabricAuthorityConfiguration {
@@ -105,7 +108,7 @@ export class ControllerBehavior extends Behavior {
         };
     }
 
-    #nodeOnline() {
+    async #nodeOnline() {
         // Configure network connections
         const netTransports = this.env.get(ConnectionlessTransportSet);
         if (this.state.ble) {
@@ -113,9 +116,12 @@ export class ControllerBehavior extends Behavior {
             netTransports.add(this.env.get(Ble).centralInterface);
         }
 
-        // Add each pre-existing fabric to discovery criteria
+        // Add each pre-existing fabric to discovery criteria and update fabric label if needed
         const authority = this.env.get(FabricAuthority);
         for (const fabric of authority.fabrics) {
+            if (fabric.label !== this.state.adminFabricLabel) {
+                await fabric.setLabel(this.state.adminFabricLabel);
+            }
             this.#enableScanningForFabric(fabric);
         }
         this.reactTo(authority.fabricAdded, this.#enableScanningForFabric);
@@ -148,7 +154,7 @@ export class ControllerBehavior extends Behavior {
     }
 
     #enableScanningForFabric(fabric: Fabric) {
-        this.internal.mdnsTargetCriteria.operationalTargets.push({ operationalId: fabric.operationalId });
+        this.internal.mdnsTargetCriteria.operationalTargets.push({ fabricId: fabric.globalId });
     }
 
     #enableScanningForScanner(scanner: Scanner) {
@@ -168,6 +174,8 @@ export namespace ControllerBehavior {
             commissionable: true,
             operationalTargets: [],
         };
+
+        services?: SharedEnvironmentServices;
     }
 
     export class State {

@@ -10,7 +10,7 @@ import type { AttributeModel, EventModel } from "#model";
 import type { ClusterType, TypeFromSchema } from "#types";
 import type { Behavior } from "../Behavior.js";
 import type { ActionContext } from "../context/ActionContext.js";
-import type { ClusterOf } from "./ClusterBehaviorUtil.js";
+import type { ClusterOf } from "./cluster-behavior-utils.js";
 
 /**
  * Event instance type for ClusterBehaviors.
@@ -94,24 +94,24 @@ export namespace ClusterEvents {
     /**
      * API for events triggered prior to attribute change.
      */
-    export interface ChangingObservable<A extends ClusterType.Attribute = ClusterType.Attribute>
-        extends OfflineEvent<
-            [value: TypeFromSchema<A["schema"]>, oldValue: TypeFromSchema<A["schema"]>, context: ActionContext],
-            AttributeModel
-        > {}
+    export interface ChangingObservable<A extends ClusterType.Attribute = ClusterType.Attribute> extends OfflineEvent<
+        [value: TypeFromSchema<A["schema"]>, oldValue: TypeFromSchema<A["schema"]>, context: ActionContext],
+        AttributeModel
+    > {}
 
     /**
      * API for events triggered after attribute change.
      */
-    export interface ChangedObservable<A extends ClusterType.Attribute = ClusterType.Attribute>
-        extends OnlineEvent<
-            [value: TypeFromSchema<A["schema"]>, oldValue: TypeFromSchema<A["schema"]>, context: ActionContext],
-            AttributeModel
-        > {}
+    export interface ChangedObservable<A extends ClusterType.Attribute = ClusterType.Attribute> extends OnlineEvent<
+        [value: TypeFromSchema<A["schema"]>, oldValue: TypeFromSchema<A["schema"]>, context: ActionContext | undefined],
+        AttributeModel
+    > {}
 
     /**
      * API for events triggered for Matter events.
      */
-    export interface EventObservable<E extends ClusterType.Event = ClusterType.Event>
-        extends OnlineEvent<[payload: TypeFromSchema<E["schema"]>, context: ActionContext], EventModel> {}
+    export interface EventObservable<E extends ClusterType.Event = ClusterType.Event> extends OnlineEvent<
+        [payload: TypeFromSchema<E["schema"]>, context: ActionContext],
+        EventModel
+    > {}
 }

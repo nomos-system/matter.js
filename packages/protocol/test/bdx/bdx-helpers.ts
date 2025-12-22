@@ -1,18 +1,18 @@
 import { BdxSessionConfiguration } from "#bdx/BdxSessionConfiguration.js";
-import { BdxClient, BdxMessage, BdxMessenger, BdxProtocol, BdxStatusMessage } from "#bdx/index.js";
+import { BdxClient, BdxMessage, BdxMessenger, BdxProtocol, BdxStatusMessage, ScopedStorage } from "#bdx/index.js";
 import { Message } from "#codec/MessageCodec.js";
 import { MaybePromise, StorageBackendMemory, StorageManager } from "#general";
-import { PeerAddress } from "#peer/PeerAddress.js";
-import { BdxMessageType, FabricIndex, NodeId, SecureMessageType } from "#types";
-import { createPromise, StorageContext } from "@matter/general";
-import { createSession, MockExchange } from "./bdx-mock-exchange.js";
+import { ProtocolMocks } from "#protocol/ProtocolMocks.js";
+import { SecureSession } from "#session/index.js";
+import { BDX_PROTOCOL_ID, BdxMessageType, SecureMessageType } from "#types";
+import { createPromise } from "@matter/general";
 
 type MessageRecords = { type: BdxMessageType | SecureMessageType.StatusReport; data: any };
 
 export async function bdxTransfer(params: {
     prepare: (
-        clientStorage: StorageContext,
-        serverStorage: StorageContext,
+        clientStorage: ScopedStorage,
+        serverStorage: ScopedStorage,
         messenger: BdxMessenger,
     ) => MaybePromise<{
         bdxClient: BdxClient;
@@ -20,8 +20,8 @@ export async function bdxTransfer(params: {
         serverLimits?: BdxSessionConfiguration.Config;
     }>;
     validate: (
-        clientStorage: StorageContext,
-        serverStorage: StorageContext,
+        clientStorage: ScopedStorage,
+        serverStorage: ScopedStorage,
         meta: {
             clientExchangeData: MessageRecords[];
             serverExchangeData: MessageRecords[];
@@ -33,14 +33,8 @@ export async function bdxTransfer(params: {
     serverExchangeManipulator?: (message: Message) => Message;
 }) {
     // Create two exchanges, one for sending and one for receiving.
-    const sendingExchange = new MockExchange(PeerAddress({ fabricIndex: FabricIndex(1), nodeId: NodeId(1) }), {
-        id: 1,
-        session: await createSession({ sessionId: 1 }),
-    });
-    const receivingExchange = new MockExchange(PeerAddress({ fabricIndex: FabricIndex(2), nodeId: NodeId(2) }), {
-        id: 2,
-        session: await createSession({ sessionId: 2 }),
-    });
+    const sendingExchange = createExchange(1);
+    const receivingExchange = createExchange(1);
     const clientExchangeData = new Array<MessageRecords>();
     const serverExchangeData = new Array<MessageRecords>();
 
@@ -48,8 +42,8 @@ export async function bdxTransfer(params: {
     const storage = new StorageManager(new StorageBackendMemory());
     storage.close = () => {};
     await storage.initialize();
-    const clientStorage = storage.createContext("Client");
-    const serverStorage = storage.createContext("Server");
+    const clientStorage = new ScopedStorage(storage.createContext("Client"), "ota");
+    const serverStorage = new ScopedStorage(storage.createContext("Server"), "ota");
 
     // Prepare the test data and create Client
     const { bdxClient, expectedInitialMessageType, serverLimits } = await params.prepare(
@@ -60,21 +54,20 @@ export async function bdxTransfer(params: {
 
     const { promise, resolver } = createPromise<Message>();
 
-    sendingExchange.newData.on(async () => {
+    sendingExchange.readReady.on(async () => {
         let message = await sendingExchange.read();
         clientExchangeData.push(parseMessage(message));
         if (params.clientExchangeManipulator) {
             message = params.clientExchangeManipulator(message);
         }
+        await receivingExchange.write(message);
         if (clientExchangeData.length === 1) {
             // We catch the first message because this is used to initialize the Server Bdx Protocol
             resolver(message);
-        } else {
-            await receivingExchange.write(message);
         }
     });
 
-    receivingExchange.newData.on(async () => {
+    receivingExchange.readReady.on(async () => {
         let message = await receivingExchange.read();
         serverExchangeData.push(parseMessage(message));
         if (params.serverExchangeManipulator) {
@@ -88,7 +81,12 @@ export async function bdxTransfer(params: {
     const message = await promise;
     expect(clientExchangeData[0].type).equals(expectedInitialMessageType);
 
-    const bdxProtocol = new BdxProtocol(serverStorage, serverLimits);
+    const bdxProtocol = new BdxProtocol();
+    bdxProtocol.enablePeerForScope(
+        (receivingExchange.session as SecureSession).peerAddress,
+        serverStorage,
+        serverLimits,
+    );
 
     let serverError: unknown;
     try {
@@ -105,12 +103,16 @@ export async function bdxTransfer(params: {
     } catch (err) {
         clientError = err;
     }
-    await params.validate(clientStorage, serverStorage, {
-        clientExchangeData,
-        serverExchangeData,
-        clientError,
-        serverError,
-    });
+    await MockTime.resolve(
+        Promise.resolve(
+            params.validate(clientStorage, serverStorage, {
+                clientExchangeData,
+                serverExchangeData,
+                clientError,
+                serverError,
+            }),
+        ),
+    );
 }
 
 function parseMessage(message: Message): MessageRecords {
@@ -122,4 +124,13 @@ function parseMessage(message: Message): MessageRecords {
     }
     const { kind: type, message: data } = BdxMessage.decode(message.payloadHeader.messageType, message.payload);
     return { type, data };
+}
+
+function createExchange(index: number) {
+    return new ProtocolMocks.Exchange({
+        index,
+        fabricIndex: index,
+        maxPayloadSize: 1024,
+        protocolId: BDX_PROTOCOL_ID,
+    });
 }

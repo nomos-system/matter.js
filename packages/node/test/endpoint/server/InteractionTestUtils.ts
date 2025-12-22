@@ -3,12 +3,13 @@
  * Copyright 2022-2025 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
-import { AsyncObservable, Bytes, DataReadQueue, MAX_UDP_MESSAGE_SIZE } from "#general";
+import { AsyncObservable, Bytes, DataReadQueue, Lifetime, MAX_UDP_MESSAGE_SIZE } from "#general";
 import {
     ExchangeSendOptions,
     MATTER_MESSAGE_OVERHEAD,
     Message,
     MessageExchange,
+    ProtocolMocks,
     SecureSession,
     SessionManager,
 } from "#protocol";
@@ -17,6 +18,7 @@ import { interaction } from "../../node/node-helpers.js";
 
 // TODO Sync with mock-exchange.ts
 export class DummyMessageExchange {
+    #lifetime = Lifetime.mock;
     messagesQueue = new DataReadQueue<Message>();
     channel = { name: "test" };
     maxPayloadSize = MAX_UDP_MESSAGE_SIZE - MATTER_MESSAGE_OVERHEAD;
@@ -35,15 +37,19 @@ export class DummyMessageExchange {
         public closeCallback?: () => void,
     ) {}
 
-    async injectMessage(message: Message) {
-        return this.messagesQueue.write(message);
+    join(...name: unknown[]) {
+        return this.#lifetime.join(...name);
+    }
+
+    injectMessage(message: Message) {
+        this.messagesQueue.write(message);
     }
 
     async send(messageType: number, payload: Bytes, options?: ExchangeSendOptions) {
         const { payload: responsePayload, messageType: responseMessageType } =
             this.writeCallback?.(messageType, payload, options) ?? {};
         if (payload) {
-            return this.messagesQueue.write({
+            this.messagesQueue.write({
                 ...interaction.BarelyMockedMessage,
                 payloadHeader: { messageType: responseMessageType },
                 payload: responsePayload,
@@ -89,7 +95,12 @@ export async function createDummyMessageExchange(
     clearTimedInteractionCallback?: () => void,
     closeCallback?: () => void,
 ) {
-    const session = await node.createSession(sessionData);
+    const session = await ProtocolMocks.NodeSession.create({
+        manager: node.env.get(SessionManager),
+        fabric: undefined,
+        ...sessionData,
+    });
+
     return new DummyMessageExchange(
         session,
         hasTimedInteraction,

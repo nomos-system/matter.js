@@ -14,7 +14,7 @@ import {
 } from "../../elements/index.js";
 
 export const RootNodeDt = DeviceType(
-    { name: "RootNode", id: 0x16 },
+    { name: "RootNode", id: 0x16, classification: "node" },
     Requirement(
         { name: "Descriptor", id: 0x1d, element: "serverCluster" },
         Requirement({ name: "DeviceTypeList", default: [ { deviceType: 22, revision: 3 } ], element: "attribute" })
@@ -45,12 +45,13 @@ export const RootNodeDt = DeviceType(
     Requirement({ name: "DiagnosticLogs", id: 0x32, conformance: "O", element: "serverCluster", quality: "I" }),
     Requirement({ name: "SoftwareDiagnostics", id: 0x34, conformance: "O", element: "serverCluster", quality: "I" }),
     Requirement({ name: "EthernetNetworkDiagnostics", id: 0x37, conformance: "[Ethernet]", element: "serverCluster" }),
-    Requirement({ name: "WiFiNetworkDiagnostics", id: 0x36, conformance: "[Wi, Fi]", element: "serverCluster" }),
+    Requirement({ name: "WiFiNetworkDiagnostics", id: 0x36, conformance: "[WiFi]", element: "serverCluster" }),
     Requirement({ name: "ThreadNetworkDiagnostics", id: 0x35, conformance: "[Thread]", element: "serverCluster" }),
     Requirement(
         { name: "IcdManagement", id: 0x46, conformance: "SIT | LIT", element: "serverCluster", quality: "I" },
         Requirement({ name: "LONGIDLETIMESUPPORT", conformance: "LIT", element: "feature" })
     ),
+    Requirement({ name: "PowerSource", id: 0x11, conformance: "O", element: "deviceType" }),
     Field(
         { name: "conditions", type: "enum8" },
         Field({ name: "CustomNetworkConfig" }),

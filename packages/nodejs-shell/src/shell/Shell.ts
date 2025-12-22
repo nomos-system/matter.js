@@ -4,26 +4,32 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { MatterError } from "#general";
+import { Logger, MatterError } from "#general";
 import { createWriteStream, readFileSync } from "node:fs";
 import readline from "node:readline";
 import { Readable, Writable } from "node:stream";
 import { inspect } from "node:util";
 import yargs from "yargs/yargs";
 import { MatterNode } from "../MatterNode.js";
-import { exit } from "../app";
+import { exit } from "../app.js";
 import { commandlineParser } from "../util/CommandlineParser.js";
-import cmdAttributes from "./cmd_cluster-attributes";
-import cmdCommands from "./cmd_cluster-commands";
-import cmdEvents from "./cmd_cluster-events";
+import cmdCert from "./cmd_cert.js";
+import cmdAttributes from "./cmd_cluster-attributes.js";
+import cmdCommands from "./cmd_cluster-commands.js";
+import cmdEvents from "./cmd_cluster-events.js";
 import cmdCommission from "./cmd_commission.js";
 import cmdConfig from "./cmd_config.js";
+import cmdDcl from "./cmd_dcl.js";
 import cmdDiscover from "./cmd_discover.js";
 import cmdIdentify from "./cmd_identify.js";
 import cmdNodes from "./cmd_nodes.js";
+import cmdOta from "./cmd_ota.js";
 import cmdSession from "./cmd_session.js";
 import cmdSubscribe from "./cmd_subscribe.js";
-import cmdTlv from "./cmd_tlv";
+import cmdTlv from "./cmd_tlv.js";
+import cmdVendor from "./cmd_vendor.js";
+
+const logger = Logger.get("Shell");
 
 const MAX_HISTORY_SIZE = 1000;
 
@@ -148,7 +154,11 @@ export class Shell {
                     cmdAttributes(this.theNode),
                     cmdEvents(this.theNode),
                     cmdCommands(this.theNode),
+                    cmdOta(this.theNode),
+                    cmdCert(this.theNode),
+                    cmdVendor(this.theNode),
                     cmdTlv(),
+                    cmdDcl(),
                     exitCommand(),
                 ])
                 .command({
@@ -175,6 +185,7 @@ export class Shell {
                     console.log("Done.");
                 }
             } catch (error) {
+                logger.error(`Error during command execution:`, error);
                 process.stderr.write(`Error happened during command: ${error}\n`);
                 if (error instanceof Error && error.stack) {
                     const errorText = inspect(error, { depth: 10 });

@@ -47,8 +47,38 @@ export class DeviceAdvertiser {
             this.#advertiseFabric(fabric, "startup");
         });
 
-        // When a fabric is deleted, cancel any active advertisement
-        this.#observers.on(fabrics.events.deleted, fabric => {
+        // When fabric is updated, we might need to adjust announcements
+        this.#observers.on(fabrics.events.replaced, async fabric => {
+            if (!this.#isOperational) {
+                return;
+            }
+
+            // Look for update for this fabricIndex because other Ids might have changed and object is different
+            const fabricIndexAdvertisements = this.#advertisements(
+                ad => ad.isOperational() && ad.description.fabric.fabricIndex === fabric.fabricIndex,
+            );
+
+            // If the announcement relevant IDs are unchanged, do nothing
+            if (
+                fabricIndexAdvertisements.every(
+                    ad =>
+                        ad.isOperational() &&
+                        ad.description.fabric.globalId === fabric.globalId &&
+                        ad.description.fabric.nodeId === fabric.nodeId,
+                )
+            ) {
+                return;
+            }
+
+            for (const ad of fabricIndexAdvertisements) {
+                await ad.close();
+            }
+
+            this.#advertiseFabric(fabric, "startup");
+        });
+
+        // When fabric is deleted, cancel any active advertisement
+        this.#observers.on(fabrics.events.deleting, fabric => {
             Advertisement.cancelAll(this.#advertisements(ad => ad.isOperational() && ad.description.fabric === fabric));
         });
 
@@ -56,7 +86,7 @@ export class DeviceAdvertiser {
         // configured
         this.#observers.on(sessions.sessions.added, session => {
             const fabricIndex = session.fabric?.fabricIndex;
-            const fabric = fabricIndex ? fabrics.findByIndex(fabricIndex) : undefined;
+            const fabric = fabricIndex ? fabrics.maybeFor(fabricIndex) : undefined;
             if (!fabric) {
                 return;
             }
@@ -72,7 +102,7 @@ export class DeviceAdvertiser {
         // When a session is closed, conditionally resume broadcast
         this.#observers.on(sessions.sessions.deleted, session => {
             const fabricIndex = session.fabric?.fabricIndex;
-            const fabric = fabricIndex ? fabrics.findByIndex(fabricIndex) : undefined;
+            const fabric = fabricIndex ? fabrics.maybeFor(fabricIndex) : undefined;
 
             // If this was an operational connection, readvertise if we're no longer connected to the peer
             if (fabric) {

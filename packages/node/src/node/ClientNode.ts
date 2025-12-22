@@ -12,6 +12,9 @@ import { NetworkRuntime } from "#behavior/system/network/NetworkRuntime.js";
 import { Agent } from "#endpoint/Agent.js";
 import { ClientNodeEndpoints } from "#endpoint/properties/ClientNodeEndpoints.js";
 import { EndpointInitializer } from "#endpoint/properties/EndpointInitializer.js";
+import { EndpointLifecycle } from "#endpoint/properties/EndpointLifecycle.js";
+import { EndpointType } from "#endpoint/type/EndpointType.js";
+import { MutableEndpoint } from "#endpoint/type/MutableEndpoint.js";
 import { Diagnostic, Identity, Lifecycle, Logger, MaybePromise } from "#general";
 import { Matter, MatterModel } from "#model";
 import { Interactable, OccurrenceManager, PeerAddress } from "#protocol";
@@ -39,7 +42,9 @@ export class ClientNode extends Node<ClientNode.RootEndpoint> {
         const opts = {
             ...options,
             number: 0,
-            type: ClientNode.RootEndpoint,
+
+            // Create an unfrozen type so we can set the revision when we see the descriptor
+            type: MutableEndpoint(ClientNode.RootEndpoint),
         };
 
         super(opts);
@@ -74,8 +79,9 @@ export class ClientNode extends Node<ClientNode.RootEndpoint> {
         return this.env.get(ServerNodeStore).clientStores.storeForNode(this);
     }
 
-    override initialize() {
+    override async initialize() {
         const store = this.store;
+        await store.construction;
 
         this.env.set(ClientNodeStore, store);
 
@@ -86,7 +92,7 @@ export class ClientNode extends Node<ClientNode.RootEndpoint> {
 
         initializer.structure.loadCache();
 
-        return super.initialize();
+        await super.initialize();
     }
 
     override get owner(): ServerNode | undefined {
@@ -106,22 +112,36 @@ export class ClientNode extends Node<ClientNode.RootEndpoint> {
 
     /**
      * Remove this node from the fabric (if commissioned) and locally.
+     * This method tries to communicate with the device to decommission it properly and will fail if the device is
+     * unreachable.
+     * If you cannot reach the device, use {@link delete} instead.
      */
-    override async delete() {
+    async decommission() {
+        this.lifecycle.change(EndpointLifecycle.Change.Destroying);
+
         if (this.lifecycle.isCommissioned) {
             this.statusUpdate("decommissioning");
 
             await this.act("decommission", agent => agent.commissioning.decommission());
         }
-
-        await super.delete();
+        await this.delete();
     }
 
     /**
      * Force-remove the node without first decommissioning.
      *
-     * If the node is still available you should use {@link delete} to remove it from the fabric.
+     * If the node is still available, you should use {@link decommission} to remove it properly from the fabric and only use
+     * this method as fallback.  You should also tell the user that he needs to manually factory-reset the device.
      */
+    override async delete() {
+        // TODO If we know a peer address, get the Peer for it to delete it as well
+        //const peerAddress = this.behaviors.maybeStateOf("commissioning")?.peerAddress as PeerAddress | undefined;
+        //const peer = peerAddress !== undefined ? this.owner?.env.get(PeerSet).for(peerAddress) : undefined;
+
+        await super.delete();
+        //await peer?.delete();
+    }
+
     override async erase() {
         await this.lifecycle.mutex.produce(this.eraseWithMutex.bind(this));
     }
@@ -234,7 +254,12 @@ export namespace ClientNode {
         matter?: MatterModel;
     }
 
-    export const RootEndpoint = Node.CommonRootEndpoint.with(CommissioningClient, NetworkClient);
+    export const RootEndpoint = MutableEndpoint({
+        ...Node.CommonRootEndpoint,
+        deviceRevision: EndpointType.UNKNOWN_DEVICE_REVISION,
+    }).with(CommissioningClient, NetworkClient);
 
     export interface RootEndpoint extends Identity<typeof RootEndpoint> {}
 }
+
+Object.freeze(ClientNode.RootEndpoint);

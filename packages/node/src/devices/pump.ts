@@ -46,7 +46,7 @@ import { Identity } from "#general";
  * PumpDevice requires PumpConfigurationAndControl cluster but PumpConfigurationAndControl is not added by default
  * because you must select the features your device supports. You can add manually using PumpDevice.with().
  *
- * @see {@link MatterSpecification.v141.Device} § 5.5
+ * @see {@link MatterSpecification.v142.Device} § 5.5
  */
 export interface PumpDevice extends Identity<typeof PumpDeviceDefinition> {}
 
@@ -185,4 +185,5 @@ export const PumpDeviceDefinition = MutableEndpoint({
     behaviors: SupportedBehaviors(PumpRequirements.server.mandatory.OnOff, PumpRequirements.server.mandatory.Identify)
 });
 
+Object.freeze(PumpDeviceDefinition);
 export const PumpDevice: PumpDevice = PumpDeviceDefinition;

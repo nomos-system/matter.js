@@ -25,7 +25,6 @@ export class MdnsService {
     #socket?: MdnsSocket;
     #server?: MdnsServer;
     #client?: MdnsClient;
-    #env: Environment;
     readonly #construction: Construction<MdnsService>;
     readonly #enableIpv4: boolean;
     readonly limitedToNetInterface?: string;
@@ -35,7 +34,6 @@ export class MdnsService {
     }
 
     constructor(environment: Environment, options?: MdnsService.Options) {
-        this.#env = environment;
         const network = environment.get(Network);
         const rootEnvironment = environment.root;
         rootEnvironment.set(MdnsService, this);
@@ -47,12 +45,13 @@ export class MdnsService {
 
         this.#construction = Construction(this, async () => {
             this.#socket = await MdnsSocket.create(network, {
+                lifetime: this.#construction,
                 enableIpv4: this.enableIpv4,
                 netInterface: this.limitedToNetInterface,
             });
 
-            this.#server = new MdnsServer(this.#socket);
-            this.#client = new MdnsClient(this.#socket);
+            this.#server = new MdnsServer(this.#socket, this.#construction);
+            this.#client = new MdnsClient(this.#socket, this.#construction);
         });
     }
 
@@ -77,8 +76,6 @@ export class MdnsService {
     }
 
     async close() {
-        this.#env.delete(MdnsService, this);
-
         await this.#construction.close(async () => {
             const broadcasterDisposal = MaybePromise.then(this.#server?.close(), undefined, e =>
                 logger.error("Error disposing of MDNS server", e),

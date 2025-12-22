@@ -35,7 +35,7 @@ import { Identity } from "#general";
  * RoomAirConditionerDevice requires Thermostat cluster but Thermostat is not added by default because you must select
  * the features your device supports. You can add manually using RoomAirConditionerDevice.with().
  *
- * @see {@link MatterSpecification.v141.Device} § 13.3
+ * @see {@link MatterSpecification.v142.Device} § 13.3
  */
 export interface RoomAirConditionerDevice extends Identity<typeof RoomAirConditionerDeviceDefinition> {}
 
@@ -132,4 +132,5 @@ export const RoomAirConditionerDeviceDefinition = MutableEndpoint({
     )
 });
 
+Object.freeze(RoomAirConditionerDeviceDefinition);
 export const RoomAirConditionerDevice: RoomAirConditionerDevice = RoomAirConditionerDeviceDefinition;

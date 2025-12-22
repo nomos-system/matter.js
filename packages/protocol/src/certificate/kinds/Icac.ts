@@ -6,6 +6,7 @@
 
 import { Bytes, Crypto, Diagnostic, PublicKey } from "#general";
 import { FabricId } from "#types";
+import { Certificate } from "./Certificate.js";
 import { CertificateError } from "./common.js";
 import { ExtensionKeyUsageSchema } from "./definitions/base.js";
 import { OperationalCertificate } from "./definitions/operational.js";
@@ -19,6 +20,12 @@ export class Icac extends OperationalBase<OperationalCertificate.Icac> {
     /** Construct the class from a Tlv version of the certificate */
     static fromTlv(tlv: Bytes): Icac {
         return new Icac(OperationalCertificate.TlvIcac.decode(tlv));
+    }
+
+    /** Construct the class from an ASN.1/DER encoded certificate */
+    static fromAsn1(asn1: Bytes): Icac {
+        const cert = Certificate.parseAsn1Certificate(asn1);
+        return new Icac(cert as OperationalCertificate.Icac);
     }
 
     /** Validates all basic certificate fields on construction. */
@@ -38,7 +45,7 @@ export class Icac extends OperationalBase<OperationalCertificate.Icac> {
      * If the certificate is not signed, it throws a CertificateError.
      */
     asSignedTlv() {
-        return OperationalCertificate.TlvIcac.encode({ ...this.cert, signature: this.signature });
+        return OperationalCertificate.TlvIcac.encode({ ...this.cert, signature: this.signature.bytes });
     }
 
     /**
@@ -53,7 +60,7 @@ export class Icac extends OperationalBase<OperationalCertificate.Icac> {
             issuer: { rcacId },
             extensions,
         } = this.cert;
-        const { fabricId, icacId } = subject;
+        const { fabricId } = subject;
         const { basicConstraints, extendedKeyUsage, subjectKeyIdentifier, authorityKeyIdentifier } = extensions;
 
         const { fabricId: rootFabricId } = root.cert.subject;
@@ -73,6 +80,8 @@ export class Icac extends OperationalBase<OperationalCertificate.Icac> {
             }
         }
 
+        // Ikea Dirigera hub provided an invalid ICAC, so disable these checks for now because also SDK seems to not check it
+        /*
         // The subject DN SHALL encode exactly one matter-icac-id attribute.
         if (icacId === undefined || Array.isArray(icacId)) {
             throw new CertificateError(`Invalid icacId in Ica certificate: ${Diagnostic.json(icacId)}`);
@@ -82,10 +91,16 @@ export class Icac extends OperationalBase<OperationalCertificate.Icac> {
         if ("rcacId" in subject) {
             throw new CertificateError(`Ica certificate must not contain an rcacId.`);
         }
+        */
 
         // The subject DN SHALL NOT encode any matter-noc-cat attribute.
         if ("caseAuthenticatedTags" in subject) {
             throw new CertificateError(`Ica certificate must not contain a caseAuthenticatedTags.`);
+        }
+
+        // The subject DN SHALL NOT encode any matter-vvs-id attribute.
+        if ("vvsId" in subject) {
+            throw new CertificateError(`Ica certificate must not contain a vvsId.`);
         }
 
         // When any matter-fabric-id attributes are present in either the Matter Root CA Certificate or the Matter ICA

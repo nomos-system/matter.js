@@ -7,8 +7,9 @@
 import { Icac } from "#certificate/kinds/Icac.js";
 import { Noc } from "#certificate/kinds/Noc.js";
 import { Fabric } from "#fabric/Fabric.js";
-import { Bytes, Duration, Logger, PublicKey, UnexpectedDataError } from "#general";
-import { MessageExchange, RetransmissionLimitReachedError } from "#protocol/MessageExchange.js";
+import { Bytes, Duration, EcdsaSignature, Logger, PublicKey, UnexpectedDataError } from "#general";
+import { MessageExchange } from "#protocol/MessageExchange.js";
+import { RetransmissionLimitReachedError } from "#protocol/errors.js";
 import { ChannelStatusResponseError } from "#securechannel/SecureChannelMessenger.js";
 import { NodeSession } from "#session/NodeSession.js";
 import { SessionManager } from "#session/SessionManager.js";
@@ -122,7 +123,8 @@ export class CaseClient {
 
             const secureSessionSalt = Bytes.concat(initiatorRandom, resumptionRecord.resumptionId);
             secureSession = await this.#sessions.createSecureSession({
-                sessionId: initiatorSessionId,
+                channel: exchange.channel.channel,
+                id: initiatorSessionId,
                 fabric,
                 peerNodeId,
                 peerSessionId,
@@ -158,7 +160,7 @@ export class CaseClient {
                 operationalIdentityProtectionKey,
                 responderRandom,
                 peerKey,
-                await crypto.computeSha256(sigma1Bytes),
+                await crypto.computeHash(sigma1Bytes),
             );
             const sigma2Key = await crypto.createHkdfKey(sharedSecret, sigma2Salt, KDFSR2_INFO);
             const peerEncryptedData = crypto.decrypt(sigma2Key, peerEncrypted, TBE_DATA2_NONCE);
@@ -179,7 +181,7 @@ export class CaseClient {
                 subject: { fabricId: peerFabricIdNOCert, nodeId: peerNodeIdNOCert },
             } = Noc.fromTlv(peerNoc).cert;
 
-            await crypto.verifyEcdsa(PublicKey(peerPublicKey), peerSignatureData, peerSignature);
+            await crypto.verifyEcdsa(PublicKey(peerPublicKey), peerSignatureData, new EcdsaSignature(peerSignature));
 
             if (peerNodeIdNOCert !== peerNodeId) {
                 throw new UnexpectedDataError(
@@ -207,7 +209,7 @@ export class CaseClient {
             // Generate and send sigma3
             const sigma3Salt = Bytes.concat(
                 operationalIdentityProtectionKey,
-                await crypto.computeSha256([sigma1Bytes, sigma2Bytes]),
+                await crypto.computeHash([sigma1Bytes, sigma2Bytes]),
             );
             const sigma3Key = await crypto.createHkdfKey(sharedSecret, sigma3Salt, KDFSR3_INFO);
             const signatureData = TlvSignedData.encode({
@@ -220,7 +222,7 @@ export class CaseClient {
             const encryptedData = TlvEncryptedDataSigma3.encode({
                 responderNoc: localNoc,
                 responderIcac: localIcac,
-                signature,
+                signature: signature.bytes,
             });
             const encrypted = crypto.encrypt(sigma3Key, encryptedData, TBE_DATA3_NONCE);
             const sigma3Bytes = await messenger.sendSigma3({ encrypted });
@@ -231,10 +233,11 @@ export class CaseClient {
             const sessionCaseAuthenticatedTags = caseAuthenticatedTags ?? resumptionRecord?.caseAuthenticatedTags;
             const secureSessionSalt = Bytes.concat(
                 operationalIdentityProtectionKey,
-                await crypto.computeSha256([sigma1Bytes, sigma2Bytes, sigma3Bytes]),
+                await crypto.computeHash([sigma1Bytes, sigma2Bytes, sigma3Bytes]),
             );
             secureSession = await this.#sessions.createSecureSession({
-                sessionId: initiatorSessionId,
+                channel: exchange.channel.channel,
+                id: initiatorSessionId,
                 fabric,
                 peerNodeId,
                 peerSessionId,

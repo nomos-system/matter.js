@@ -5,11 +5,12 @@
  */
 
 import type { ElementEvent, Events } from "#behavior/Events.js";
-import { camelize, Logger } from "#general";
+import { NetworkClient } from "#behavior/system/network/NetworkClient.js";
+import { camelize, Diagnostic, isObject, Logger } from "#general";
 import { ClusterModel, EventModel, MatterModel } from "#model";
 import type { ClientNode } from "#node/ClientNode.js";
 import type { ReadResult } from "#protocol";
-import type { ClusterId, EndpointNumber, EventId } from "#types";
+import type { ClusterId, EventId } from "#types";
 import type { ClientStructure } from "./ClientStructure.js";
 
 const logger = Logger.get("ClientEventEmitter");
@@ -18,10 +19,9 @@ const logger = Logger.get("ClientEventEmitter");
  * Event handler for Matter events transmitted by a peer.
  *
  * TODO - set priority on context when split for server vs. client
- * TODO - record latest event number for each subscription shape (or just wildcard?)
  */
 export interface ClientEventEmitter {
-    (event: ReadResult.EventValue): void;
+    (event: ReadResult.EventValue): Promise<void>;
 }
 
 /**
@@ -40,42 +40,56 @@ const warnedForUnknown = new Set<ClusterId | `${ClusterId}-${EventId}`>();
 export function ClientEventEmitter(node: ClientNode, structure: ClientStructure) {
     return emitClientEvent;
 
-    function emitClientEvent(occurrence: ReadResult.EventValue) {
+    async function emitClientEvent(occurrence: ReadResult.EventValue) {
         const names = getNames(node.matter, occurrence);
         if (!names) {
             return;
         }
 
-        const event = getEvent(occurrence.path.endpointId, names.cluster, names.event);
+        const event = getEvent(node, occurrence, names.cluster, names.event);
         if (event) {
-            node.act(agent => {
+            await node.act(async agent => {
                 // Current ActionContext is not writable, could skip act() but meh, see TODO above
                 //agent.context.priority = occurrence.priority;
                 event.emit(occurrence.value, agent.context);
+
+                const network = agent.get(NetworkClient);
+                if (occurrence.number > network.state.maxEventNumber) {
+                    await agent.context.transaction.addResources(network);
+                    await agent.context.transaction.begin();
+                    network.state.maxEventNumber = occurrence.number;
+                    await agent.context.transaction.commit();
+                }
             });
         }
     }
 
-    function getEvent(endpointId: EndpointNumber, clusterName: string, eventName: string) {
+    function getEvent(node: ClientNode, occurrence: ReadResult.EventValue, clusterName: string, eventName: string) {
+        const {
+            value,
+            path: { endpointId },
+        } = occurrence;
         const endpoint = structure.endpointFor(endpointId);
         if (endpoint === undefined) {
-            logger.error(`Received event for unsupported endpoint #${endpointId}`);
+            logger.warn(`Received event for unsupported endpoint #${endpointId} on ${node}`);
             return;
         }
 
         const events = (endpoint.events as Events.Generic<ElementEvent>)[clusterName];
         if (events === undefined) {
-            logger.error(`Received event ${eventName} for unsupported cluster ${clusterName} on ${endpoint}`);
+            logger.warn(`Received event ${eventName} for unsupported cluster ${clusterName} on ${endpoint}`);
             return;
         }
 
-        const event = events[eventName];
-        if (event === undefined) {
-            logger.error(`Received unsupported event ${eventName} for cluster ${clusterName} on ${endpoint}`);
-            return;
-        }
+        logger.info(
+            "Received event",
+            Diagnostic.strong(`${clusterName}.${eventName}`),
+            " on ",
+            Diagnostic.strong(endpoint.toString()),
+            Diagnostic.weak(isObject(value) ? Diagnostic.dict(value) : value),
+        );
 
-        return event;
+        return events[eventName];
     }
 }
 

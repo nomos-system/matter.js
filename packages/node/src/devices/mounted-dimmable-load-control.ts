@@ -38,7 +38,7 @@ import { Identity } from "#general";
  *
  * See [ref_MountedDimmablePlugInUnitClientGuidance] for client guidance with these two device types.
  *
- * @see {@link MatterSpecification.v141.Device} § 5.4
+ * @see {@link MatterSpecification.v142.Device} § 5.4
  */
 export interface MountedDimmableLoadControlDevice extends Identity<typeof MountedDimmableLoadControlDeviceDefinition> {}
 
@@ -128,4 +128,5 @@ export const MountedDimmableLoadControlDeviceDefinition = MutableEndpoint({
     )
 });
 
+Object.freeze(MountedDimmableLoadControlDeviceDefinition);
 export const MountedDimmableLoadControlDevice: MountedDimmableLoadControlDevice = MountedDimmableLoadControlDeviceDefinition;

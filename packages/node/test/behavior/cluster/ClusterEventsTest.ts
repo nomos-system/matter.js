@@ -5,14 +5,14 @@
  */
 
 import { Behavior } from "#behavior/Behavior.js";
+import { ClusterOf } from "#behavior/cluster/cluster-behavior-utils.js";
 import { ClusterBehavior } from "#behavior/cluster/ClusterBehavior.js";
-import { ClusterOf } from "#behavior/cluster/ClusterBehaviorUtil.js";
 import { ClusterEvents } from "#behavior/cluster/ClusterEvents.js";
 import { ActionContext } from "#behavior/context/ActionContext.js";
 import { OnlineEvent } from "#behavior/Events.js";
 import { BasicInformationBehavior, BasicInformationServer } from "#behaviors/basic-information";
 import { BasicInformation } from "#clusters/basic-information";
-import { EventEmitter, MaybePromise, Observable } from "#general";
+import { AsyncObservable, EventEmitter, MaybePromise, Observable } from "#general";
 import { ClusterType } from "#types";
 import { MyCluster, MySchema } from "./cluster-behavior-test-util.js";
 
@@ -48,13 +48,15 @@ describe("ClusterEvents", () => {
             ({}) as Ep satisfies EventEmitter & {
                 reqAttr$Changed: Observable<[value: string, oldValue: string, context: ActionContext], MaybePromise>;
 
-                reqEv: Observable<[payload: string, context?: ActionContext]>;
+                reqEv: AsyncObservable<[payload: string, context?: ActionContext]>;
             };
         });
 
         it("allows optional", () => {
             undefined satisfies Ep["optAttr$Changed"];
-            void ({} as OnlineEvent<[boolean, boolean, context: ActionContext]> satisfies Ep["optAttr$Changed"]);
+            void ({} as OnlineEvent<
+                [boolean, boolean, context: ActionContext | undefined]
+            > satisfies Ep["optAttr$Changed"]);
             undefined satisfies Ep["optEv"];
             void ({} as OnlineEvent<[string, context: ActionContext]> satisfies Ep["optEv"]);
         });
@@ -106,13 +108,15 @@ describe("ClusterEvents", () => {
             ({}) as Ei satisfies {
                 reqAttr$Changed: Observable<[value: string, oldValue: string, context: ActionContext], MaybePromise>;
 
-                reqEv: Observable<[payload: string, context: ActionContext]>;
+                reqEv: AsyncObservable<[payload: string, context: ActionContext]>;
             };
         });
 
         it("allows optional", () => {
             undefined satisfies Ei["optAttr$Changed"];
-            void ({} as OnlineEvent<[boolean, boolean, context: ActionContext]> satisfies Ei["optAttr$Changed"]);
+            void ({} as OnlineEvent<
+                [boolean, boolean, context: ActionContext | undefined]
+            > satisfies Ei["optAttr$Changed"]);
             undefined satisfies Ei["optEv"];
             void ({} as OnlineEvent<[string, context: ActionContext]> satisfies Ei["optEv"]);
         });

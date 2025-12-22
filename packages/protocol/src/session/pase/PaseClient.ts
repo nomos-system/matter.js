@@ -4,11 +4,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Bytes, Crypto, ec, Logger, PbkdfParameters, Spake2p, UnexpectedDataError } from "#general";
+import { Mark } from "#common/Mark.js";
+import { Bytes, Channel, Crypto, ec, Logger, PbkdfParameters, Spake2p, UnexpectedDataError } from "#general";
 import { SessionManager } from "#session/SessionManager.js";
+import { SessionParameters } from "#session/SessionParameters.js";
 import { CommissioningOptions, NodeId, SecureChannelStatusCode } from "#types";
 import { MessageExchange } from "../../protocol/MessageExchange.js";
-import { SessionParameters } from "../Session.js";
 import { DEFAULT_PASSCODE_ID, PaseClientMessenger, SPAKE_CONTEXT } from "./PaseMessenger.js";
 
 const { numberToBytesBE } = ec;
@@ -40,7 +41,12 @@ export class PaseClient {
         return crypto.randomUint16 % 4096;
     }
 
-    async pair(initiatorSessionParams: SessionParameters, exchange: MessageExchange, setupPin: number) {
+    async pair(
+        initiatorSessionParams: SessionParameters,
+        exchange: MessageExchange,
+        channel: Channel<Bytes>,
+        setupPin: number,
+    ) {
         const messenger = new PaseClientMessenger(exchange);
         const { crypto } = this.#sessions;
         const initiatorRandom = crypto.randomBytes(32);
@@ -75,7 +81,7 @@ export class PaseClient {
         const { w0, w1 } = await Spake2p.computeW0W1(crypto, pbkdfParameters, setupPin);
         const spake2p = Spake2p.create(
             crypto,
-            await crypto.computeSha256([SPAKE_CONTEXT, requestPayload, responsePayload]),
+            await crypto.computeHash([SPAKE_CONTEXT, requestPayload, responsePayload]),
             w0,
         );
         const X = spake2p.computeX();
@@ -95,7 +101,8 @@ export class PaseClient {
         // All good! Creating the secure session
         await messenger.waitForSuccess("PasePake3-Success");
         const secureSession = await this.#sessions.createSecureSession({
-            sessionId: initiatorSessionId,
+            channel,
+            id: initiatorSessionId,
             fabric: undefined,
             peerNodeId: NodeId.UNSPECIFIED_NODE_ID,
             peerSessionId: responderSessionId,
@@ -106,7 +113,7 @@ export class PaseClient {
             peerSessionParameters,
         });
         await messenger.close();
-        logger.info("Paired successfully »", messenger.channelName);
+        logger.info("Paired successfully", Mark.OUTBOUND, messenger.channelName);
 
         return secureSession;
     }

@@ -8,6 +8,7 @@ import { Agent } from "#endpoint/Agent.js";
 import { Endpoint } from "#endpoint/Endpoint.js";
 import {
     addValueWithOverflow,
+    AsyncObservable,
     cropValueRange,
     Diagnostic,
     Duration,
@@ -23,7 +24,6 @@ import {
 } from "#general";
 import { Behavior } from "./Behavior.js";
 import { ClusterEvents } from "./cluster/ClusterEvents.js";
-import { LocalActorContext } from "./context/server/LocalActorContext.js";
 import { Events } from "./Events.js";
 import { BehaviorBacking } from "./internal/BehaviorBacking.js";
 
@@ -220,14 +220,14 @@ export class Transitions<B extends Behavior> {
             return;
         }
 
-        // Only report if it changes, with a delta larger than 10, caused by the invoke of a command
+        // Only report if it changes, with a delta larger than 10, caused by an invoke of a command
         if (fromCommand && Math.abs(this.#prevPublishedRemainingTime - newRemainingTime) <= 10) {
             return;
         }
 
         const previousRemainingTime = this.#prevPublishedRemainingTime;
         this.#prevPublishedRemainingTime = newRemainingTime;
-        this.#config.remainingTimeEvent?.emit(newRemainingTime, previousRemainingTime, LocalActorContext.ReadOnly);
+        this.#config.remainingTimeEvent?.emit(newRemainingTime, previousRemainingTime, undefined);
     }
 
     /**
@@ -707,7 +707,7 @@ export namespace Transitions {
          * This should also support Valve Configuration & Control cluster's "RemainingDuration" attribute with
          * additional options to support small variations in logic.
          */
-        readonly remainingTimeEvent?: ClusterEvents.ChangedObservable;
+        readonly remainingTimeEvent?: AsyncObservable<[oldValue: number, newValue: number, context: undefined]>;
 
         /**
          * The state properties that support transition.

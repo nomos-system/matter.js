@@ -4,14 +4,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 import type { Fabric } from "#fabric/Fabric.js";
-import { BasicMap, Bytes, InternalError, MatterFlowError, StorageContext } from "#general";
+import { BasicMap, Bytes, hex, InternalError, MatterFlowError, StorageContext } from "#general";
 import { GroupKeySet, KeySets, OperationalKeySet } from "#groups/KeySets.js";
 import { MessagingState } from "#groups/MessagingState.js";
-import { GroupId } from "#types";
+import { GroupId, MATTER_EPOCH_OFFSET_US } from "#types";
 import { Groups } from "./Groups.js";
 
 export const GROUP_SECURITY_INFO = Bytes.fromString("GroupKey v1.0");
 
+export const IPK_DEFAULT_EPOCH_START_TIME = MATTER_EPOCH_OFFSET_US;
 /**
  * Class that contains an operational view on the Group Keys for a fabric
  */
@@ -34,7 +35,7 @@ export class FabricGroups {
             groupKeySetId: 0,
             epochKey0: fabric.identityProtectionKey,
             operationalEpochKey0: fabric.operationalIdentityProtectionKey,
-            epochStartTime0: 0, // 0 is always ok, but only for the IPK key
+            epochStartTime0: IPK_DEFAULT_EPOCH_START_TIME, // with the Year 2000-offset that's basically 0 and always ok, but only for the IPK key
             groupSessionId0: null,
             epochKey1: null,
             operationalEpochKey1: null,
@@ -121,19 +122,15 @@ export class FabricGroups {
         await this.#cleanUpCounters(groupKeySetId);
 
         // Lets pre-calculate the operational keys
-        const operationalId = this.#fabric.operationalId;
-        const operationalEpochKey0 = await this.#fabric.crypto.createHkdfKey(
-            epochKey0,
-            operationalId,
-            GROUP_SECURITY_INFO,
-        );
+        const globalId = Bytes.fromHex(hex.fixed(this.#fabric.globalId, 16));
+        const operationalEpochKey0 = await this.#fabric.crypto.createHkdfKey(epochKey0, globalId, GROUP_SECURITY_INFO);
         const operationalEpochKey1 =
             epochKey1 !== null
-                ? await this.#fabric.crypto.createHkdfKey(epochKey1, operationalId, GROUP_SECURITY_INFO)
+                ? await this.#fabric.crypto.createHkdfKey(epochKey1, globalId, GROUP_SECURITY_INFO)
                 : null;
         const operationalEpochKey2 =
             epochKey2 !== null
-                ? await this.#fabric.crypto.createHkdfKey(epochKey2, operationalId, GROUP_SECURITY_INFO)
+                ? await this.#fabric.crypto.createHkdfKey(epochKey2, globalId, GROUP_SECURITY_INFO)
                 : null;
         this.#keySets.add({
             ...groupKeySet,

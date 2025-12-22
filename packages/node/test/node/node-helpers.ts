@@ -10,7 +10,7 @@ import { Crypto, InternalError } from "#general";
 import { CommissioningServer, InteractionServer } from "#index.js";
 import { Specification } from "#model";
 import {
-    ChannelManager,
+    Certificate,
     Fabric,
     FabricManager,
     InteractionServerMessenger,
@@ -23,6 +23,8 @@ import {
 import {
     AttributeReport,
     EventReport,
+    FabricId,
+    FabricIndex,
     NodeId,
     TlvDataReport,
     TlvInvokeRequest,
@@ -34,8 +36,6 @@ import {
     TypeFromSchema,
     VendorId,
 } from "#types";
-import { X509Base } from "@matter/protocol";
-import { FabricId, FabricIndex } from "@matter/types";
 import { MockServerNode } from "./mock-server-node.js";
 
 export const FAILSAFE_LENGTH_S = 60;
@@ -172,7 +172,7 @@ export function CommissioningHelper() {
             });
 
             const { certSigningRequest } = TlvCertSigningRequest.decode(nocsrElements);
-            const peerPublicKey = await X509Base.getPublicKeyFromCsr(crypto, certSigningRequest);
+            const peerPublicKey = await Certificate.getPublicKeyFromCsr(crypto, certSigningRequest);
             const noc = await authority.ca.generateNoc(
                 peerPublicKey,
                 controllerFabric.fabricId,
@@ -241,11 +241,11 @@ export namespace interaction {
     } as InteractionServerMessenger;
 
     export const BarelyMockedMessage = {
-        packetHeader: { sessionType: SessionType.Unicast },
+        packetHeader: { sessionType: SessionType.Unicast, messageId: 123 },
     } as Message;
 
     export const BarelyMockedGroupMessage = {
-        packetHeader: { sessionType: SessionType.Group },
+        packetHeader: { sessionType: SessionType.Group, messageId: 123 },
     } as Message;
 
     export async function connect(node: MockServerNode, fabric: Fabric) {
@@ -332,9 +332,6 @@ export namespace interaction {
         request: TypeFromSchema<typeof TlvSubscribeRequest>,
     ) {
         const { exchange, interactionServer } = await connect(node, fabric);
-
-        const channels = node.env.get(ChannelManager);
-        channels.getChannel = () => exchange.channel;
 
         await interactionServer.handleSubscribeRequest(exchange, request, BarelyMockedMessenger, BarelyMockedMessage);
     }

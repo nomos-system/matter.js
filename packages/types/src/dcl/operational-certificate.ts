@@ -36,7 +36,7 @@ export interface OperationalCertificateDclSchema {
      * to the private key used to sign a Matter certificate. This is OPTIONAL for Operational Root CA
      * Certificates (RCAC).
      */
-    authorityKeyID?: string;
+    authorityKeyId?: string;
 
     /**
      * This field SHALL contain the PAA certificate’s Subject field, as defined Operational Root CA Certificates
@@ -51,13 +51,20 @@ export interface OperationalCertificateDclSchema {
      * for Operational Root CA Certificates (RCAC). This is encoded as defined in Section 6.1, “Certificate
      * Common Conventions”.
      */
-    rootSubjectKeyID?: string;
+    rootSubjectKeyId?: string;
 
     /**
      * This field SHALL signify whether the associated certificates is a Operational Root CA Certificate
      * (RCAC).
      */
     isRoot: boolean;
+
+    /**
+     * This field SHALL indicate whether the associated certificate is a Vendor Verification Signer Certificate
+     * (VVSC) used to sign vid_verification_statement messages as defined in Section 6.4.10, “Fabric
+     * Table Vendor ID Verification Procedure”.
+     */
+    isVidVerificationSigner: boolean;
 
     /**
      * This field uniquely identifies the DCL key that was used to register the certificate in DCL, pursuant
@@ -75,7 +82,7 @@ export interface OperationalCertificateDclSchema {
      * This field SHALL uniquely identify the PAA certificate’s Subject Key Identifier mandatory extension.
      * This is encoded as defined in Section 6.1.2, “Key Identifier Extension Constraints”.
      */
-    subjectKeyID: string;
+    subjectKeyId: string;
 
     /**
      * This field SHALL contain the Vendor ID of the vendor that issued the certificate.
@@ -84,7 +91,8 @@ export interface OperationalCertificateDclSchema {
 
     /**
      * The SchemaVersion field value history for this schema is provided below:
-     * * ???
+     * * 0 Initial Release
+     * * 1 Introduction of IsVidVerificationSigner
      */
     schemaVersion: number;
 }

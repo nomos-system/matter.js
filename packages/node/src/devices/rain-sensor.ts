@@ -18,7 +18,7 @@ import { Identity } from "#general";
 /**
  * This defines conformance to the Rain Sensor device type.
  *
- * @see {@link MatterSpecification.v141.Device} § 7.13
+ * @see {@link MatterSpecification.v142.Device} § 7.13
  */
 export interface RainSensorDevice extends Identity<typeof RainSensorDeviceDefinition> {}
 
@@ -64,4 +64,5 @@ export const RainSensorDeviceDefinition = MutableEndpoint({
     )
 });
 
+Object.freeze(RainSensorDeviceDefinition);
 export const RainSensorDevice: RainSensorDevice = RainSensorDeviceDefinition;

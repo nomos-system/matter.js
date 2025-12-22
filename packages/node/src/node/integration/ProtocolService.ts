@@ -39,6 +39,7 @@ import {
     EventTypeProtocol,
     FabricManager,
     hasRemoteActor,
+    Mark,
     OccurrenceManager,
     toWildcardOrHexPath,
     Val,
@@ -102,7 +103,7 @@ export class ProtocolService {
      * This optimized path allows us to broadcast state changes without registering observers for every change.
      */
     handleChange(backing: BehaviorBacking, props: string[]) {
-        const clusterId = backing.type.schema?.id as ClusterId | undefined;
+        const clusterId = backing.type.schema.id as ClusterId | undefined;
         if (clusterId === undefined) {
             return;
         }
@@ -148,7 +149,7 @@ class NodeState {
                 if (!fabrics) {
                     fabrics = node.env.get(FabricManager);
                 }
-                return fabrics.findByIndex(index)?.nodeId;
+                return fabrics.maybeFor(index)?.nodeId;
             },
 
             get eventHandler() {
@@ -504,6 +505,7 @@ function clusterTypeProtocolOf(backing: BehaviorBacking): ClusterTypeProtocol | 
                 } = behavior.supervisor.get(member);
 
                 const command = { id: id as CommandId, responseId, requestTlv, responseTlv, limits, name };
+
                 commandList.push(command);
                 commands[id] = command;
                 if (!member.effectiveConformance.isMandatory) {
@@ -561,7 +563,8 @@ function invokeCommand(
     const context = session as ActionContext;
 
     logger.info(
-        "Invoke «",
+        "Invoke",
+        Mark.INBOUND,
         Diagnostic.strong(`${path.toString()}.${command.name}`),
         session.transaction.via,
         requestDiagnostic,

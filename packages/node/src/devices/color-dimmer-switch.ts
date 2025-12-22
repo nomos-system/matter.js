@@ -23,7 +23,7 @@ import { Identity } from "#general";
  * A Color Dimmer Switch is a controller device that, when bound to a lighting device such as an Extended Color Light,
  * is capable of being used to adjust the color of the light being emitted.
  *
- * @see {@link MatterSpecification.v141.Device} § 6.3
+ * @see {@link MatterSpecification.v142.Device} § 6.3
  */
 export interface ColorDimmerSwitchDevice extends Identity<typeof ColorDimmerSwitchDeviceDefinition> {}
 
@@ -105,4 +105,5 @@ export const ColorDimmerSwitchDeviceDefinition = MutableEndpoint({
     behaviors: SupportedBehaviors(ColorDimmerSwitchRequirements.server.mandatory.Identify)
 });
 
+Object.freeze(ColorDimmerSwitchDeviceDefinition);
 export const ColorDimmerSwitchDevice: ColorDimmerSwitchDevice = ColorDimmerSwitchDeviceDefinition;

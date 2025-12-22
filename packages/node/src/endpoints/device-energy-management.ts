@@ -25,7 +25,7 @@ import { Identity } from "#general";
  * default because you must select the features your device supports. You can add manually using
  * DeviceEnergyManagementEndpoint.with().
  *
- * @see {@link MatterSpecification.v141.Device} § 2.7
+ * @see {@link MatterSpecification.v142.Device} § 2.7
  */
 export interface DeviceEnergyManagementEndpoint extends Identity<typeof DeviceEnergyManagementEndpointDefinition> {}
 
@@ -62,4 +62,5 @@ export const DeviceEnergyManagementEndpointDefinition = MutableEndpoint({
     behaviors: SupportedBehaviors()
 });
 
+Object.freeze(DeviceEnergyManagementEndpointDefinition);
 export const DeviceEnergyManagementEndpoint: DeviceEnergyManagementEndpoint = DeviceEnergyManagementEndpointDefinition;

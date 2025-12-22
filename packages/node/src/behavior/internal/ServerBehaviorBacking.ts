@@ -8,14 +8,16 @@ import { ClusterBehavior } from "#behavior/cluster/ClusterBehavior.js";
 import { GlobalAttributeState } from "#behavior/cluster/ClusterState.js";
 import { ValidatedElements } from "#behavior/cluster/ValidatedElements.js";
 import type { SupportedElements } from "#endpoint/properties/Behaviors.js";
-import { camelize } from "#general";
-import { FieldValue } from "#model";
+import { camelize, ImplementationError } from "#general";
+import { ClusterModel, FeatureSet, FieldValue, Schema } from "#model";
 import { Val } from "#protocol";
 import { ClusterType, TlvNoResponse } from "#types";
 import { Behavior } from "../Behavior.js";
 import { BehaviorBacking } from "./BehaviorBacking.js";
 
 const NoElements = new Set<string>();
+
+export class FeatureMismatchError extends ImplementationError {}
 
 /**
  * This class backs the server implementation of a behavior.
@@ -35,6 +37,7 @@ export class ServerBehaviorBacking extends BehaviorBacking {
                 this.#configureElements(behavior);
             } else {
                 this.#elements = {
+                    features: NoElements,
                     attributes: NoElements,
                     commands: NoElements,
                     events: NoElements,
@@ -100,8 +103,26 @@ export class ServerBehaviorBacking extends BehaviorBacking {
             ),
         ];
 
+        // Validate the feature map
+        const schema = Schema(behavior.type) as ClusterModel;
+        if (schema.tag === "cluster") {
+            const { supportedFeatures, featureMap } = Schema(behavior.type) as ClusterModel;
+            const { featuresSupported, featuresAvailable } = FeatureSet.normalize(
+                featureMap,
+                new FeatureSet(globals.featureMap),
+            );
+            for (const name of featuresAvailable) {
+                if (supportedFeatures.has(name) !== featuresSupported.has(name)) {
+                    throw new FeatureMismatchError(
+                        `The featureMap for ${behavior} does not match the implementation; please use ${behavior.type.name}.with("FeatureName") to configure features`,
+                    );
+                }
+            }
+        }
+
         // Load public API
         this.#elements = {
+            features: behavior.type.schema.supportedFeatures ?? new Set(),
             attributes: validation.attributes,
             commands: validation.commands,
             events: validation.events,

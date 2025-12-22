@@ -4,8 +4,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { Mark } from "#common/Mark.js";
 import {
     Bytes,
+    Channel,
     Crypto,
     Diagnostic,
     ec,
@@ -68,56 +70,57 @@ export class PaseServer implements ProtocolHandler {
 
     async onNewExchange(exchange: MessageExchange) {
         if (this.#closed) {
-            logger.warn("Pase server: Received new exchange but server is closed, ignoring exchange.");
+            logger.warn("Received new exchange but server is closed, ignoring exchange");
             return;
         }
-        const messenger = new PaseServerMessenger(exchange);
-        try {
-            // When a Commissioner is either in the process of establishing a PASE session with the Commissionee or has
-            // successfully established a session, the Commissionee SHALL NOT accept any more requests for new PASE
-            // sessions until session establishment fails or the successfully established PASE session is terminated on
-            // the commissioning channel.
-            const paseSession = this.sessions.getPaseSession();
-            if (paseSession !== undefined && !paseSession.isClosing) {
-                logger.info("Pase server: Pairing already in progress (PASE session exists), ignoring new exchange.");
-            } else if (this.#pairingTimer?.isRunning) {
-                logger.info(
-                    "Pase server: Pairing already in progress (PASE establishment Timer running), ignoring new exchange.",
-                );
-            } else if (this.#pairingMessenger !== undefined) {
-                logger.info("Already handling a pairing request, ignoring new exchange.");
-            } else {
+
+        // When a Commissioner is either in the process of establishing a PASE session with the Commissionee or has
+        // successfully established a session, the Commissionee SHALL NOT accept any more requests for new PASE
+        // sessions until session establishment fails or the successfully established PASE session is terminated on
+        // the commissioning channel.
+        const paseSession = this.sessions.getPaseSession();
+        if (paseSession !== undefined && !paseSession.isClosing) {
+            logger.info("Pairing already in progress (PASE session exists), ignoring new exchange");
+        } else if (this.#pairingTimer?.isRunning) {
+            logger.info("Pairing already in progress (PASE establishment timer running), ignoring new exchange");
+        } else if (this.#pairingMessenger !== undefined) {
+            logger.info("Already handling a pairing request, ignoring new exchange.");
+        } else {
+            const messenger = new PaseServerMessenger(exchange);
+            // All checks done, we handle the pairing request
+            try {
                 this.#pairingMessenger = messenger;
                 // Ok new pairing try, handle it
-                await this.handlePairingRequest(this.sessions.crypto);
-            }
-        } catch (error) {
-            this.#pairingErrors++;
-            logger.error(
-                `An error occurred during the PASE commissioning (${this.#pairingErrors}/${PASE_COMMISSIONING_MAX_ERRORS}):`,
-                error,
-            );
-
-            // If we received a ChannelStatusResponseError we do not need to send one back, so just cancel pairing
-            const sendError = !(error instanceof ChannelStatusResponseError);
-            await this.cancelPairing(messenger, sendError);
-
-            if (this.#pairingErrors >= PASE_COMMISSIONING_MAX_ERRORS) {
-                throw new MaximumPasePairingErrorsReachedError(
-                    `Pase server: Too many errors during PASE commissioning, aborting commissioning window`,
+                await this.handlePairingRequest(this.sessions.crypto, messenger.channel.channel);
+            } catch (error) {
+                this.#pairingErrors++;
+                logger.error(
+                    `An error occurred during the PASE commissioning (${this.#pairingErrors}/${PASE_COMMISSIONING_MAX_ERRORS}):`,
+                    error,
                 );
+
+                // If we received a ChannelStatusResponseError we do not need to send one back, so just cancel pairing
+                const sendError = !(error instanceof ChannelStatusResponseError);
+                await this.cancelPairing(messenger, sendError);
+
+                if (this.#pairingErrors >= PASE_COMMISSIONING_MAX_ERRORS) {
+                    throw new MaximumPasePairingErrorsReachedError(
+                        `Too many errors during PASE commissioning, aborting commissioning window`,
+                    );
+                }
+            } finally {
+                this.#pairingMessenger = undefined;
+                // Detach and Destroy the unsecure session used to establish the Pase session
+                exchange.session.detachChannel();
+                await exchange.session.initiateClose();
             }
-        } finally {
-            this.#pairingMessenger = undefined;
-            // Destroy the unsecure session used to establish the Pase session
-            await exchange.session.destroy();
         }
     }
 
-    private async handlePairingRequest(crypto: Crypto) {
+    private async handlePairingRequest(crypto: Crypto, channel: Channel<Bytes>) {
         const messenger = this.#pairingMessenger!;
 
-        logger.info("Received pairing request «", Diagnostic.via(messenger.channelName));
+        logger.info("Received pairing request", Mark.INBOUND, Diagnostic.via(messenger.channelName));
 
         this.#pairingTimer = Time.getTimer("PASE pairing timeout", PASE_PAIRING_TIMEOUT_MS, () =>
             this.cancelPairing(messenger),
@@ -154,7 +157,7 @@ export class PaseServer implements ProtocolHandler {
         // Process pake1 and send pake2
         const spake2p = Spake2p.create(
             crypto,
-            await crypto.computeSha256([SPAKE_CONTEXT, requestPayload, responsePayload]),
+            await crypto.computeHash([SPAKE_CONTEXT, requestPayload, responsePayload]),
             this.w0,
         );
         const { x: X } = await messenger.readPasePake1();
@@ -169,8 +172,9 @@ export class PaseServer implements ProtocolHandler {
         }
 
         // All good! Creating the secure PASE session
-        await this.sessions.createSecureSession({
-            sessionId: responderSessionId,
+        const session = await this.sessions.createSecureSession({
+            channel,
+            id: responderSessionId,
             fabric: undefined,
             peerNodeId: NodeId.UNSPECIFIED_NODE_ID,
             peerSessionId,
@@ -180,7 +184,7 @@ export class PaseServer implements ProtocolHandler {
             isResumption: false,
             peerSessionParameters: initiatorSessionParams,
         });
-        logger.info(Diagnostic.strong(`Session ${responderSessionId} created`), "with", messenger.channelName);
+        logger.info(session.via, "New session with", Diagnostic.strong(messenger.channelName));
 
         await messenger.sendSuccess();
         await messenger.close();

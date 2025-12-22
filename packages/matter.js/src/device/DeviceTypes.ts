@@ -5,9 +5,9 @@
  */
 
 import * as MatterClusters from "#clusters";
+import { capitalize } from "#general";
+import { MatterModel } from "#model";
 import { ClusterId, DeviceTypeId } from "#types";
-import { capitalize } from "@matter/general";
-import { MatterModel } from "@matter/model";
 
 /**
  * General device classification categories.
@@ -997,7 +997,7 @@ export function getDeviceTypeDefinitionFromModelByCode(code: number): DeviceType
         name: `MA-${device.name.toLowerCase()}`,
         revision: 0,
         code: device.id,
-        deviceClass: capitalize(device.classification) as DeviceClasses,
+        deviceClass: capitalize(device.classification as string) as DeviceClasses,
         superSet: device.type
             ?.replace(/([A-Z])/g, "_$1")
             .substring(1)

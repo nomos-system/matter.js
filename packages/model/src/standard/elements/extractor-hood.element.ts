@@ -10,7 +10,7 @@ import { MatterDefinition } from "../MatterDefinition.js";
 import { DeviceTypeElement as DeviceType, RequirementElement as Requirement } from "../../elements/index.js";
 
 export const ExtractorHoodDt = DeviceType(
-    { name: "ExtractorHood", id: 0x7a },
+    { name: "ExtractorHood", id: 0x7a, classification: "simple" },
     Requirement(
         { name: "Descriptor", id: 0x1d, element: "serverCluster" },
         Requirement({ name: "DeviceTypeList", default: [ { deviceType: 122, revision: 1 } ], element: "attribute" })
@@ -24,7 +24,9 @@ export const ExtractorHoodDt = DeviceType(
         Requirement({ name: "ROCKING", conformance: "X", element: "feature" }),
         Requirement({ name: "WIND", conformance: "X", element: "feature" }),
         Requirement({ name: "AIRFLOWDIRECTION", conformance: "X", element: "feature" })
-    )
+    ),
+
+    Requirement({ name: "OnOffLight", id: 0x100, conformance: "O", element: "deviceType" })
 );
 
 MatterDefinition.children.push(ExtractorHoodDt);

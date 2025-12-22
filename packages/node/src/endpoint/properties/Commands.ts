@@ -58,14 +58,14 @@ function Implementation(endpoint: Endpoint, type: Behavior.Type, name: string): 
             }
 
             // Invoke with a dedicated context
-            const context2 = LocalActorContext.open(`invoke-${name}`);
+            const context2 = LocalActorContext.open(`invoke-${name}`, { lifetime: endpoint.construction });
             try {
                 return Promise.resolve(context2.resolve(invokerFor(context2)(input, context)));
             } catch (e) {
                 return Promise.resolve(context2.reject(e));
             }
 
-            // Create function to perform invocation
+            // Create a function to perform invocation
             function invokerFor(context: ActionContext) {
                 const agent = endpoint.agentFor(context);
                 const behavior = agent.get(type);

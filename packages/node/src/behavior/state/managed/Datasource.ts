@@ -11,6 +11,7 @@ import {
     ImplementationError,
     InternalError,
     isDeepEqual,
+    Lifetime,
     Logger,
     MaybePromise,
     Observable,
@@ -25,7 +26,7 @@ const logger = Logger.get("Datasource");
 
 const FEATURES_KEY = "__features__";
 
-const viewTx = Transaction.open("offline-view", "ro");
+const viewTx = Transaction.open("offline-view", Lifetime.process, "ro");
 
 /**
  * Datasource manages the canonical root of a state tree.  The "state" property of a Behavior is a reference to a
@@ -230,6 +231,11 @@ export namespace Datasource {
         externalChangeListener?: (changes: Val.Struct) => Promise<void>;
 
         /**
+         * Callback installed by the store that releases the values from the datasource when invoked.
+         */
+        releaseValues?: () => Val.Struct;
+
+        /**
          * The current version of the data.
          */
         version: number;
@@ -285,7 +291,7 @@ interface CommitChanges {
  * Initialize the internal version of the datasource.
  */
 function configure(options: Datasource.Options): Internals {
-    const values = new options.type() as Val.Struct;
+    let values = new options.type() as Val.Struct;
 
     let storedValues = options.store?.initialValues;
 
@@ -328,10 +334,25 @@ function configure(options: Datasource.Options): Internals {
         primaryKey: options.primaryKey === "id" ? "id" : "name",
         events,
         version: options.entropy.randomUint32,
-        values,
         featuresKey,
         manageVersion: true,
         persistentFields,
+
+        get values() {
+            return values;
+        },
+
+        set values(newValues: Val.Struct) {
+            const oldValues = this.values;
+
+            values = newValues;
+
+            if (this.sessions) {
+                for (const context of this.sessions.values()) {
+                    context.onChange(oldValues);
+                }
+            }
+        },
 
         interactionObserver(session?: ValueSupervisor.Session) {
             function handleObserverError(error: any) {
@@ -425,12 +446,6 @@ function configureExternalChanges(internals: Internals) {
             ...changes,
         };
 
-        if (internals.sessions) {
-            for (const context of internals.sessions.values()) {
-                context.onChange(oldValues!);
-            }
-        }
-
         const changedProps = Object.keys(changes);
 
         const onChangePromise = internals.onChange?.(Array.from(changedProps));
@@ -462,6 +477,14 @@ function configureExternalChanges(internals: Internals) {
                 }
             }
         }
+    };
+
+    store.releaseValues = () => {
+        const { values } = internals;
+
+        internals.values = {};
+
+        return values;
     };
 }
 
@@ -825,13 +848,7 @@ function createReference(resource: Transaction.Resource, internals: Internals, s
             return;
         }
 
-        const oldValues = internals.values;
         internals.values = values;
-        if (internals.sessions) {
-            for (const context of internals.sessions.values()) {
-                context.onChange(oldValues);
-            }
-        }
     }
 
     /**

@@ -23,12 +23,18 @@ The main work (all changes without a GitHub username in brackets in the below li
     - Breaking: There are other small time changes such as converting `nowMs()` (a function) to `nowMs` (a property).
     - Breaking: SyncStorage interface got removed
     - Breaking: MaybeAsyncStorage got renamed to Storage because it is the only interface from now on
+    - Breaking: Some central services, especially MdnsService, are now tracked automatically by usages and will close correctly when no longer needed. Closing MdnsService manually is not needed anymore.
+    - Breaking: The types for observables with synchronous emitters no longer accept async observers.  Most observables are async but if you encounter a type error you need to track your promise outside of the observable
     - Feature: Adds Blob support to the Storage interface
     - Feature: Add BDX (Bulk Data eXchange) protocol support according to Matter specification
-    - Enhancement: Allows SHA 256 generation using async iterator or readable stream reader as input
+    - Feature: Added support for multiple hash algorithms (SHA-256, SHA-384, SHA-512, SHA-512/224, SHA-512/256, SHA3-256) via HashAlgorithm enum with IANA identifiers
+    - Enhancement: Enhanced Crypto.computeHash() to support streaming data via ReadableStreamDefaultReader and AsyncIterator in addition to Bytes and Bytes[] for memory-efficient hash computation
     - Enhancement: Added platform abstractions for of HTTP, WebSockets and MQTT
     - Enhancement: Added polyfills and additional types for decorators
     - Enhancement: Split out access to random values from Crypto interface to an Entropy interface
+    - Enhancement: Added support for shared Environment services by tracking usages and closing when the last user is gone
+    - Enhancement: Specializes `camelize()` to stop processing when $ is reached to better handle special names for custom clusters
+    - Enhancement: Convert PromiseQueue to Semaphore with obtain/release approach
     - Fix: Ensures that StandaloneAck messages are always considering the corresponding Secure channel protocol ID
 
 - @matter/model
@@ -37,48 +43,87 @@ The main work (all changes without a GitHub username in brackets in the below li
     - Feature: Constraints now support Matter 1.4.2 functions `minOf` and `maxOf`
     - Enhancement: Model API is improved to simplify element filtering based on conformance
 
-- @matter/types
-    - Enhancement: The duplicate event priority definition `EventPriority` is deprecated; use the generated `Priority` enum instead
-
-- @matter/protocol
-    - Breaking: The platform-specific BLE abstraction has changed so that higher-level logic may be shared across platforms
-    - Breaking: Low-level advertising APIs have changed significantly; in particular, `MdnsBroadcaster`, `MdnsInstanceBroadcaster` and `MdnsScanner` are replaced by `MdnsServer`, `MdnsAdvertisement` and `MdnsClient`
-    - Breaking: The `Ble.get()` singleton is removed; components now instead retrieve the `Ble` service from the environment
-    - Feature: Adds support for advertising of TCP and ICD services (but matter.js does not yet implement those features otherwise)
-    - Feature: Adds support for extended advertisement
-    - Feature: Added support for Case Authenticated Tags (CATs) in operational CASE sessions for enhanced access control
-    - Enhancement: MDNS broadcasts more aggressively until a connection is established
-    - Enhancement: MDNS and BLE advertising schedules are now configurable and conform to Matter and DNS-SD specifications
-    - Enhancement: MDNS client and server efficiency is improved with a shared socket and message parser
-    - Enhancement: MDNS Truncated Queries are now handled correctly
-    - Enhancement: matter.js no longer uses SO_REUSEADDR on the Matter port so you can no longer accidentally start two nodes at the same address simultaneously
-    - Fix: Controller networking was previously throwing the incorrect error after a communication timeout
-    - Fix: Ensures to only include the MaxTcpMessageSize in Session parameters when TCP is enabled
-    - Fix: Fixes the used ACL level for wildcard writes
-
 - @matter/node
     - Breaking: `Endpoint` and `Node` initialization values now require the correct type for some time values and IDs. So for example, `VendorId(1234)` instead of just `1234`
     - Breaking: `SubscriptionBehavior` is renamed to `SubscriptionsServer` with corresponding ID change to "subscriptions". This means in part that matter.js will ignore saved subscriptions but devices will recreate them automatically
     - Breaking: The `agentFor` method of `ActionContext` has moved to `Endpoint`. You likely do not use this directly but if you do you must change `context.agentFor(endpoint)` to `endpoint.agentFor(context)`
-    - Breaking: We have refactored the `ActionContext` class to better delineate fields that apply to operations triggered locally vs those triggered by authenticated peers. `ActionContext` may be a `RemoteActorContext` or `LocalActorContext`. You can determine the actor type and access relevant fields using new type guards `isRemoteContext` or `isLocalContext` and new type assertion `assertRemoteContext`. These replace the former `offline` field of `ActionContext`
+    - Breaking: We have refactored the `ActionContext` class to better delineate fields that apply to operations triggered locally vs those triggered by authenticated peers. `ActionContext` may be a `RemoteActorContext` or `LocalActorContext`. You can determine the actor type and access relevant fields using new type guards `hasRemoteActor` or `hasLocalActor` and new type assertion `assertRemoteActor`. These replace the former `offline` field of `ActionContext`
+    - Breaking: The `FabricAction` enum emitted by CommissioningServer is replaced with a simple string type
     - Feature: matter.js now natively supports remote access to Matter nodes via non-Matter protocols. You can add `HttpServer`, `WebSocketServer` and/or `MqttServer` to your `ServerNode` to enable HTTP, WebSocket and MQTT access respectively
     - Feature: You can now use Ecma TC39 stage 3 decorators to customize the schema associated with a `Behavior` implementation
     - Feature: New `StateStream` component offers a high-level API for monitoring changes across multiple nodes
-    - Feature: Add default implementation for the `Thermostat` cluster according to Matter 1.4.2 specification. All features except MSCH (which is considered provisional) are implemented. See the `ThermostatServer` class for details.
+    - Feature: Add default implementation for the `Thermostat` cluster according to Matter 1.4.2 specification. All features except MSCH and SB (which is considered provisional) are implemented. See the `ThermostatServer` class for details.
+    - Feature: Added feature complete default implementation for the `Scenes Management` cluster according to Matter 1.4.2 specification.
+    - Feature: Added the VendorIdVerification algorithm on device side according to Matter 1.4.2 specification. Controller side is only partially implemented yet.
+    - Feature: Added default implementations for OtaSoftwareUpdateRequestor/Provider clusters according to Matter specification.
+    - Feature: Added OTA management support component (SoftwareUpdateManager)
     - Enhancement: Adds "maybeReactTo" which only registers the listener when the event exists.
     - Enhancement: Enhances Endpoint#eventsOf and Endpoint#setStateOf with overrides so you can use the ID to obtain variants with generic typing
     - Enhancement: We now enforce bounds for integer types even if not specified explicitly by constraint
+    - Enhancement: Also allow to use the `Endpoint#set()` method with attribute ids instead of attributeNames
+    - Fix: Ensures that the InLevel does not interfere with *WithOnOff commands in the Level Control cluster
+    - Fix: Ensures correct behavior for announcements and fabric table updates in case of updating fabrics
 
 - @matter/nodejs
     - Enhancement: Uses "stat" to determine storage file existence instead of reading all content
     - Enhancement: Exposes Node's native HTTP server via new abstractions in `@matter/general`
     - Fix: Corrects network interface selection logic for windows
 
+- @matter/nodejs-ble
+  - Fix: Updating Noble and Bleno to enhance compatibility on macOS and Windows
+
+- @matter/nodejs-shell
+    - Feature: Added `cert` command for DCL certificate management with subcommands: list, details, as-pem, delete, and update
+    - Feature: Added `ota` command for OTA update management with subcommands: info, extract, verify, list, add, delete, and copy for managing OTA image files in storage
+
+- @matter/protocol
+    - Breaking: The platform-specific BLE abstraction has changed so that higher-level logic may be shared across platforms
+    - Breaking: Low-level advertising APIs have changed significantly; in particular, `MdnsBroadcaster`, `MdnsInstanceBroadcaster` and `MdnsScanner` are replaced by `MdnsServer`, `MdnsAdvertisement` and `MdnsClient`
+    - Breaking: The `Ble.get()` singleton is removed; components now instead retrieve the `Ble` service from the environment
+    - Breaking: Moved some controller API classes (Attribute/Event/Command/InteractionClient) into @project-chip/matter.js/cluster package and adjusted to use Node Interactable as backing
+    - Feature: Adds support for advertising of TCP and ICD services (but matter.js does not yet implement those features otherwise)
+    - Feature: Adds support for extended advertisement
+    - Feature: Added support for Case Authenticated Tags (CATs) in operational CASE sessions for enhanced access control
+    - Feature: Added support to read and parse ASN.1 formatted certificates
+    - Feature: Added DclCertificateService for managing Product Attestation Authority (PAA) certificates from the Distributed Compliance Ledger (DCL) with automatic updates from production DCL, test DCL, and GitHub development repositories
+    - Feature: Added DclOtaUpdateService for checking and downloading Over-The-Air (OTA) software updates from DCL with full validation and checksum verification
+    - Feature: Added DclVendorInfoService for retrieving vendor information from DCL
+    - Feature: Added OTA image processing utilities (OtaImageReader, OtaImageWriter) for reading, validating, extracting, and creating Matter OTA update files
+    - Feature: (@ArtemisMucaj) Add support to pass / generate an intermediate CA in the CertificateAuthority class, when used the NOCs are signed with the ICAC cert
+    - Enhancement: MDNS broadcasts more aggressively until a connection is established
+    - Enhancement: MDNS and BLE advertising schedules are now configurable and conform to Matter and DNS-SD specifications
+    - Enhancement: MDNS client and server efficiency is improved with a shared socket and message parser
+    - Enhancement: MDNS Truncated Queries are now handled correctly
+    - Enhancement: matter.js no longer uses SO_REUSEADDR on the Matter port so you can no longer accidentally start two nodes at the same address simultaneously
+    - Enhancement: Increases the limitation of parallel exchanges when sending messages to 30 (was 5 before)
+    - Enhancement: Migrate Commissioning Flow to ClientInteraction as bases
+    - Enhancement: FabricAuthority automatically rotates the operational Fabric NOC key pair on start once (for Controller cases)
+    - Adjustment: Subscription data are no longer being flushed when a subscription is replaced by a new one with keepSubscriptions=false
+    - Adjustment: When setting certificates and a ICAC is provided but equals the root CA, the ICAC is ignored (workaround of issues with one ecosystem)
+    - Fix: Controller networking was previously throwing the incorrect error after a communication timeout
+    - Fix: Ensures to only include the MaxTcpMessageSize in Session parameters when TCP is enabled
+    - Fix: Fixes the used ACL level for wildcard writes
+    - Fix: (@ArtemisMucaj) Fixes noc trust chain verification; verify against both rcac and icac
+
 - @matter/react-native
     - Fix: (Luxni) Update UDP, BLE and Crypto usage to work with React Native
 
+- @matter/types
+    - Breaking: All "epoch-s" and "epoch-us" values are now converted automatically to the correct matter epoch, so that your own code can just use normal 1970-based epochS/US values. If you converted yourself to the Matter 2000-based values before, please remove this conversion.
+    - Enhancement: The duplicate event priority definition `EventPriority` is deprecated; use the generated `Priority` enum instead
+    - Fix: Ensures correct Number ranges for nullable and non-nullable numbers on TLV level
+
 - @project-chip/matter.js
-    - BREAKING: `PairedNode.state` renamed to `PairedNode.connectionState`!
+    - Breaking: `PairedNode.state` renamed to `PairedNode.connectionState`!
+    - Breaking: PairedNode attribute change callbacks and events does _not_ contain the `changed` and `oldValue` properties anymore
+    - Breaking: Some PairedNode API methods got slightly reduced in functionality, but that should not affect most users
+    - Breaking: The Storage location of the controller base data has moved. The data will be migrated automatically on the first start of the new version (be aware, this can take some seconds!)
+      - Cached node attribute data (formerly "node-<ID>.*" in main storage) are now located in nodes.peerX.endpoints.* because they are now managed
+      - The fabric (formerly "credentials.fabric") is now located at "fabrics.*"
+      - The certificates (formerly other "credentials.*") are now located in "certificates.*"
+      - The list of commissioned nodes (formerly "nodes.commissionedNodes") is now integrated in the node peer data (nodes.peerX)
+    - Feature: Added new option `enableOtaProvider` to `CommissioningControllerOptions` to enable OTA Provider functionality
+    - Enhancement: The PairedNode is data wise now backend by a ServerNode instance which acts as controller and provides all datamanagement and peer access. This API can alredy be moved directly by using `PairedNode.node` - some convenience methods are also dorectly mapped on the PairedNode itself (see below). initial connection and reconnection management is still handled by PairedNode and will move later.
     - Enhancement: Added more convenient accessors for endpoint cached read-only state: `Endpoint.state` property for attributes for all clusters in generic way and `Endpoint.stateOf()` for a typed access for a defined Client behavior
     - Enhancement: Added more convenient accessors for endpoint commands: `Endpoint.commands` property for commands for all clusters in generic way and `Endpoint.commandsOf()` for a types access for a defined Client behavior
     - Enhancement: Added `PairedNode.parts` and `Endpoint.parts` as Map property to access all endpoints of a node
@@ -86,6 +131,10 @@ The main work (all changes without a GitHub username in brackets in the below li
 
 - @matter/mqtt
     - Feature: New package implementing `@matter/main` MQTT abstraction using MQTT.js
+
+- @matter/nodejs-shell
+  - Fix: Changed the shell CLI option to enable ble to "--ble-enable" to not conflict with internal variables
+  - Adjustment: Adjusted to build ESM package by default
 
 - @matter/nodejs-ws
     - Feature: New package implementing `@matter/main` WebSocket abstraction using ws package and Node.js HTTP server

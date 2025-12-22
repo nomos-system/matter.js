@@ -38,7 +38,7 @@ const logger = Logger.get("GeneralDiagnosticsServer");
 const Base = GeneralDiagnosticsBehavior.with(GeneralDiagnostics.Feature.DataModelTest);
 
 // Enhance the Schema to store the real operational hours counter we internally use and persist this
-const schema = Base.schema!.extend(
+const schema = Base.schema.extend(
     {},
     FieldElement({ name: "totalOperationalHoursCounter", type: "uint64", quality: "N", conformance: "M" }),
 );
@@ -64,7 +64,7 @@ export class GeneralDiagnosticsServer extends Base {
     declare state: GeneralDiagnosticsServer.State;
     static override readonly schema = schema;
 
-    override initialize(): MaybePromise {
+    override initialize() {
         if (this.state.testEventTriggersEnabled === undefined) {
             this.state.testEventTriggersEnabled = false;
         } else if (this.state.testEventTriggersEnabled) {
@@ -308,7 +308,7 @@ export class GeneralDiagnosticsServer extends Base {
         this.internal.lastTotalOperationalHoursTimer = Time.getPeriodicTimer(
             "GeneralDiagnostics.operationalHours",
             Minutes(5),
-            this.callback(this.#updateTotalOperationalHoursCounter),
+            this.callback(this.#updateTotalOperationalHoursCounter, { lock: true }),
         ).start();
 
         await this.#updateNetworkList();
@@ -327,7 +327,8 @@ export class GeneralDiagnosticsServer extends Base {
     }
 
     async #updateNetworkList() {
-        const mdnsService = this.env.get(MdnsService);
+        await using services = this.env.asDependent();
+        const mdnsService = services.get(MdnsService);
         const mdnsLimitedToNetworkInterfaces = mdnsService.limitedToNetInterface;
 
         const networkRuntime = this.env.get(NetworkRuntime) as ServerNetworkRuntime;

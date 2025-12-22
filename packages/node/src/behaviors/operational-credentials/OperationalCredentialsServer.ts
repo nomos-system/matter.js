@@ -19,7 +19,6 @@ import {
     DeviceCertification,
     DeviceCommissioner,
     Fabric,
-    FabricAction,
     FabricManager,
     FabricTableFullError,
     MatterFabricConflictError,
@@ -33,7 +32,9 @@ import {
 import {
     Command,
     FabricIndex,
+    NodeId,
     StatusCode,
+    StatusResponse,
     StatusResponseError,
     TlvBoolean,
     TlvByteString,
@@ -41,8 +42,10 @@ import {
     TlvObject,
     TlvOptionalField,
     ValidationError,
+    VendorId,
 } from "#types";
 import { OperationalCredentialsBehavior } from "./OperationalCredentialsBehavior.js";
+import { VendorIdVerification } from "./VendorIdVerification.js";
 
 const logger = Logger.get("OperationalCredentials");
 
@@ -85,7 +88,7 @@ export class OperationalCredentialsServer extends OperationalCredentialsBehavior
     declare state: OperationalCredentialsServer.State;
 
     override initialize(): MaybePromise {
-        // maximum number of fabrics. Also FabricBuilder uses 254 as max!
+        // maximum number of fabrics. Also, FabricBuilder uses 254 as max!
         if (!this.state.supportedFabrics) {
             this.state.supportedFabrics = 254;
         }
@@ -112,7 +115,7 @@ export class OperationalCredentialsServer extends OperationalCredentialsBehavior
             timestamp: 0,
         });
 
-        const attestationSignature = await certification.sign(session, attestationElements);
+        const attestationSignature = (await certification.sign(session, attestationElements)).bytes;
 
         return { attestationElements, attestationSignature };
     }
@@ -150,7 +153,8 @@ export class OperationalCredentialsServer extends OperationalCredentialsBehavior
             this.context.session.id,
         );
         const nocsrElements = TlvCertSigningRequest.encode({ certSigningRequest, csrNonce });
-        return { nocsrElements, attestationSignature: await certification.sign(session, nocsrElements) };
+        const attestationSignature = (await certification.sign(session, nocsrElements)).bytes;
+        return { nocsrElements, attestationSignature };
     }
 
     override async certificateChainRequest({ certificateType }: OperationalCredentials.CertificateChainRequest) {
@@ -265,19 +269,13 @@ export class OperationalCredentialsServer extends OperationalCredentialsBehavior
             return this.#mapNocErrors(error);
         }
 
-        // The receiver SHALL create and add a new Access Control Entry using the CaseAdminSubject field to grant
-        // subsequent Administer access to an Administrator member of the new Fabric.
-        await this.endpoint.act(agent => agent.get(AccessControlServer).addDefaultCaseAcl(fabric, [caseAdminSubject]));
-
         const session = this.context.session;
         NodeSession.assert(session);
 
-        await failsafeContext.addFabric(fabric);
-
         try {
             if (session.isPase) {
-                logger.debug(`Add Fabric ${fabric.fabricIndex} to PASE session ${session.name}`);
-                session.addAssociatedFabric(fabric);
+                logger.debug(`Add Fabric ${fabric.fabricIndex} to PASE session ${session.via}`);
+                session.fabric = fabric;
             }
 
             // Update attributes
@@ -290,9 +288,13 @@ export class OperationalCredentialsServer extends OperationalCredentialsBehavior
             }
         } catch (e) {
             // Fabric insertion into FabricManager is not currently transactional so we need to remove manually
-            await fabric.remove(session.id);
+            await fabric.delete(this.context.exchange);
             throw e;
         }
+
+        // The receiver SHALL create and add a new Access Control Entry using the CaseAdminSubject field to grant
+        // subsequent Administer access to an Administrator member of the new Fabric.
+        await this.endpoint.act(agent => agent.get(AccessControlServer).addDefaultCaseAcl(fabric, [caseAdminSubject]));
 
         // TODO The incoming IPKValue SHALL be stored in the Fabric-scoped slot within the Group Key Management cluster
         //  (see KeySetWrite), for subsequent use during CASE.
@@ -301,7 +303,9 @@ export class OperationalCredentialsServer extends OperationalCredentialsBehavior
         //  session context with the FabricIndex generated above, such that subsequent interactions have the proper
         //  accessing fabric.
 
-        logger.info(`addNoc success, adminVendorId ${adminVendorId}, caseAdminSubject ${caseAdminSubject}`);
+        logger.info(
+            `addNoc success, adminVendorId ${adminVendorId}, caseAdminSubject ${NodeId.strOf(caseAdminSubject)}`,
+        );
 
         return {
             statusCode: OperationalCredentials.NodeOperationalCertStatus.Ok,
@@ -331,7 +335,7 @@ export class OperationalCredentialsServer extends OperationalCredentialsBehavior
 
         if (timedOp.rootCertSet) {
             // CERTIFICATION BUG WORKAROUND
-            // This should be a ConstraintError but tests require this error
+            // This should be a ConstraintError, but tests require this error
             // See https://github.com/CHIP-Specifications/chip-test-plans/issues/4807
             return {
                 statusCode: OperationalCredentials.NodeOperationalCertStatus.MissingCsr,
@@ -340,7 +344,7 @@ export class OperationalCredentialsServer extends OperationalCredentialsBehavior
 
         if (timedOp.forUpdateNoc === undefined) {
             // CERTIFICATION BUG WORKAROUND
-            // This should be a ConstraintError but tests require this error
+            // This should be a ConstraintError, but tests require this error
             // See https://github.com/CHIP-Specifications/chip-test-plans/issues/4807
             return {
                 statusCode: OperationalCredentials.NodeOperationalCertStatus.MissingCsr,
@@ -358,8 +362,8 @@ export class OperationalCredentialsServer extends OperationalCredentialsBehavior
         try {
             const updatedFabric = await timedOp.buildUpdatedFabric(nocValue, icacValue);
 
-            // update FabricManager and Resumption records but leave current session intact
-            await timedOp.updateFabric(updatedFabric);
+            // update FabricManager and Resumption records but leave the current session intact
+            await timedOp.replaceFabric(updatedFabric);
 
             return {
                 statusCode: OperationalCredentials.NodeOperationalCertStatus.Ok,
@@ -393,7 +397,7 @@ export class OperationalCredentialsServer extends OperationalCredentialsBehavior
     override async removeFabric({ fabricIndex }: OperationalCredentials.RemoveFabricRequest) {
         assertRemoteActor(this.context);
 
-        const fabric = this.env.get(FabricManager).findByIndex(fabricIndex);
+        const fabric = this.env.get(FabricManager).maybeFor(fabricIndex);
 
         if (fabric === undefined) {
             return {
@@ -402,7 +406,11 @@ export class OperationalCredentialsServer extends OperationalCredentialsBehavior
             };
         }
 
-        await fabric.remove(this.context.session.id);
+        // We do not handle fabric management transactionally because of legacy FabricManager implementation, and if
+        // we leave the transaction open it will cause deadlock
+        await this.context.transaction.rollback();
+
+        await fabric.leave(this.context.exchange);
         // The state is updated on removal via commissionedFabricChanged event, see constructor
 
         return {
@@ -454,7 +462,58 @@ export class OperationalCredentialsServer extends OperationalCredentialsBehavior
         this.state.trustedRootCertificates = trustedRootCertificates;
     }
 
+    override async signVidVerificationRequest({
+        fabricIndex,
+        clientChallenge,
+    }: OperationalCredentials.SignVidVerificationRequest): Promise<OperationalCredentials.SignVidVerificationResponse> {
+        assertRemoteActor(this.context);
+        NodeSession.assert(this.context.session);
+
+        const fabrics = this.env.get(FabricManager);
+        if (!fabrics.has(fabricIndex)) {
+            throw new StatusResponse.ConstraintErrorError(`Fabric with index ${fabricIndex} does not exist`);
+        }
+        const fabric = fabrics.for(fabricIndex);
+
+        const { fabricBindingVersion, signatureData } = VendorIdVerification.dataToSign({
+            attChallenge: this.context.session.attestationChallengeKey,
+            clientChallenge,
+            fabricIndex,
+            fabric,
+        });
+
+        return {
+            fabricIndex,
+            fabricBindingVersion,
+            signature: (await fabric.sign(signatureData)).bytes,
+        };
+    }
+
+    override async setVidVerificationStatement({
+        vendorId,
+        vidVerificationStatement,
+        vvsc,
+    }: OperationalCredentials.SetVidVerificationStatementRequest): Promise<void> {
+        assertRemoteActor(this.context);
+        const fabric = this.context.session.associatedFabric;
+
+        if (vendorId === undefined && vidVerificationStatement === undefined && vvsc === undefined) {
+            throw new StatusResponse.InvalidCommandError(
+                "At least one of vendorId, vidVerificationStatement or vvsc must be provided",
+            );
+        }
+        if (vendorId !== undefined && !VendorId.isValid(vendorId)) {
+            throw new StatusResponse.ConstraintErrorError(`Invalid vendorId: ${vendorId}`);
+        }
+
+        // Error checks included in updateVendorVerificationData method
+        await fabric.updateVendorVerificationData(vendorId, vidVerificationStatement, vvsc);
+    }
+
     async #updateFabrics() {
+        await this.context.transaction.addResources(this);
+        await this.context.transaction.begin();
+
         const fabrics = this.env.get(FabricManager);
         this.state.fabrics = fabrics.map(fabric => ({
             fabricId: fabric.fabricId,
@@ -462,12 +521,14 @@ export class OperationalCredentialsServer extends OperationalCredentialsBehavior
             nodeId: fabric.nodeId,
             rootPublicKey: fabric.rootPublicKey,
             vendorId: fabric.rootVendorId,
+            vidVerificationStatement: fabric.vidVerificationStatement,
             fabricIndex: fabric.fabricIndex,
         }));
 
         this.state.nocs = fabrics.map(fabric => ({
             noc: fabric.operationalCert,
             icac: fabric.intermediateCACert ?? null,
+            vvsc: fabric.vvsc,
             fabricIndex: fabric.fabricIndex,
         }));
 
@@ -494,17 +555,17 @@ export class OperationalCredentialsServer extends OperationalCredentialsBehavior
 
     async #handleAddedFabric({ fabricIndex }: Fabric) {
         await this.#updateFabrics();
-        this.agent.get(CommissioningServer).handleFabricChange(fabricIndex, FabricAction.Added);
+        this.agent.get(CommissioningServer).handleFabricChange(fabricIndex, "added");
     }
 
     async #handleUpdatedFabric({ fabricIndex }: Fabric) {
         await this.#updateFabrics();
-        this.agent.get(CommissioningServer).handleFabricChange(fabricIndex, FabricAction.Updated);
+        this.agent.get(CommissioningServer).handleFabricChange(fabricIndex, "updated");
     }
 
     async #handleRemovedFabric({ fabricIndex }: Fabric) {
         await this.#updateFabrics();
-        this.agent.get(CommissioningServer).handleFabricChange(fabricIndex, FabricAction.Removed);
+        this.agent.get(CommissioningServer).handleFabricChange(fabricIndex, "deleted");
     }
 
     async #handleFailsafeClosed() {
@@ -514,8 +575,8 @@ export class OperationalCredentialsServer extends OperationalCredentialsBehavior
     async #nodeOnline() {
         const fabricManager = this.env.get(FabricManager);
         this.reactTo(fabricManager.events.added, this.#handleAddedFabric, { lock: true });
-        this.reactTo(fabricManager.events.updated, this.#handleUpdatedFabric, { lock: true });
-        this.reactTo(fabricManager.events.deleted, this.#handleRemovedFabric, { lock: true });
+        this.reactTo(fabricManager.events.replaced, this.#handleUpdatedFabric, { lock: true });
+        this.reactTo(fabricManager.events.deleting, this.#handleRemovedFabric, { lock: true });
         this.reactTo(fabricManager.events.failsafeClosed, this.#handleFailsafeClosed, { lock: true });
         await this.#updateFabrics();
     }
@@ -528,7 +589,6 @@ export class OperationalCredentialsServer extends OperationalCredentialsBehavior
 export namespace OperationalCredentialsServer {
     export class Internal {
         certification?: DeviceCertification;
-        commissionedFabric?: FabricIndex;
     }
 
     export class State extends OperationalCredentialsBehavior.State {

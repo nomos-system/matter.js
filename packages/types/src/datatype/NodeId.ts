@@ -5,7 +5,7 @@
  */
 
 import { GroupId } from "#datatype/GroupId.js";
-import { Branded, Bytes, Crypto, DataWriter, UnexpectedDataError } from "#general";
+import { Branded, Crypto, hex, UnexpectedDataError } from "#general";
 import { TlvUInt64 } from "../tlv/TlvNumber.js";
 import { TlvWrapper } from "../tlv/TlvWrapper.js";
 import { CaseAuthenticatedTag } from "./CaseAuthenticatedTag.js";
@@ -32,11 +32,9 @@ export namespace NodeId {
      */
     export const UNSPECIFIED_NODE_ID = NodeId(0);
 
-    export const toHexString = (nodeId: NodeId) => {
-        const writer = new DataWriter();
-        writer.writeUInt64(nodeId);
-        return Bytes.toHex(writer.toByteArray()).toUpperCase();
-    };
+    export function strOf(nodeId: NodeId) {
+        return hex.fixed(nodeId, 16);
+    }
 
     /**
      * An Operational Node ID is a 64-bit number that uniquely identifies an individual Node on a Fabric. All messages
@@ -61,7 +59,7 @@ export namespace NodeId {
 
     /** A Group Node ID is a 64-bit Node ID that contains a particular Group ID in the lower half of the Node ID. */
     export const fromGroupId = (groupId: number): NodeId => {
-        return NodeId(BigInt("0xFFFFFFFFFFFF" + GroupId(groupId).toString(16).padStart(4, "0")));
+        return NodeId(BigInt("0xFFFFFFFFFFFF" + hex.byte(GroupId(groupId))));
     };
 
     /**
@@ -73,7 +71,7 @@ export namespace NodeId {
         if (id < 0 || id > 0xffffffff) {
             throw new UnexpectedDataError(`Invalid ID: ${id}`);
         }
-        return NodeId(BigInt("0xFFFFFFFE" + id.toString(16).padStart(8, "0")));
+        return NodeId(BigInt("0xFFFFFFFE" + hex.fixed(id, 8)));
     };
 
     /**
@@ -84,7 +82,7 @@ export namespace NodeId {
         if (id < 0 || id > 0xffffffff) {
             throw new UnexpectedDataError(`Invalid CASE Authenticated tag: ${id}`);
         }
-        return NodeId(BigInt("0xFFFFFFFD" + id.toString(16).padStart(8, "0")));
+        return NodeId(BigInt("0xFFFFFFFD" + hex.fixed(id, 8)));
     };
 
     export const isCaseAuthenticatedTag = (nodeId: NodeId): boolean => {
@@ -108,7 +106,7 @@ export namespace NodeId {
         if (id < 0 || id > 0xffffffff) {
             throw new UnexpectedDataError(`Invalid ID: ${id}`);
         }
-        return NodeId(BigInt("0xFFFFFFFB" + id.toString(16).padStart(8, "0")));
+        return NodeId(BigInt("0xFFFFFFFB" + hex.fixed(id, 8)));
     };
 }
 

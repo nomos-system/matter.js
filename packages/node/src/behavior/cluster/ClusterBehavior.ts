@@ -7,13 +7,14 @@
 import { Events } from "#behavior/Events.js";
 import type { Agent } from "#endpoint/Agent.js";
 import { ImplementationError, MaybePromise } from "#general";
-import { ClusterModel, ClusterModifier, type Schema } from "#model";
+import { ClusterModifier, type Schema } from "#model";
 import { ClusterComposer, ClusterType, ClusterTypeModifier, TypeFromBitSchema } from "#types";
 import { Behavior } from "../Behavior.js";
 import type { BehaviorBacking } from "../internal/BehaviorBacking.js";
 import type { RootSupervisor } from "../supervision/RootSupervisor.js";
 import { NetworkBehavior } from "../system/network/NetworkBehavior.js";
-import { ExtensionInterfaceOf, createType, type ClusterOf } from "./ClusterBehaviorUtil.js";
+import { ExtensionInterfaceOf, isClientBehavior, type ClusterOf } from "./cluster-behavior-utils.js";
+import { ClusterBehaviorType } from "./ClusterBehaviorType.js";
 import type { ClusterEvents } from "./ClusterEvents.js";
 import { ClusterInterface } from "./ClusterInterface.js";
 import type { ClusterState } from "./ClusterState.js";
@@ -31,9 +32,11 @@ import type { ClusterState } from "./ClusterState.js";
  * and may not be retained across invocations.
  *
  * ClusterBehaviors may be instantiated with unsupported mandatory commands and attributes.  This is currently results
- * in a runtime error but it will not cause a type error during development.
+ * in a runtime error, but it will not cause a type error during development.
  */
 export class ClusterBehavior extends Behavior {
+    declare static readonly schema: Schema.Cluster;
+
     /**
      * The ID of ClusterBehavior implementations is the uncapitalized cluster name.
      */
@@ -51,6 +54,10 @@ export class ClusterBehavior extends Behavior {
      */
     get features() {
         return this.cluster.supportedFeatures;
+    }
+
+    override get type() {
+        return this.constructor as ClusterBehavior.Type;
     }
 
     /**
@@ -99,10 +106,15 @@ export class ClusterBehavior extends Behavior {
     static for<This extends ClusterBehavior.Type, const ClusterT extends ClusterType>(
         this: This,
         cluster: ClusterT,
-        schema?: Schema,
+        schema?: Schema.Cluster,
         name?: string,
     ) {
-        return createType(cluster, this, schema, name) as ClusterBehavior.Type<ClusterT, This>;
+        return ClusterBehaviorType({
+            cluster,
+            base: this,
+            schema,
+            name,
+        }) as ClusterBehavior.Type<ClusterT, This>;
     }
 
     /**
@@ -137,10 +149,7 @@ export class ClusterBehavior extends Behavior {
         const AlterationsT extends ClusterTypeModifier.Alterations<This["cluster"]>,
     >(this: This, alterations: AlterationsT) {
         const cluster = new ClusterTypeModifier(this.cluster).alter(alterations);
-        const schema =
-            this.schema instanceof ClusterModel
-                ? ClusterModifier.applyRequirements(this.schema, alterations)
-                : undefined;
+        const schema = ClusterModifier.applyRequirements(this.schema, alterations);
         return this.for(cluster, schema);
     }
 
@@ -154,8 +163,7 @@ export class ClusterBehavior extends Behavior {
         const FlagsT extends ClusterTypeModifier.ElementFlags<This["cluster"]>,
     >(this: This, flags: FlagsT) {
         const cluster = new ClusterTypeModifier(this.cluster).enable(flags);
-        const schema =
-            this.schema instanceof ClusterModel ? ClusterModifier.applyPresence(this.schema, flags) : undefined;
+        const schema = ClusterModifier.applyPresence(this.schema, flags);
         return this.for(cluster, schema);
     }
 
@@ -170,12 +178,24 @@ export class ClusterBehavior extends Behavior {
     }
 
     static override supports(other: Behavior.Type) {
-        if (!Behavior.supports.call(this, other)) {
+        const otherCluster = (other as { cluster?: ClusterType }).cluster;
+        if (!otherCluster) {
             return false;
         }
 
-        const otherCluster = (other as { cluster?: ClusterType }).cluster;
-        if (!otherCluster) {
+        // Special case for "client" behaviors.  We implement these with the "complete" cluster so the interface offers
+        // type-safe access to the entire cluster.  The only exception to this is for non-nullable mandatory state
+        // values.  If the peer does not implement such a value then it will be undefined even though our type says it
+        // won't be.  This however is not an issue specific to the complete cluster so we do not need to worry about it
+        // here
+        //
+        // Further, we know the "Client" classes can have no extension methods or properties, so we don't need to do an
+        // exact class match for type safety
+        if (isClientBehavior(other) && otherCluster.id === this.cluster.id) {
+            return true;
+        }
+
+        if (!Behavior.supports.call(this, other)) {
             return false;
         }
 
@@ -241,7 +261,7 @@ export namespace ClusterBehavior {
         readonly Internal: B["Internal"];
         readonly Interface: I;
 
-        readonly schema?: Schema;
+        readonly schema: Schema.Cluster;
         readonly early: boolean;
         readonly defaults: ClusterState.Type<C, B>;
         readonly supervisor: RootSupervisor;

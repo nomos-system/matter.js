@@ -12,6 +12,7 @@
  * * NodeJsCryptoTest.ts also implements some of these tests
  */
 
+import { HASH_ALGORITHM_OUTPUT_LENGTHS, HashAlgorithm } from "#crypto/index.js";
 import { Key, PrivateKey, PublicKey } from "#crypto/Key.js";
 import { StandardCrypto } from "#crypto/StandardCrypto.js";
 import { b$, Bytes } from "#util/Bytes.js";
@@ -49,20 +50,15 @@ describe("StandardCrypto", () => {
         expect(Bytes.toHex(result)).equals(Bytes.toHex(PLAIN_DATA));
     });
 
-    it("signs & verifies with raw keys", async () => {
+    it("signs & verifies", async () => {
         const result = await crypto.signEcdsa(PrivateKey(Bytes.of(PRIVATE_KEY)), ENCRYPTED_DATA);
 
         await crypto.verifyEcdsa(PublicKey(Bytes.of(PUBLIC_KEY)), ENCRYPTED_DATA, result);
     });
 
-    it("signs & verifies with SEC1/SPKI keys, DER signature format", async () => {
-        const result = await crypto.signEcdsa(Key({ sec1: Bytes.of(SEC1_KEY) }), ENCRYPTED_DATA, "der");
-        await crypto.verifyEcdsa(Key({ spki: Bytes.of(SPKI_KEY) }), ENCRYPTED_DATA, result, "der");
-    });
-
-    it("signs & verifies with SEC1/SPKI keys, IEEE P1363 signature format", async () => {
-        const result = await crypto.signEcdsa(Key({ sec1: Bytes.of(SEC1_KEY) }), ENCRYPTED_DATA, "ieee-p1363");
-        await crypto.verifyEcdsa(Key({ spki: Bytes.of(SPKI_KEY) }), ENCRYPTED_DATA, result, "ieee-p1363");
+    it("signs & verifies with SEC1/SPKI keys", async () => {
+        const result = await crypto.signEcdsa(Key({ sec1: Bytes.of(SEC1_KEY) }), ENCRYPTED_DATA);
+        await crypto.verifyEcdsa(Key({ spki: Bytes.of(SPKI_KEY) }), ENCRYPTED_DATA, result);
     });
 
     it("generates a working DSA key pair", async () => {
@@ -86,7 +82,7 @@ describe("StandardCrypto", () => {
     // });
 
     it("creates correct EC hash", async () => {
-        const hash = await crypto.computeSha256(
+        const hash = await crypto.computeHash(
             b$`047e708746f3d9fb3265a73f0c69ad18cdd48860d7956731eb72873f3d09c17b667c13737017574bf3f826239ff27cdb52fb3e69ff4a06ffd2cbccfdc695ff6096`,
         );
         expect(Bytes.toHex(hash)).equals("582418375f09bff6b3bbb2421206ad6aec3c79ff2602f95a68d3e4d23bebe36f");
@@ -111,5 +107,72 @@ describe("StandardCrypto", () => {
 
         expect(secret1).deep.equal(secret2);
         expect(secret1.byteLength).equals(32);
+    });
+
+    describe("Hash Algorithms", () => {
+        const testData = b$`48656c6c6f20576f726c64`; // "Hello World"
+        const testData2 = b$`54657374204461746121`; // "Test Data!"
+
+        describe("SHA-256", () => {
+            it("computes hash via computeHash", async () => {
+                const hash = await crypto.computeHash(testData, "SHA-256");
+                expect(Bytes.isBytes(hash)).to.be.true;
+                expect(hash.byteLength).to.equal(HASH_ALGORITHM_OUTPUT_LENGTHS["SHA-256"]); // 256 bits = 32 bytes
+            });
+
+            it("computes hash via computeSha256()", async () => {
+                const hash = await crypto.computeHash(testData);
+                expect(Bytes.isBytes(hash)).to.be.true;
+                expect(hash.byteLength).to.equal(HASH_ALGORITHM_OUTPUT_LENGTHS["SHA-256"]);
+            });
+
+            it("computeSha256() produces same result as computeHash(1)", async () => {
+                const hash1 = await crypto.computeHash(testData);
+                const hash2 = await crypto.computeHash(testData, "SHA-256");
+                expect(Bytes.toHex(hash1)).to.equal(Bytes.toHex(hash2));
+            });
+
+            it("produces different hashes for different inputs", async () => {
+                const hash1 = await crypto.computeHash(testData, "SHA-256");
+                const hash2 = await crypto.computeHash(testData2, "SHA-256");
+                expect(Bytes.toHex(hash1)).to.not.equal(Bytes.toHex(hash2));
+            });
+
+            it("handles array of buffers", async () => {
+                const chunk1 = b$`48656c6c6f`; // "Hello"
+                const chunk2 = b$`20576f726c64`; // " World"
+                const hashArray = await crypto.computeHash([chunk1, chunk2], "SHA-256");
+                const hashSingle = await crypto.computeHash(testData, "SHA-256");
+                expect(Bytes.toHex(hashArray)).to.equal(Bytes.toHex(hashSingle));
+            });
+        });
+
+        (["SHA-512", "SHA-384"] as HashAlgorithm[]).forEach(alg => {
+            describe(alg, () => {
+                it(`computes ${alg} via computeHash`, async () => {
+                    const hash = await crypto.computeHash(testData, alg);
+                    expect(Bytes.isBytes(hash)).to.be.true;
+                    expect(hash.byteLength).to.equal(HASH_ALGORITHM_OUTPUT_LENGTHS[alg]);
+                });
+
+                it(`supports array of buffers`, async () => {
+                    const chunk1 = b$`48656c6c6f`; // "Hello"
+                    const chunk2 = b$`20576f726c64`; // " World"
+
+                    const hashArray = await crypto.computeHash([chunk1, chunk2], alg);
+                    const hashSingle = await crypto.computeHash(testData, alg);
+                    expect(Bytes.toHex(hashArray)).to.equal(
+                        Bytes.toHex(hashSingle),
+                        `Algorithm ${alg} array hashing failed`,
+                    );
+                });
+
+                it("produces different hashes for different inputs", async () => {
+                    const hash1 = await crypto.computeHash(testData, alg);
+                    const hash2 = await crypto.computeHash(testData2, alg);
+                    expect(Bytes.toHex(hash1)).to.not.equal(Bytes.toHex(hash2));
+                });
+            });
+        });
     });
 });

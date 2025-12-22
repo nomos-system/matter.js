@@ -37,7 +37,7 @@ import { LocalActorContext } from "#index.js";
 import { AccessLevel, BasicInformation, ElementTag, FeatureMap } from "#model";
 import { ServerEnvironment } from "#node/server/ServerEnvironment.js";
 import { ServerNode } from "#node/ServerNode.js";
-import { AttestationCertificateManager, CertificationDeclaration, Val } from "#protocol";
+import { AttestationCertificateManager, CertificationDeclaration, NodeSession, ProtocolMocks, Val } from "#protocol";
 import { FabricIndex, VendorId } from "#types";
 import { OccurrenceManager } from "@matter/protocol";
 import { MockServerNode } from "./mock-server-node.js";
@@ -227,17 +227,18 @@ describe("ServerNode", () => {
     it("times out commissioning", async () => {
         const { node } = await commissioning.almostCommission();
 
-        // Somewhere there is another promise left that updates the fabrics correctly, so give that time to be fullfilled
-        await MockTime.yield();
-
         const opcreds = node.state.operationalCredentials;
+
+        if (!opcreds.commissionedFabrics) {
+            await MockTime.resolve(node.events.operationalCredentials.commissionedFabrics$Changed);
+        }
 
         expect(opcreds.commissionedFabrics).equals(1);
 
         await MockTime.advance(FAILSAFE_LENGTH_S * 1000 + 1);
 
-        if (opcreds.commissionedFabrics > 0) {
-            await node.events.operationalCredentials.commissionedFabrics$Changed;
+        if (opcreds.commissionedFabrics) {
+            await MockTime.resolve(node.events.operationalCredentials.commissionedFabrics$Changed);
         }
 
         expect(opcreds.commissionedFabrics).equals(0);
@@ -268,7 +269,7 @@ describe("ServerNode", () => {
             },
         });
 
-        const exchange = await node.createExchange();
+        const exchange = new ProtocolMocks.Exchange();
 
         const contextOptions = { exchange, command: true };
 
@@ -316,7 +317,8 @@ describe("ServerNode", () => {
 
         // Simulate receiving the response to the removeFabric request which normally closes the underlying session
         // delayed
-        await contextOptions.exchange.session.destroy(false, false);
+        await (contextOptions.exchange.session as NodeSession).handlePeerClose();
+        await contextOptions.exchange.close();
 
         // ...then go offline...
         if (node.lifecycle.isOnline) {
@@ -406,11 +408,13 @@ describe("ServerNode", () => {
         expect(occurrencesPerFabric.get(FabricIndex(1))).equals(1);
         expect(occurrencesPerFabric.get(FabricIndex(2))).equals(1);
 
+        const sanitized = Promise.resolve(ServerEnvironment.fabricScopedDataSanitized);
+
         await node.online(contextOptions, async agent => {
             await agent.operationalCredentials.removeFabric({ fabricIndex: FabricIndex(1) });
         });
 
-        await ServerEnvironment.fabricScopedDataSanitized;
+        await sanitized;
 
         // Verify that the fabric scoped data are gone for the removed fabricIndex 1, but still exist for Index 2
         expect(node.state.operationalCredentials.nocs.filter(({ fabricIndex }) => fabricIndex === 1).length).equals(0);
@@ -601,7 +605,7 @@ describe("ServerNode", () => {
             expect(ep0.deviceTypes).deep.equals([22]);
             expect(ep0.wildcardPathFlags).equals(0x1);
             expect([...ep0]).length(
-                [...node.behaviors].filter(behavior => behavior.schema?.tag === ElementTag.Cluster).length,
+                [...node.behaviors].filter(behavior => behavior.schema.tag === ElementTag.Cluster).length,
             );
 
             const ep1 = protocol[1]!;
@@ -609,8 +613,7 @@ describe("ServerNode", () => {
             expect(ep1.deviceTypes).deep.equals([256]);
             expect(ep1.wildcardPathFlags).equals(0);
             expect([...ep1]).length(
-                [...[...node.parts][0].behaviors].filter(behavior => behavior.schema?.tag === ElementTag.Cluster)
-                    .length,
+                [...[...node.parts][0].behaviors].filter(behavior => behavior.schema.tag === ElementTag.Cluster).length,
             );
 
             const id = BasicInformation.id as number;

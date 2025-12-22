@@ -16,6 +16,7 @@ export const FallbackLimits: AccessControl.Limits = {
     readable: true,
     readLevel: AccessLevel.View,
     timed: false,
+    largeMessage: false,
     writable: true,
     writeLevel: AccessLevel.Administer,
 };
@@ -50,6 +51,10 @@ export abstract class DataResponse<SessionT extends InteractionSession = Interac
                 (this.#session.fabric && this.#node.nodeIdFor(this.#session.fabric)) ?? NodeId.UNSPECIFIED_NODE_ID;
         }
         return this.#cachedNodeId;
+    }
+
+    protected join(...name: unknown[]) {
+        return this.#session.transaction?.join(...name);
     }
 
     abstract counts: {

@@ -4,20 +4,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { InteractionClient } from "#cluster/client/InteractionClient.js";
 import { OperationalCredentials } from "#clusters";
-import { ControllerStore } from "#ControllerStore.js";
 import {
     ClassExtends,
     Crypto,
+    Duration,
     Environment,
     ImplementationError,
-    InternalError,
     Logger,
     Minutes,
-    StorageContext,
     UnexpectedDataError,
 } from "#general";
-import { LegacyControllerStore } from "#LegacyControllerStore.js";
+import { Endpoint, NetworkClient, ServerNode, SoftwareUpdateManager } from "#node";
 import {
     ActiveSessionInformation,
     Ble,
@@ -26,14 +25,16 @@ import {
     CommissionableDeviceIdentifiers,
     ControllerCommissioningFlow,
     ControllerDiscovery,
-    DecodedAttributeReportValue,
     DiscoveryAndCommissioningOptions,
     DiscoveryData,
     Fabric,
     FabricGroups,
-    InteractionClient,
-    MessageChannel,
     NodeDiscoveryType,
+    NodeSession,
+    PeerSet,
+    SecureSession,
+    Session,
+    SessionManager,
 } from "#protocol";
 import {
     CaseAuthenticatedTag,
@@ -44,8 +45,9 @@ import {
     TypeFromPartialBitSchema,
     VendorId,
 } from "#types";
+import { OtaProviderEndpoint } from "@matter/node/endpoints";
 import { CommissioningControllerNodeOptions, NodeStates, PairedNode } from "./device/PairedNode.js";
-import { MatterController } from "./MatterController.js";
+import { MatterController, PairedNodeDetails } from "./MatterController.js";
 
 const logger = new Logger("CommissioningController");
 
@@ -120,7 +122,7 @@ export type CommissioningControllerOptions = CommissioningControllerNodeOptions 
      * When used with the new API Environment set the environment here and the CommissioningServer will self-register
      * on the environment when you call start().
      */
-    readonly environment?: ControllerEnvironmentOptions;
+    readonly environment: ControllerEnvironmentOptions;
 
     /**
      * The NodeId of the root node to use for the controller. This is only needed if a special NodeId needs to be used
@@ -139,6 +141,12 @@ export type CommissioningControllerOptions = CommissioningControllerNodeOptions 
      * or stored certificate authority. If provided then rootFabricId, rootFabricIndex and rootFabricLabel are ignored.
      */
     readonly rootFabric?: Fabric;
+
+    /**
+     * Enable the OTA provider endpoint on the controller node. This enabled OTA management and allows connected nodes
+     * to download OTA updates.
+     */
+    readonly enableOtaProvider?: boolean;
 };
 
 /** Options needed to commission a new node */
@@ -160,10 +168,9 @@ export class CommissioningController {
     #id: string;
 
     #environment: Environment; // Set when new API was initialized correctly
-    #storage?: StorageContext;
 
     #controllerInstance?: MatterController;
-    readonly #initializedNodes = new Map<NodeId, PairedNode>();
+    readonly #initializedNodes = new Map<string, PairedNode>();
     readonly #nodeUpdateLabelHandlers = new Map<NodeId, (nodeState: NodeStates) => Promise<void>>();
     readonly #sessionDisconnectedHandler = new Map<NodeId, () => Promise<void>>();
 
@@ -186,6 +193,19 @@ export class CommissioningController {
         this.#crypto.reportUsage();
     }
 
+    /** Returns the controller node instance. Throws an error when called before start() or after close(). */
+    get node(): ServerNode {
+        return this.#assertControllerIsStarted().node;
+    }
+
+    /**
+     * Returns the OTA provider endpoint on the controller node, if enabled and controller node was started.
+     * Else throws an error.
+     */
+    get otaProvider(): Endpoint<OtaProviderEndpoint> {
+        return this.#assertControllerIsStarted().node.endpoints.for("ota-provider") as Endpoint<OtaProviderEndpoint>;
+    }
+
     get crypto() {
         return this.#crypto;
     }
@@ -204,13 +224,6 @@ export class CommissioningController {
             caConfig,
             fabricData,
         };
-    }
-
-    #assertDependencies() {
-        if (this.#storage === undefined && this.#environment === undefined) {
-            throw new ImplementationError("Add the node to the Matter instance before.");
-        }
-        return { storage: this.#storage, environment: this.#environment };
     }
 
     #assertControllerIsStarted(errorText?: string) {
@@ -237,26 +250,13 @@ export class CommissioningController {
             rootNodeId,
             rootCertificateAuthority,
             rootFabric,
+            enableOtaProvider,
         } = this.#options;
-
-        const { storage, environment } = this.#assertDependencies();
 
         // Initialize the Storage in a compatible way for the legacy API and new style for new API
         // TODO: clean this up when we really implement ControllerNode/ClientNode concepts in new API
-        const controllerStore = environment?.has(ControllerStore)
-            ? environment.get(ControllerStore)
-            : new LegacyControllerStore(storage!);
-
         const controller = await MatterController.create({
             id: this.#id,
-            controllerStore,
-            sessionClosedCallback: peerNodeId => {
-                logger.info(`Session for peer node ${peerNodeId} disconnected ...`);
-                const handler = this.#sessionDisconnectedHandler.get(peerNodeId);
-                if (handler !== undefined) {
-                    handler().catch(error => logger.warn(`Error while handling session disconnect: ${error}`));
-                }
-            },
             adminVendorId,
             adminFabricId,
             adminFabricIndex,
@@ -265,17 +265,32 @@ export class CommissioningController {
             rootNodeId,
             rootCertificateAuthority,
             rootFabric,
-            ble: !!(environment?.maybeGet(Ble) ?? Environment.default.maybeGet(Ble)),
+            ble: !!(this.#environment.maybeGet(Ble) ?? Environment.default.maybeGet(Ble)),
             ipv4: !this.#ipv4Disabled,
             listeningAddressIpv4: this.#listeningAddressIpv4,
             listeningAddressIpv6: this.#listeningAddressIpv6,
             localPort,
             environment: this.#environment,
+            enableOtaProvider,
         });
 
         if (!controller.ble) {
             logger.warn("BLE is not enabled on this platform");
         }
+
+        // Start all peers, they should normally not connect automatically
+        // TODO adjust/remove once we have this in Peers
+        for (const peer of controller.node.peers) {
+            if (!peer.lifecycle.isCommissioned) {
+                continue;
+            }
+            if (peer.stateOf(NetworkClient).isDisabled) {
+                await peer.enable();
+            } else {
+                await peer.start();
+            }
+        }
+
         return controller;
     }
 
@@ -294,10 +309,30 @@ export class CommissioningController {
 
         const { connectNodeAfterCommissioning = true, commissioningFlowImpl } = commissionOptions ?? {};
 
+        // IF OTA is enabled on the controller and no custom OTA provider location is provided, set it to the controller node
+        if (
+            this.#options.enableOtaProvider &&
+            nodeOptions.commissioning.otaUpdateProviderLocation === undefined &&
+            this.otaProvider.stateOf(SoftwareUpdateManager).announceAsDefaultProvider
+        ) {
+            nodeOptions.commissioning.otaUpdateProviderLocation = {
+                nodeId: this.fabric.rootNodeId,
+                endpoint: this.otaProvider.number,
+            };
+        }
+
         const nodeId = await controller.commission(nodeOptions, { commissioningFlowImpl });
 
+        // Ensure we have the peer added to the node because commissioning runs aside for now
+        await controller.node.peers.forAddress(controller.fabric.addressOf(nodeId), {
+            network: {
+                autoSubscribe: false,
+                caseAuthenticatedTags: nodeOptions.caseAuthenticatedTags ?? this.#options.caseAuthenticatedTags,
+            },
+        });
+
         if (connectNodeAfterCommissioning) {
-            const node = await this.connectNode(nodeId, {
+            const node = await this.#createPairedNode(nodeId, {
                 ...nodeOptions,
                 autoSubscribe: nodeOptions.autoSubscribe ?? this.#options.autoSubscribe,
                 subscribeMinIntervalFloorSeconds:
@@ -311,7 +346,7 @@ export class CommissioningController {
         return nodeId;
     }
 
-    connectPaseChannel(nodeOptions: NodeCommissioningOptions) {
+    connectPaseChannel(nodeOptions: NodeCommissioningOptions): Promise<NodeSession> {
         const controller = this.#assertControllerIsStarted();
 
         return controller.connectPaseChannel(nodeOptions);
@@ -333,6 +368,15 @@ export class CommissioningController {
         return controller.getCommissionedNodes().includes(nodeId) ?? false;
     }
 
+    #pairedNodeForNodeId(nodeId: NodeId) {
+        const controller = this.#assertControllerIsStarted();
+        const peerId = controller.node.peers.get(controller.fabric.addressOf(nodeId))?.id;
+        if (peerId === undefined) {
+            return undefined;
+        }
+        return this.#initializedNodes.get(peerId);
+    }
+
     /**
      * Remove a Node id from the controller. This method should only be used if the decommission method on the
      * PairedNode instance returns an error. By default, it tries to decommission the node from the controller but will
@@ -343,7 +387,7 @@ export class CommissioningController {
      */
     async removeNode(nodeId: NodeId, tryDecommissioning = true) {
         const controller = this.#assertControllerIsStarted();
-        const node = this.#initializedNodes.get(nodeId);
+        const node = this.#pairedNodeForNodeId(nodeId);
         let decommissionSuccess = false;
         if (tryDecommissioning) {
             try {
@@ -360,16 +404,22 @@ export class CommissioningController {
             node.close(!decommissionSuccess);
         }
         await controller.removeNode(nodeId);
-        this.#initializedNodes.delete(nodeId);
+        if (node !== undefined) {
+            this.#initializedNodes.delete(node.id);
+        }
     }
 
     /** @deprecated Use PairedNode.disconnect() instead */
     async disconnectNode(nodeId: NodeId, force = false) {
-        const node = this.#initializedNodes.get(nodeId);
+        const node = this.#pairedNodeForNodeId(nodeId);
         if (node === undefined && !force) {
             throw new ImplementationError(`Node ${nodeId} is not connected!`);
         }
         await this.#controllerInstance?.disconnect(nodeId);
+        if (force) {
+            const peer = this.node.env.get(PeerSet).for(this.fabric.addressOf(nodeId));
+            await peer.delete();
+        }
     }
 
     /**
@@ -377,11 +427,11 @@ export class CommissioningController {
      * created.
      */
     async getNode(nodeId: NodeId, allowUnknownNode = false) {
-        const existingNode = this.#initializedNodes.get(nodeId);
+        const existingNode = this.#pairedNodeForNodeId(nodeId);
         if (existingNode !== undefined) {
             return existingNode;
         }
-        return await this.connectNode(nodeId, { autoConnect: false }, allowUnknownNode);
+        return await this.#createPairedNode(nodeId, { autoConnect: false }, allowUnknownNode);
     }
 
     /**
@@ -392,16 +442,23 @@ export class CommissioningController {
      *
      * @deprecated Use getNode() instead and call PairedNode.connect() or PairedNode.disconnect() as needed.
      */
-    async connectNode(nodeId: NodeId, connectOptions?: CommissioningControllerNodeOptions, allowUnknownNode = false) {
+    connectNode(nodeId: NodeId, connectOptions?: CommissioningControllerNodeOptions, allowUnknownNode = false) {
+        return this.#createPairedNode(nodeId, connectOptions, allowUnknownNode);
+    }
+
+    async #createPairedNode(
+        nodeId: NodeId,
+        connectOptions?: CommissioningControllerNodeOptions,
+        allowUnknownNode = false,
+    ) {
         const controller = this.#assertControllerIsStarted();
 
-        logger.info(`Connecting to node ${nodeId}...`);
         const nodeIsCommissioned = controller.getCommissionedNodes().includes(nodeId);
         if (!nodeIsCommissioned && !allowUnknownNode) {
             throw new ImplementationError(`Node ${nodeId} is not commissioned!`);
         }
 
-        const existingNode = this.#initializedNodes.get(nodeId);
+        const existingNode = this.#pairedNodeForNodeId(nodeId);
         if (existingNode !== undefined) {
             if (!existingNode.initialized) {
                 existingNode.connect(connectOptions);
@@ -409,16 +466,40 @@ export class CommissioningController {
             return existingNode;
         }
 
+        logger.info(`Connecting to node ${nodeId}...`);
+        const peerAddress = controller.fabric.addressOf(nodeId);
+
+        let peerNode = this.node.peers.get(peerAddress);
+        if (peerNode === undefined) {
+            if (allowUnknownNode) {
+                peerNode = await this.node.peers.forAddress(peerAddress, {
+                    network: {
+                        autoSubscribe: false,
+                        caseAuthenticatedTags:
+                            connectOptions?.caseAuthenticatedTags ?? this.#options.caseAuthenticatedTags,
+                    },
+                });
+            } else {
+                throw new ImplementationError(`Node ${nodeId} is no known peer to the controller`);
+            }
+        }
+
+        if (peerNode.stateOf(NetworkClient).isDisabled) {
+            await peerNode.enable();
+        } else {
+            await peerNode.start();
+        }
+
         const { caseAuthenticatedTags = this.#options.caseAuthenticatedTags } = connectOptions ?? {};
         const pairedNode = await PairedNode.create(
             nodeId,
             this,
             connectOptions,
-            nodeIsCommissioned ? (this.#controllerInstance?.getCommissionedNodeDetails(nodeId)?.deviceData ?? {}) : {},
+            peerNode,
             await this.createInteractionClient(nodeId, NodeDiscoveryType.None, {
                 forcedConnection: false,
                 caseAuthenticatedTags,
-            }), // First connect without discovery to last known address
+            }), // First, connect without discovery to the last known address
             async (discoveryType?: NodeDiscoveryType) =>
                 void (await controller.connect(nodeId, {
                     discoveryOptions: { discoveryType },
@@ -428,28 +509,10 @@ export class CommissioningController {
             handler => this.#sessionDisconnectedHandler.set(nodeId, handler),
             controller.sessions,
             this.#crypto,
-            await this.#collectStoredAttributeData(nodeId),
         );
-        this.#initializedNodes.set(nodeId, pairedNode);
-
-        pairedNode.events.initializedFromRemote.on(
-            async deviceData => await controller.enhanceCommissionedNodeDetails(nodeId, deviceData),
-        );
-        pairedNode.events.deviceInformationChanged.on(
-            async deviceData => await controller.enhanceCommissionedNodeDetails(nodeId, deviceData),
-        );
+        this.#initializedNodes.set(peerNode.id, pairedNode);
 
         return pairedNode;
-    }
-
-    async #collectStoredAttributeData(nodeId: NodeId): Promise<DecodedAttributeReportValue<any>[]> {
-        const controller = this.#assertControllerIsStarted();
-        const storedDataVersions = await controller.getStoredClusterDataVersions(nodeId);
-        const result = new Array<DecodedAttributeReportValue<any>>();
-        for (const { endpointId, clusterId } of storedDataVersions) {
-            result.push(...(await controller.retrieveStoredAttributes(nodeId, endpointId, clusterId)));
-        }
-        return result;
     }
 
     /**
@@ -468,7 +531,7 @@ export class CommissioningController {
         }
 
         for (const nodeId of controller.getCommissionedNodes()) {
-            await this.connectNode(nodeId, connectOptions);
+            await this.#createPairedNode(nodeId, connectOptions);
         }
         return Array.from(this.#initializedNodes.values());
     }
@@ -485,23 +548,28 @@ export class CommissioningController {
      * not be used directly. See the PairedNode class for the public API.
      */
     async createInteractionClient(
-        nodeIdOrChannel: NodeId | MessageChannel,
+        nodeIdOrSession: NodeId | SecureSession,
         discoveryType?: NodeDiscoveryType,
         options?: {
+            discoveryTimeout?: Duration;
             forcedConnection?: boolean;
             caseAuthenticatedTags?: CaseAuthenticatedTag[];
         },
     ): Promise<InteractionClient> {
         const controller = this.#assertControllerIsStarted();
-        const { forcedConnection, caseAuthenticatedTags = this.#options.caseAuthenticatedTags } = options ?? {};
-        if (nodeIdOrChannel instanceof MessageChannel || !forcedConnection) {
-            return controller.createInteractionClient(nodeIdOrChannel, {
-                discoveryOptions: { discoveryType },
+        const {
+            forcedConnection,
+            caseAuthenticatedTags = this.#options.caseAuthenticatedTags,
+            discoveryTimeout,
+        } = options ?? {};
+        if (nodeIdOrSession instanceof Session || !forcedConnection) {
+            return controller.createInteractionClient(nodeIdOrSession, {
+                discoveryOptions: { discoveryType, timeout: discoveryTimeout },
                 caseAuthenticatedTags,
             });
         }
-        return controller.connect(nodeIdOrChannel, {
-            discoveryOptions: { discoveryType },
+        return controller.connect(nodeIdOrSession, {
+            discoveryOptions: { discoveryType, timeout: discoveryTimeout },
             allowUnknownPeer: forcedConnection,
             caseAuthenticatedTags,
         });
@@ -512,7 +580,7 @@ export class CommissioningController {
      * @deprecated Use getNode() instead
      */
     getPairedNode(nodeId: NodeId) {
-        return this.#initializedNodes.get(nodeId);
+        return this.#pairedNodeForNodeId(nodeId);
     }
 
     /** Returns an array with the NodeIds of all commissioned nodes. */
@@ -522,8 +590,8 @@ export class CommissioningController {
         return controller.getCommissionedNodes() ?? [];
     }
 
-    /** Returns an arra with all commissioned NodeIds and their metadata. */
-    getCommissionedNodesDetails() {
+    /** Returns an array with all commissioned NodeIds and their metadata. */
+    getCommissionedNodesDetails(): PairedNodeDetails[] {
         const controller = this.#assertControllerIsStarted();
 
         return controller.getCommissionedNodesDetails() ?? [];
@@ -563,14 +631,6 @@ export class CommissioningController {
         this.#ipv4Disabled = ipv4Disabled;
     }
 
-    /** @private */
-    async initializeControllerStore() {
-        // This can only happen if "MatterServer" approach is not used
-
-        const controllerStore = await ControllerStore.create(this.#environment.name, this.#environment);
-        this.#environment.set(ControllerStore, controllerStore);
-    }
-
     get env() {
         return this.#environment;
     }
@@ -581,9 +641,6 @@ export class CommissioningController {
     async start() {
         if (this.#ipv4Disabled === undefined) {
             const env = this.#environment;
-            if (!env.has(ControllerStore)) {
-                await this.initializeControllerStore();
-            }
 
             this.#environment = env;
             const runtime = env.runtime;
@@ -596,6 +653,19 @@ export class CommissioningController {
         }
 
         await this.#controllerInstance.start();
+
+        this.#controllerInstance.node.env.get(SessionManager).sessions.deleted.on(session => {
+            if (!session.isSecure) {
+                return;
+            }
+            const { peerNodeId } = session;
+            logger.info(`Session for peer node ${peerNodeId} disconnected ...`);
+            const handler = this.#sessionDisconnectedHandler.get(peerNodeId);
+            if (handler !== undefined) {
+                handler().catch(error => logger.warn(`Error while handling session disconnect: ${error}`));
+            }
+        });
+
         if (this.#options.autoConnect !== false && this.#controllerInstance.isCommissioned()) {
             await this.connect();
         }
@@ -644,15 +714,7 @@ export class CommissioningController {
                 "Storage cannot be reset while the controller is operating! Please close the controller first.",
             );
         }
-        const { storage, environment } = this.#assertDependencies();
-        if (environment !== undefined) {
-            const controllerStore = environment.get(ControllerStore);
-            await controllerStore.erase();
-        } else if (storage !== undefined) {
-            await storage.clearAll();
-        } else {
-            throw new InternalError("Storage not initialized correctly."); // Should not happen
-        }
+        await this.node.erase(); // TODO check if that's correct
     }
 
     /** Returns active session information for all connected nodes. */
@@ -663,7 +725,7 @@ export class CommissioningController {
     /** @private */
     async validateAndUpdateFabricLabel(nodeId: NodeId) {
         const controller = this.#assertControllerIsStarted();
-        const node = this.#initializedNodes.get(nodeId);
+        const node = this.#pairedNodeForNodeId(nodeId);
         if (node === undefined) {
             throw new ImplementationError(`Node ${nodeId} is not connected!`);
         }
@@ -740,6 +802,11 @@ export class CommissioningController {
 
     get groups(): FabricGroups {
         const controllerInstance = this.#assertControllerIsStarted();
-        return controllerInstance.getFabrics()[0].groups;
+        return controllerInstance.fabric.groups;
+    }
+
+    get fabric(): Fabric {
+        const controllerInstance = this.#assertControllerIsStarted();
+        return controllerInstance.fabric;
     }
 }

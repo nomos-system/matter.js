@@ -17,12 +17,13 @@ import { MutableEndpoint } from "#endpoint/type/MutableEndpoint.js";
 import {
     Construction,
     Diagnostic,
+    DiagnosticPresentation,
     DiagnosticSource,
     Environment,
     Identity,
     ImplementationError,
     Logger,
-    RuntimeService,
+    MatterError,
 } from "#general";
 import { Interactable } from "#protocol";
 import type { EndpointNumber } from "#types";
@@ -40,6 +41,8 @@ const logger = Logger.get("Node");
 export abstract class Node<T extends Node.CommonRootEndpoint = Node.CommonRootEndpoint> extends Endpoint<T> {
     #environment: Environment;
     #runtime?: NetworkRuntime;
+    #startInProgress = false;
+    #closeInProgress = false;
 
     constructor(config: Node.Configuration<T>) {
         const parentEnvironment = config.environment ?? config.owner?.env ?? Environment.default;
@@ -96,12 +99,21 @@ export abstract class Node<T extends Node.CommonRootEndpoint = Node.CommonRootEn
      * Bring the node online.
      */
     async start() {
-        if (this.lifecycle.isOnline) {
+        if (this.lifecycle.isOnline || this.#startInProgress) {
             return;
         }
-        this.lifecycle.targetState = "online";
 
-        await this.lifecycle.mutex.produce(this.startWithMutex.bind(this));
+        this.#startInProgress = true;
+        try {
+            this.lifecycle.targetState = "online";
+
+            await this.lifecycle.mutex.produce(this.startWithMutex.bind(this));
+        } catch (error) {
+            this.lifecycle.targetState = "offline";
+            throw error;
+        } finally {
+            this.#startInProgress = false;
+        }
     }
 
     protected async startWithMutex() {
@@ -122,6 +134,19 @@ export abstract class Node<T extends Node.CommonRootEndpoint = Node.CommonRootEn
             await this.#runtime.construction.ready;
             await this.act("network startup", agent => agent.get(NetworkBehavior).startup());
         } catch (e) {
+            // If a runtime instance got created, tear it down
+            if (this.#runtime) {
+                this.#environment.delete(NetworkRuntime, this.#runtime);
+                try {
+                    await this.#runtime.close();
+                } catch (error) {
+                    MatterError.accept(error);
+                    // Ignore all errors that might, likely we cannot tear down because construction never completed
+                    logger.info("Failed to tear down runtime", error.message);
+                }
+                this.#runtime = undefined;
+                this.behaviors.internalsOf(NetworkBehavior).runtime = undefined;
+            }
             this.env.runtime.delete(this);
             throw e;
         }
@@ -176,8 +201,17 @@ export abstract class Node<T extends Node.CommonRootEndpoint = Node.CommonRootEn
     }
 
     override async close() {
-        this.lifecycle.targetState = "offline";
-        await this.lifecycle.mutex.produce(this.closeWithMutex.bind(this));
+        if (this.#closeInProgress) {
+            return;
+        }
+        this.#closeInProgress = true;
+        try {
+            this.lifecycle.targetState = "offline";
+            await this.lifecycle.mutex.close();
+            await this.closeWithMutex();
+        } finally {
+            this.#closeInProgress = false;
+        }
     }
 
     protected async closeWithMutex() {
@@ -210,7 +244,7 @@ export abstract class Node<T extends Node.CommonRootEndpoint = Node.CommonRootEn
 
     protected abstract prepareRuntimeShutdown(): Promise<void>;
 
-    get [RuntimeService.label]() {
+    get [DiagnosticPresentation.name]() {
         return ["Runtime for", Diagnostic.strong(this.toString())];
     }
 
@@ -239,6 +273,7 @@ export abstract class Node<T extends Node.CommonRootEndpoint = Node.CommonRootEn
         await this.cancelWithMutex();
         await super[Construction.destruct]();
         DiagnosticSource.delete(this);
+        this.#environment[Symbol.dispose]();
     }
 }
 

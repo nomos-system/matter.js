@@ -4,14 +4,25 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { ClusterBehavior } from "#behavior/cluster/ClusterBehavior.js";
+import { GlobalAttributeState } from "#behavior/cluster/ClusterState.js";
 import { DiscoveryError } from "#behavior/system/controller/discovery/DiscoveryError.js";
+import { NetworkClient } from "#behavior/system/network/NetworkClient.js";
 import { BasicInformationBehavior } from "#behaviors/basic-information";
 import { IdentifyClient } from "#behaviors/identify";
 import { OnOffClient } from "#behaviors/on-off";
+import { WindowCoveringClient, WindowCoveringServer } from "#behaviors/window-covering";
 import { OnOffLightDevice } from "#devices/on-off-light";
+import { WindowCoveringDevice } from "#devices/window-covering";
 import { Endpoint } from "#endpoint/Endpoint.js";
-import { b$, deepCopy, Seconds, Time, TimeoutError } from "#general";
+import { AggregatorEndpoint } from "#endpoints/aggregator";
+import { b$, Crypto, deepCopy, Entropy, MockCrypto, Observable, Seconds, Time, TimeoutError } from "#general";
 import { Specification } from "#model";
+import { ClientStructureEvents } from "#node/client/ClientStructureEvents.js";
+import { ServerNode } from "#node/ServerNode.js";
+import { ClientSubscription, FabricManager, SustainedSubscription, Val } from "#protocol";
+import { WindowCovering } from "@matter/types/clusters/window-covering";
+import { MyBehavior } from "../behavior/cluster/cluster-behavior-test-util.js";
 import { MockSite } from "./mock-site.js";
 
 describe("ClientNode", () => {
@@ -73,7 +84,7 @@ describe("ClientNode", () => {
         expect(peer1).not.undefined;
 
         // Validate the root endpoint
-        expect(Object.keys(peer1.state)).deep.equals(Object.keys(PEER1_STATE));
+        expect(Object.keys(peer1.state).sort()).deep.equals(Object.keys(PEER1_STATE).sort());
         for (const key in peer1.state) {
             const actual = (peer1.state as Record<string, unknown>)[key];
             const expected = (PEER1_STATE as Record<string, unknown>)[key];
@@ -101,7 +112,7 @@ describe("ClientNode", () => {
         expect(peer1b).not.undefined;
 
         // Client nodes should fully initialize on initial load.  We could initialize asynchronously during ServerNode
-        // initialization but currently we don't
+        // initialization, but currently we don't
         expect(peer1b.construction.status).equals("active");
 
         // Validate the root endpoint
@@ -113,7 +124,11 @@ describe("ClientNode", () => {
         expect(ep1b).not.undefined;
         expect(ep1b.construction.status).equals("active");
         expect(ep1b.state).deep.equals(expectedEp1State);
-    }).timeout(1e9);
+    });
+
+    it("commissions and reconnects endpoints after commissioning and restart", () => {
+        // TODO
+    });
 
     it("invokes, receives state updates and emits changed events", async () => {
         // *** SETUP ***
@@ -136,6 +151,9 @@ describe("ClientNode", () => {
         // *** UPDATE ***
 
         await MockTime.resolve(receivedUpdate);
+
+        // *** Test other command which is also in the featureset ***
+        await ep1.commandsOf(OnOffClient).offWithEffect({ effectIdentifier: 0, effectVariant: 0 });
     });
 
     it("decommissions", async () => {
@@ -149,7 +167,7 @@ describe("ClientNode", () => {
 
         // *** DECOMMISSION ***
 
-        await Promise.resolve(controller.peers.get("peer1")!.delete());
+        await MockTime.resolve(controller.peers.get("peer1")!.decommission());
 
         expect(controller.peers.size).equals(0);
         expect(device.lifecycle.isCommissioned).is.false;
@@ -202,16 +220,76 @@ describe("ClientNode", () => {
 
         // *** INVOKE ***
 
-        const toggle = MockTime.resolve(ep1.commandsOf(OnOffClient).toggle());
+        // We detected tge device as offline, and so we get a failure on execution
+        await expect(MockTime.resolve(ep1.commandsOf(OnOffClient).toggle())).rejectedWith(TimeoutError);
 
         // Delay
         await MockTime.resolve(Time.sleep("waiting to start device", Seconds(5)));
 
-        // Bring device online
+        // Bring the device online again
         await MockTime.resolve(device.start());
 
         // Toggle should now complete
-        await MockTime.resolve(toggle);
+        await MockTime.resolve(ep1.commandsOf(OnOffClient).toggle());
+    });
+
+    it("resubscribes on timeout", async () => {
+        // *** SETUP ***
+
+        await using site = new MockSite();
+        const { controller, device } = await site.addCommissionedPair();
+        const peer1 = controller.peers.get("peer1")!;
+        const ep1 = peer1.parts.get("ep1")!;
+
+        // *** INITIAL SUBSCRIPTION ***
+
+        const subscription = peer1.behaviors.internalsOf(NetworkClient).activeSubscription!;
+        expect(subscription).not.undefined;
+        const initialSubscriptionId = subscription.subscriptionId;
+        expect(initialSubscriptionId).not.equals(ClientSubscription.NO_SUBSCRIPTION);
+
+        SustainedSubscription.assert(subscription);
+        expect(subscription.active.value).equals(true);
+
+        // *** SUBSCRIPTION TIMEOUT ***
+
+        // Close peer
+        await MockTime.resolve(device.cancel());
+
+        // Wait for subscription to timeout
+        await MockTime.resolve(subscription.inactive);
+
+        // Ensure subscription ID is gone
+        expect(subscription.subscriptionId).equals(ClientSubscription.NO_SUBSCRIPTION);
+
+        // *** NEW SUBSCRIPTION ***
+
+        // Need entropy for this bit so we can verify we have a new subscription ID
+        const crypto = device.env.get(Crypto) as MockCrypto;
+        crypto.entropic = true;
+
+        // Bring peer back online
+        await MockTime.resolve(device.start());
+
+        // Wait for subscription to establish
+        await MockTime.resolve(subscription.active);
+        crypto.entropic = false;
+
+        expect(subscription.subscriptionId).not.equals(ClientSubscription.NO_SUBSCRIPTION);
+        expect(subscription.subscriptionId).not.equals(initialSubscriptionId);
+
+        // *** CONFIRM SUBSCRIPTION FUNCTIONS ***
+
+        expect(ep1.stateOf(OnOffClient).onOff).false;
+        const toggled = new Promise(resolve => {
+            ep1.eventsOf(OnOffClient).onOff$Changed.once(resolve);
+        });
+
+        await ep1.commandsOf(OnOffClient).toggle();
+
+        await MockTime.resolve(toggled);
+
+        expect(ep1.stateOf(OnOffClient).onOff).true;
     });
 
     it("emits Matter events", async () => {
@@ -236,15 +314,228 @@ describe("ClientNode", () => {
         expect(payload).deep.equals({ softwareVersion: 12 });
     });
 
-    it("detects lack of ping and reestablishes connection", async () => {
-        // TODO
+    it("handles endpoints that appear and disappear", async () => {
+        // *** SETUP ***
+
+        await using site = new MockSite();
+        const { controller, device } = await site.addCommissionedPair({
+            device: {
+                type: ServerNode.RootEndpoint,
+                parts: [
+                    {
+                        id: "aggregator",
+                        type: AggregatorEndpoint,
+                    },
+                ],
+            },
+        });
+        const peer1 = controller.peers.get("peer1")!;
+
+        const aggregatorServer = device.parts.get("aggregator")!;
+        expect(aggregatorServer).not.undefined;
+        expect(aggregatorServer.parts.size).equals(0);
+
+        const aggregatorClient = peer1.parts.get("ep1")!;
+        expect(aggregatorClient).not.undefined;
+        expect(aggregatorClient.type.deviceType).equals(AggregatorEndpoint.deviceType);
+        expect(aggregatorClient.parts.size).equals(0);
+
+        // *** ADD ENDPOINT ***
+
+        const added = Promise.resolve(aggregatorClient.parts.added);
+        const lightServer = new Endpoint(OnOffLightDevice);
+        await aggregatorServer.add(lightServer);
+
+        const lightClient = await MockTime.resolve(added);
+        expect(lightClient.number).equals(lightServer.number);
+        expect(lightClient.type.deviceType).equals(OnOffLightDevice.deviceType);
+
+        // *** DELETE ENDPOINT ***
+
+        const deleted = Promise.resolve(lightClient.lifecycle.destroyed);
+        await lightServer.delete();
+        await MockTime.resolve(deleted);
+        expect(aggregatorClient.parts.size).equals(0);
     });
+
+    it("erases node after leave event", async () => {
+        // *** SETUP ***
+
+        await using site = new MockSite();
+        const { controller, device } = await site.addCommissionedPair();
+        const peer1 = controller.peers.get("peer1")!;
+
+        // *** CONFIRM FABRIC IDENTITY ***
+
+        const deviceFabric = device.env.get(FabricManager).fabrics[0];
+        expect(deviceFabric).not.undefined;
+        const controllerFabric = controller.env.get(FabricManager).fabrics[0];
+        expect(controllerFabric).not.undefined;
+        expect(deviceFabric.fabricId).equals(controllerFabric.fabricId);
+
+        // *** LEAVE FABRIC ON PEER ***
+
+        const deleted = Promise.resolve(peer1.lifecycle.destroyed);
+        await deviceFabric.leave();
+
+        // *** NOTE DELETION ON CONTROLLER ***
+
+        await MockTime.resolve(deleted);
+        expect(controller.peers.size).equals(0);
+    });
+
+    it("invokes command on an undiscovered peer", async () => {
+        // *** SETUP ***
+
+        await using site = new MockSite();
+        const { controller } = await site.addCommissionedPair();
+
+        const peer1 = controller.peers.get("peer1")!;
+        expect(peer1).not.undefined;
+
+        const peerAddress = deepCopy(peer1.state.commissioning.peerAddress);
+        expect(peerAddress).not.undefined;
+
+        await MockTime.resolve(controller.peers.get("peer1")!.delete());
+        expect(controller.peers.size).equals(0);
+
+        const peer = await controller.peers.forAddress(peerAddress!);
+        const ep1 = peer.endpoints.require(1);
+        ep1.behaviors.require(OnOffClient);
+
+        // *** INVOCATION ***
+
+        await MockTime.resolve(ep1.commandsOf(OnOffClient).toggle());
+
+        await MockTime.resolve(ep1.commandsOf(OnOffClient).offWithEffect({ effectIdentifier: 0, effectVariant: 0 }));
+    });
+
+    it("properly supports unknown clusters", async () => {
+        // *** SETUP ***
+
+        await using site = new MockSite();
+        let { controller } = await site.addCommissionedPair({
+            device: {
+                type: ServerNode.RootEndpoint.with(MyBehavior),
+            },
+        });
+
+        // *** VERIFY STRUCTURE ***
+
+        verifyStructure();
+
+        // *** RECREATE CONTROLLER ***
+
+        await MockTime.resolve(controller.close());
+        controller = await site.addController({ index: 1 });
+
+        // *** REVERIFY STRUCTURE ***
+
+        verifyStructure();
+
+        function verifyStructure() {
+            const peer = controller.peers.get("peer1")!;
+
+            const behavior = peer.behaviors.supported.cluster$1;
+            expect(typeof behavior).equals("function");
+            expect((behavior as ClusterBehavior.Type).schema.id).equals(1);
+            expect((behavior as ClusterBehavior.Type).cluster.id).equals(1);
+
+            const state = peer.maybeStateOf("cluster$1");
+            expect(typeof state).equals("object");
+            expect((state as Val.Struct)[1]).equals("hello");
+            expect((state as Val.Struct).attr$1).equals("hello");
+        }
+    });
+
+    it("correctly replaces behavior", async () => {
+        // *** SETUP ***
+
+        const LiftWc = WindowCoveringServer.with("AbsolutePosition", "Lift", "PositionAwareLift").set({
+            currentPositionLift: 0,
+        });
+
+        await using site = new MockSite();
+        const { controller, device } = await site.addCommissionedPair({
+            device: {
+                type: ServerNode.RootEndpoint,
+                device: WindowCoveringDevice.with(LiftWc),
+            },
+        });
+
+        const peer1 = controller.peers.get("peer1")!;
+        expect(peer1).not.undefined;
+
+        const clientEp1 = peer1.parts.get("ep1")!;
+        expect(clientEp1).not.undefined;
+
+        const liftChanged = new Observable<[value: number | null]>();
+        const lift$Changed = clientEp1.eventsOf(WindowCoveringClient).currentPositionLift$Changed!;
+        expect(lift$Changed).not.undefined;
+        lift$Changed.on(value => liftChanged.emit(value));
+
+        // *** VALIDATE SETUP ***
+
+        const serverEp1 = device.parts.get("part0")!;
+        expect(serverEp1).not.undefined;
+
+        let sawChange = new Promise<number | null>(resolve => liftChanged.once(resolve));
+        await serverEp1.setStateOf(WindowCoveringClient, { currentPositionLift: 6 });
+
+        let newValue = await MockTime.resolve(sawChange);
+        expect(newValue).equals(6);
+
+        // *** REPLACE CLUSTER ***
+
+        await MockTime.resolve(device.cancel());
+
+        await serverEp1.erase();
+
+        const LiftTiltWc = WindowCoveringServer.with(
+            "AbsolutePosition",
+            "Lift",
+            "PositionAwareLift",
+            "Tilt",
+            "PositionAwareTilt",
+        ).set({
+            type: WindowCovering.WindowCoveringType.Unknown,
+            currentPositionLift: 0,
+            currentPositionTilt: 0,
+        });
+
+        // Nudge so version number changes, otherwise new endpoint won't sync
+        device.env.set(Entropy, MockCrypto(0x20));
+
+        const serverEp1b = await device.add({
+            type: WindowCoveringDevice.with(LiftTiltWc),
+            number: 1,
+            id: "part0b",
+        });
+
+        const replaced = new Promise(resolve => peer1.env.get(ClientStructureEvents).clusterReplaced.on(resolve));
+
+        await MockTime.resolve(device.start());
+
+        // *** VALIDATE ***
+
+        await MockTime.resolve(replaced);
+
+        expect((clientEp1.stateOf(WindowCoveringClient) as unknown as GlobalAttributeState).featureMap).deep.equals({
+            absolutePosition: true,
+            lift: true,
+            positionAwareLift: true,
+            tilt: true,
+            positionAwareTilt: true,
+        });
+
+        sawChange = new Promise<number | null>(resolve => liftChanged.once(resolve));
+        await serverEp1b.setStateOf(WindowCoveringClient, { currentPositionLift: 12 });
+
+        newValue = await MockTime.resolve(sawChange);
+        expect(newValue).equals(12);
+    }).timeout(1e9);
 
     it("handles shutdown event and reestablishes connection", () => {
-        // TODO
-    });
-
-    it("removes node after leave event", () => {
         // TODO
     });
 
@@ -282,8 +573,8 @@ const PEER1_STATE = {
         discoveredAt: expect.NUMBER,
         onlineAt: undefined,
         offlineAt: undefined,
-        ttl: undefined,
-        deviceIdentifier: "0202020202020202",
+        ttl: 120000,
+        deviceIdentifier: expect.STRING,
         discriminator: 0x202,
         commissioningMode: 1,
         vendorId: 0xfff1,
@@ -297,12 +588,13 @@ const PEER1_STATE = {
         tcpSupport: 0,
     },
     network: {
+        autoSubscribe: true,
         isDisabled: false,
         port: 0x15a4,
         operationalPort: -1,
         defaultSubscription: undefined,
         caseAuthenticatedTags: undefined,
-        autoSubscribe: true,
+        maxEventNumber: 3n,
     },
     basicInformation: {
         clusterRevision: 5,
@@ -422,8 +714,8 @@ const PEER1_STATE = {
         featureMap: {},
         attributeList: [0, 1, 2, 3, 4, 5, 0xfffd, 0xfffc, 0xfffb, 0xfff9, 0xfff8],
         eventList: undefined,
-        acceptedCommandList: [0, 2, 4, 6, 7, 9, 10, 0xb],
-        generatedCommandList: [1, 3, 5, 8],
+        acceptedCommandList: [0, 2, 4, 6, 7, 9, 10, 0xb, 0xc, 0xd],
+        generatedCommandList: [1, 3, 5, 8, 0xe],
     },
     generalDiagnostics: {
         clusterRevision: 2,
@@ -518,15 +810,15 @@ const EP1_STATE = {
         generatedCommandList: [],
     },
     scenesManagement: {
-        acceptedCommandList: [],
+        acceptedCommandList: [0, 1, 2, 3, 4, 5, 6, 64],
         attributeList: [1, 2, 0xfffd, 0xfffc, 0xfffb, 0xfff9, 0xfff8],
         clusterRevision: 1,
         fabricSceneInfo: [],
         featureMap: {
-            sceneNames: false,
+            sceneNames: true,
         },
-        generatedCommandList: [],
-        sceneTableSize: 0,
+        generatedCommandList: [0, 1, 2, 3, 4, 6, 64],
+        sceneTableSize: 128,
         doNotUse: undefined,
         eventList: undefined,
     },

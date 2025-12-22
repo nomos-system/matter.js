@@ -6,46 +6,40 @@
 
 import { Subject } from "#action/server/Subject.js";
 import { DecodedMessage, DecodedPacket, Message, MessageCodec, Packet, SessionType } from "#codec/MessageCodec.js";
+import { Mark } from "#common/Mark.js";
 import { Fabric } from "#fabric/Fabric.js";
 import {
+    AsyncObservableValue,
     BasicSet,
     Bytes,
     CRYPTO_SYMMETRIC_KEY_LENGTH,
     Crypto,
     Diagnostic,
     Duration,
+    InternalError,
     Logger,
-    MatterError,
     MatterFlowError,
+    hex,
 } from "#general";
-import type { Subscription } from "#interaction/Subscription.js";
+import { Subscription } from "#interaction/Subscription.js";
 import { PeerAddress } from "#peer/PeerAddress.js";
+import { NoAssociatedFabricError } from "#protocol/errors.js";
 import { MessageCounter } from "#protocol/MessageCounter.js";
+import { MessageExchange } from "#protocol/MessageExchange.js";
 import { MessageReceptionStateEncryptedWithoutRollover } from "#protocol/MessageReceptionState.js";
 import { SecureChannelMessenger } from "#securechannel/SecureChannelMessenger.js";
-import { CaseAuthenticatedTag, FabricIndex, NodeId, StatusCode, StatusResponseError } from "#types";
+import { CaseAuthenticatedTag, FabricIndex, GlobalFabricId, NodeId } from "#types";
 import { SecureSession } from "./SecureSession.js";
-import { Session, SessionParameterOptions } from "./Session.js";
-import type { SessionManager } from "./SessionManager.js";
+import { Session } from "./Session.js";
+import { SessionParameters } from "./SessionParameters.js";
 
 const logger = Logger.get("SecureSession");
 
 const SESSION_KEYS_INFO = Bytes.fromString("SessionKeys");
 const SESSION_RESUMPTION_KEYS_INFO = Bytes.fromString("SessionResumptionKeys");
 
-export class NoChannelError extends MatterError {}
-
-export class NoAssociatedFabricError extends StatusResponseError {
-    constructor(message: string) {
-        super(message, StatusCode.UnsupportedAccess);
-    }
-}
-
 export class NodeSession extends SecureSession {
     readonly #crypto: Crypto;
-    readonly #subscriptions = new BasicSet<Subscription>();
-    #closingAfterExchangeFinished = false;
-    #sendCloseMessageWhenClosing = true;
     readonly #id: number;
     readonly #isInitiator: boolean;
     #fabric: Fabric | undefined;
@@ -55,40 +49,23 @@ export class NodeSession extends SecureSession {
     readonly #encryptKey: Bytes;
     readonly #attestationKey: Bytes;
     #caseAuthenticatedTags: CaseAuthenticatedTag[];
-    #isClosing = false;
     readonly supportsMRP = true;
     readonly type = SessionType.Unicast;
+    readonly #closedByPeer = AsyncObservableValue();
+    #isPeerLost = false;
 
-    static async create(args: {
-        crypto: Crypto;
-        manager?: SessionManager;
-        id: number;
-        fabric: Fabric | undefined;
-        peerNodeId: NodeId;
-        peerSessionId: number;
-        sharedSecret: Bytes;
-        salt: Bytes;
-        isInitiator: boolean;
-        isResumption: boolean;
-        peerSessionParameters?: SessionParameterOptions;
-        caseAuthenticatedTags?: CaseAuthenticatedTag[];
-    }) {
-        const {
-            crypto,
-            manager,
-            id,
-            fabric,
-            peerNodeId,
-            peerSessionId,
-            sharedSecret,
-            salt,
-            isInitiator,
-            isResumption,
-            peerSessionParameters,
-            caseAuthenticatedTags,
-        } = args;
+    // TODO - remove this; subscriptions should be owned by the peer, not the session
+    readonly #subscriptions = new BasicSet<Subscription>();
+
+    static async create(config: NodeSession.CreateConfig) {
+        const { manager, sharedSecret, salt, isResumption, peerSessionParameters, isInitiator } = config;
+
+        if (manager) {
+            await manager.construction;
+        }
+
         const keys = Bytes.of(
-            await args.crypto.createHkdfKey(
+            await config.crypto.createHkdfKey(
                 sharedSecret,
                 salt,
                 isResumption ? SESSION_RESUMPTION_KEYS_INFO : SESSION_KEYS_INFO,
@@ -98,36 +75,17 @@ export class NodeSession extends SecureSession {
         const decryptKey = isInitiator ? keys.slice(16, 32) : keys.slice(0, 16);
         const encryptKey = isInitiator ? keys.slice(0, 16) : keys.slice(16, 32);
         const attestationKey = keys.slice(32, 48);
-        return new NodeSession({
-            crypto,
-            manager,
-            id,
-            fabric,
-            peerNodeId,
-            peerSessionId,
+
+        return new this({
+            ...config,
             decryptKey,
             encryptKey,
             attestationKey,
             sessionParameters: peerSessionParameters,
-            isInitiator,
-            caseAuthenticatedTags,
         });
     }
 
-    constructor(args: {
-        crypto: Crypto;
-        manager?: SessionManager;
-        id: number;
-        fabric: Fabric | undefined;
-        peerNodeId: NodeId;
-        peerSessionId: number;
-        decryptKey: Bytes;
-        encryptKey: Bytes;
-        attestationKey: Bytes;
-        sessionParameters?: SessionParameterOptions;
-        caseAuthenticatedTags?: CaseAuthenticatedTag[];
-        isInitiator: boolean;
-    }) {
+    constructor(config: NodeSession.Config) {
         const {
             crypto,
             manager,
@@ -140,16 +98,18 @@ export class NodeSession extends SecureSession {
             attestationKey,
             caseAuthenticatedTags,
             isInitiator,
-        } = args;
+        } = config;
 
         super({
-            ...args,
+            ...config,
             setActiveTimestamp: true, // We always set the active timestamp for Secure sessions
             // Can be changed to a PersistedMessageCounter if we implement session storage
-            messageCounter: new MessageCounter(crypto, () => {
+            messageCounter: new MessageCounter(crypto, async () => {
                 // Secure Session Message Counter
                 // Expire/End the session before the counter rolls over
-                this.end(true, true).catch(error => logger.error(`Error while closing session: ${error}`));
+                await this.initiateClose(async () => {
+                    await this.closeSubscriptions(true);
+                });
             }),
             messageReceptionState: new MessageReceptionStateEncryptedWithoutRollover(),
         });
@@ -170,7 +130,7 @@ export class NodeSession extends SecureSession {
 
         logger.debug(
             `Created secure ${this.isPase ? "PASE" : "CASE"} session for fabric index ${fabric?.fabricIndex}`,
-            this.name,
+            this.via,
             this.parameterDiagnostics,
         );
     }
@@ -195,14 +155,6 @@ export class NodeSession extends SecureSession {
         return this.#caseAuthenticatedTags;
     }
 
-    get closingAfterExchangeFinished() {
-        return this.#closingAfterExchangeFinished;
-    }
-
-    get sendCloseMessageWhenClosing() {
-        return this.#sendCloseMessageWhenClosing;
-    }
-
     get isPase(): boolean {
         return this.#peerNodeId === NodeId.UNSPECIFIED_NODE_ID;
     }
@@ -215,22 +167,11 @@ export class NodeSession extends SecureSession {
         return this.#isInitiator;
     }
 
-    get isClosing() {
-        return this.#isClosing;
-    }
-
     subjectFor(_message?: Message): Subject {
         return Subject.Node({
             id: this.peerNodeId,
             catSubjects: this.#caseAuthenticatedTags.map(cat => NodeId.fromCaseAuthenticatedTag(cat)),
         });
-    }
-
-    async close(closeAfterExchangeFinished?: boolean) {
-        if (closeAfterExchangeFinished === undefined) {
-            closeAfterExchangeFinished = this.isPeerActive(); // We delay session close if the peer is actively communicating with us
-        }
-        await this.end(true, closeAfterExchangeFinished);
     }
 
     decode({ header, applicationPayload, messageExtension }: DecodedPacket, aad: Bytes): DecodedMessage {
@@ -273,23 +214,24 @@ export class NodeSession extends SecureSession {
         return this.#attestationKey;
     }
 
-    get fabric() {
+    get fabric(): Fabric | undefined {
         return this.#fabric;
     }
 
-    addAssociatedFabric(fabric: Fabric) {
-        if (this.#fabric !== undefined) {
-            throw new MatterFlowError("Session already has an associated Fabric. Cannot change this.");
+    set fabric(fabric: Fabric) {
+        if (this.#fabric !== undefined && this.#fabric !== fabric) {
+            throw new InternalError("Cannot change session fabric");
         }
         this.#fabric = fabric;
+        fabric.addSession(this);
     }
 
     get id() {
         return this.#id;
     }
 
-    get name() {
-        return `secure/${this.#id}`;
+    get via() {
+        return Diagnostic.via(`${this.peerAddress.toString()}${Mark.SESSION}${hex.word(this.id)}`);
     }
 
     get peerSessionId(): number {
@@ -317,54 +259,90 @@ export class NodeSession extends SecureSession {
         return this.#fabric;
     }
 
-    async clearSubscriptions(flushSubscriptions = false, cancelledByPeer = false) {
+    override async closeSubscriptions(flush = false) {
         const subscriptions = [...this.#subscriptions]; // get all values because subscriptions will remove themselves when cancelled
         for (const subscription of subscriptions) {
-            await subscription.close(flushSubscriptions, cancelledByPeer);
+            await subscription.close(flush ? this : undefined);
         }
         return subscriptions.length;
     }
 
-    /** Ends a session. Outstanding subscription data will be flushed before the session is destroyed. */
-    async end(sendClose: boolean, closeAfterExchangeFinished = false) {
-        await this.clearSubscriptions(true);
-        await this.destroy(sendClose, closeAfterExchangeFinished);
+    get closedByPeer() {
+        return this.#closedByPeer;
     }
 
-    async closeByPeer() {
-        await this.destroy(false, false);
-        await this.closedByPeer.emit();
+    async handlePeerClose() {
+        this.#isPeerLost = true;
+        await this.#closedByPeer.emit(true);
+        await this.handlePeerLoss();
     }
 
-    /** Destroys a session. Outstanding subscription data will be discarded. */
-    async destroy(sendClose = false, closeAfterExchangeFinished = true) {
-        await this.clearSubscriptions(false);
-        this.#fabric?.removeSession(this);
-        if (!sendClose) {
-            this.#sendCloseMessageWhenClosing = false;
-        }
+    async handlePeerLoss(data: { currentExchange?: MessageExchange; keepSubscriptions?: boolean } = {}) {
+        this.#isPeerLost = true;
+        const { currentExchange, keepSubscriptions } = data;
+        await this.initiateForceClose(currentExchange, keepSubscriptions);
+    }
 
-        if (closeAfterExchangeFinished) {
-            logger.info(`Register Session ${this.name} to close when exchange is ended.`);
-            this.#closingAfterExchangeFinished = true;
-        } else {
-            this.#isClosing = true;
-            logger.info(`End ${this.isPase ? "PASE" : "CASE"} session ${this.name}`);
-            this.manager?.sessions.delete(this);
+    get isPeerLost() {
+        return this.#isPeerLost;
+    }
 
-            // Wait for the exchange to finish closing, but ignore errors if channel is already closed
-            if (this.closer) {
-                try {
-                    await this.closer;
-                } catch (error) {
-                    NoChannelError.accept(error);
-                } finally {
-                    await this.destroyed.emit();
-                }
-                return;
+    /**
+     * Close the session.
+     *
+     * If there are open subscriptions they are closed without flushing.  To flush, use {@link closeSubscriptions}
+     * before invoking.
+     *
+     * TODO - subscription handling is only relevant for server; needs to move to server-specific component
+     *
+     * If there are active exchanges the close is deferred until the final exchange closes.  To close sooner, use
+     * {@link initiateForceClose}.
+     *
+     * A final exchange will be opened to notify the peer of closure unless the peer is marked as lost.
+     */
+    override async initiateClose(shutdownLogic?: () => Promise<void>) {
+        await super.initiateClose(async () => {
+            await shutdownLogic?.();
+
+            // If there are active exchanges defer closing until they complete
+            if (this.hasActiveExchanges) {
+                logger.debug(this.via, "Session ends when exchanges end");
+                this.deferredClose = true;
             }
-            await this.destroyed.emit();
+        });
+    }
+
+    override async initiateForceClose(currentExchange?: MessageExchange, keepSubscriptions = false) {
+        this.#isPeerLost = true;
+        await super.initiateForceClose(currentExchange, keepSubscriptions);
+    }
+
+    override addExchange(exchange: MessageExchange) {
+        super.addExchange(exchange);
+        exchange.closed.on(async () => {
+            this.exchanges.delete(exchange);
+            if (this.deferredClose && !this.hasActiveExchanges) {
+                this.deferredClose = false;
+                await this.close();
+            }
+        });
+    }
+
+    protected override async close() {
+        if (!this.#isPeerLost) {
+            try {
+                await this.gracefulClose.emit();
+            } catch (e) {
+                logger.error(`Unhandled error in ${this.via} graceful close handler:`, e);
+            }
         }
+
+        await this.closeSubscriptions();
+
+        this.#fabric?.deleteSession(this);
+        await super.close();
+
+        this.manager?.sessions.delete(this);
     }
 
     /**
@@ -391,7 +369,7 @@ export class NodeSession extends SecureSession {
 export namespace NodeSession {
     export function assert(session?: Session, errorText?: string): asserts session is NodeSession {
         if (!is(session)) {
-            throw new MatterFlowError(errorText ?? "Insecure session in secure context");
+            throw new MatterFlowError(errorText ?? "Unsecured session in secure context");
         }
     }
 
@@ -408,14 +386,41 @@ export namespace NodeSession {
         peerNodeId: NodeId,
     ) {
         logger.info(
+            session.via,
             `${operation} session with`,
             Diagnostic.strong(PeerAddress({ fabricIndex: fabric.fabricIndex, nodeId: peerNodeId }).toString()),
             Diagnostic.dict({
-                id: session.id,
                 address: messenger.channelName,
-                fabric: `${NodeId.toHexString(fabric.nodeId)} (#${fabric.fabricIndex})`,
+                fabric: `${GlobalFabricId.strOf(fabric.globalId)} (#${fabric.fabricIndex})`,
                 ...session.parameterDiagnostics,
             }),
         );
+    }
+}
+
+export namespace NodeSession {
+    export interface CommonConfig extends Session.CommonConfig {
+        crypto: Crypto;
+        id: number;
+        fabric?: Fabric;
+        peerNodeId: NodeId;
+        peerSessionId: number;
+        caseAuthenticatedTags?: CaseAuthenticatedTag[];
+    }
+
+    export interface Config extends CommonConfig {
+        decryptKey: Bytes;
+        encryptKey: Bytes;
+        attestationKey: Bytes;
+        sessionParameters?: SessionParameters.Config;
+        isInitiator: boolean;
+    }
+
+    export interface CreateConfig extends CommonConfig {
+        sharedSecret: Bytes;
+        salt: Bytes;
+        isInitiator: boolean;
+        isResumption: boolean;
+        peerSessionParameters?: SessionParameters.Config;
     }
 }

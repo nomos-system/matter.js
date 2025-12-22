@@ -63,6 +63,7 @@ export class CommandInvokeResponse<
     }
 
     async *process<T extends Invoke>({ invokeRequests, suppressResponse }: T): InvokeResult {
+        using _invoking = this.join("invoking");
         const multipleInvokes = invokeRequests.length > 1;
 
         // Register paths
@@ -256,6 +257,11 @@ export class CommandInvokeResponse<
         }
 
         if (hasRemoteActor(this.session)) {
+            if (limits.largeMessage && !this.session.largeMessage) {
+                this.#errorCount++;
+                return this.#addStatus(path, commandRef, Status.InvalidTransportType);
+            }
+
             if (limits.fabricScoped && !this.session.fabric) {
                 this.#errorCount++;
                 return this.#addStatus(path, commandRef, Status.UnsupportedAccess);
@@ -313,6 +319,7 @@ export class CommandInvokeResponse<
             const command = cluster.type.commands[commandId];
             if (command !== undefined) {
                 if (hasRemoteActor(this.session)) {
+                    const { limits } = command;
                     if (
                         this.session.authorityAt(command.limits.writeLevel, cluster.location) !==
                         AccessControl.Authority.Granted
@@ -320,7 +327,15 @@ export class CommandInvokeResponse<
                         return;
                     }
 
-                    if (command.limits.timed && !this.session.timed) {
+                    if (limits.largeMessage && !this.session.largeMessage) {
+                        return;
+                    }
+
+                    if (limits.fabricScoped && !this.session.fabric) {
+                        return;
+                    }
+
+                    if (limits.timed && !this.session.timed) {
                         return;
                     }
                 }

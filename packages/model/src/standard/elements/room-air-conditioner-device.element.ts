@@ -10,7 +10,7 @@ import { MatterDefinition } from "../MatterDefinition.js";
 import { DeviceTypeElement as DeviceType, RequirementElement as Requirement } from "../../elements/index.js";
 
 export const RoomAirConditionerDt = DeviceType(
-    { name: "RoomAirConditioner", id: 0x72 },
+    { name: "RoomAirConditioner", id: 0x72, classification: "simple" },
     Requirement(
         { name: "Descriptor", id: 0x1d, element: "serverCluster" },
         Requirement({ name: "DeviceTypeList", default: [ { deviceType: 114, revision: 2 } ], element: "attribute" })
@@ -29,7 +29,9 @@ export const RoomAirConditionerDt = DeviceType(
         Requirement({ name: "KeypadLockout", conformance: "O", element: "attribute" })
     ),
     Requirement({ name: "TemperatureMeasurement", id: 0x402, conformance: "O", element: "serverCluster" }),
-    Requirement({ name: "RelativeHumidityMeasurement", id: 0x405, conformance: "O", element: "serverCluster" })
+    Requirement({ name: "RelativeHumidityMeasurement", id: 0x405, conformance: "O", element: "serverCluster" }),
+    Requirement({ name: "TemperatureSensor", id: 0x302, conformance: "O", element: "deviceType" }),
+    Requirement({ name: "HumiditySensor", id: 0x307, conformance: "O", element: "deviceType" })
 );
 
 MatterDefinition.children.push(RoomAirConditionerDt);

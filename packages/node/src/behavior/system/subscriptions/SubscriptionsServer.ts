@@ -9,12 +9,11 @@ import { DatatypeModel, FieldElement } from "#model";
 import { InteractionServer, PeerSubscription } from "#node/server/InteractionServer.js";
 import { ServerSubscription } from "#node/server/ServerSubscription.js";
 import {
-    ChannelManager,
-    NoChannelError,
     NodeDiscoveryType,
     PeerAddress,
     PeerAddressSet,
     PeerSet,
+    SessionClosedError,
     SessionManager,
     Subscription,
 } from "#protocol";
@@ -139,11 +138,11 @@ export class SubscriptionsBehavior extends Behavior {
         if (this.state.persistenceEnabled === false || !(subscription instanceof ServerSubscription)) return;
 
         const {
-            criteria: { attributeRequests, eventRequests, isFabricFiltered },
+            request: { attributeRequests, eventRequests, isFabricFiltered },
             session,
             maxInterval,
             sendInterval,
-            id,
+            subscriptionId: id,
             maxIntervalCeiling,
             minIntervalFloor,
         } = subscription;
@@ -153,11 +152,10 @@ export class SubscriptionsBehavior extends Behavior {
         // TODO Remove when we store peer addresses also for operational nodes
         let operationalAddress: ServerAddressUdp | undefined;
         try {
-            const channel = this.env.get(ChannelManager).getChannel(peerAddress, session).channel;
-            operationalAddress = isIpNetworkChannel(channel) ? channel.networkAddress : undefined;
+            operationalAddress = isIpNetworkChannel(session.channel) ? session.channel.networkAddress : undefined;
         } catch (error) {
             // Can happen in edge cases, so better catch it and proceed without operational address
-            NoChannelError.accept(error);
+            SessionClosedError.accept(error);
         }
         const peerSubscription: PeerSubscription = {
             subscriptionId: id,
@@ -184,7 +182,7 @@ export class SubscriptionsBehavior extends Behavior {
 
     #subscriptionCancelled(subscription: Subscription): MaybePromise {
         if (subscription.isCanceledByPeer && this.state.persistenceEnabled !== false) {
-            const { id } = subscription;
+            const { subscriptionId: id } = subscription;
             const subscriptionIndex = this.state.subscriptions.findIndex(({ subscriptionId }) => id === subscriptionId);
             if (subscriptionIndex !== -1) {
                 return this.#removeSubscriptionIndex(subscriptionIndex);
@@ -206,7 +204,7 @@ export class SubscriptionsBehavior extends Behavior {
         const { formerSubscriptions } = this.internal;
 
         if (!formerSubscriptions.length) {
-            logger.info("No former subscriptions to re-establish");
+            logger.debug("No former subscriptions to re-establish");
             return;
         } else {
             this.internal.formerSubscriptions = [];
@@ -230,8 +228,10 @@ export class SubscriptionsBehavior extends Behavior {
                 logger.debug(`Skip reestablishing former subscription to ${peerAddress}`);
                 continue;
             }
-            logger.debug(`Try to reestablish former subscription ${subscriptionId} to ${peerAddress}`);
-            if (sessions.getSessionForNode(peerAddress) !== undefined) {
+            logger.debug(
+                `Try to reestablish former subscription ${Subscription.idStrOf(subscription)} to ${peerAddress}`,
+            );
+            if (sessions.maybeSessionFor(peerAddress) !== undefined) {
                 logger.debug(`We already have and existing session for peer ${peerAddress}`);
             } else {
                 try {
@@ -254,10 +254,12 @@ export class SubscriptionsBehavior extends Behavior {
             try {
                 if (peerStopList.has(peerAddress)) {
                     // To prevent concurrency issues, check again if there is a stop reason for this fabric
-                    logger.debug(`Skip re-establishing former subscription ${subscriptionId} to ${peerAddress}`);
+                    logger.debug(
+                        `Skip re-establishing former subscription ${Subscription.idStrOf(subscriptionId)} to ${peerAddress}`,
+                    );
                     continue;
                 }
-                const session = sessions.getSessionForNode(peerAddress);
+                const session = sessions.maybeSessionFor(peerAddress);
                 if (session === undefined) {
                     peerStopList.add(peerAddress);
                     logger.debug(`Could not connect to peer ${peerAddress}`);
@@ -266,7 +268,7 @@ export class SubscriptionsBehavior extends Behavior {
                 await interactionServer.establishFormerSubscription(subscription, session);
             } catch (error) {
                 logger.debug(
-                    `Failed to re-establish former subscription ${subscriptionId} to ${peerAddress}`,
+                    `Failed to re-establish former subscription ${Subscription.idStrOf(subscriptionId)} to ${peerAddress}`,
                     StatusResponseError.is(error)
                         ? error.code === StatusCode.InvalidSubscription
                             ? "Subscription no langer valid for peer"

@@ -15,6 +15,7 @@ import {
     NetworkInterfaceDetailed,
     NoAddressAvailableError,
     ObserverGroup,
+    SharedEnvironmentServices,
     UdpInterface,
 } from "#general";
 import type { ServerNode } from "#node/ServerNode.js";
@@ -23,7 +24,6 @@ import {
     Advertiser,
     Ble,
     BleAdvertiser,
-    ChannelManager,
     DeviceAdvertiser,
     DeviceCommissioner,
     ExchangeManager,
@@ -61,6 +61,12 @@ export class ServerNetworkRuntime extends NetworkRuntime {
     #ipv6UdpInterface?: UdpInterface;
     #observers = new ObserverGroup(this);
     #groupNetworking?: ServerGroupNetworking;
+    #services: SharedEnvironmentServices;
+
+    constructor(owner: ServerNode) {
+        super(owner);
+        this.#services = owner.env.asDependent();
+    }
 
     override get owner() {
         return super.owner as ServerNode;
@@ -72,9 +78,12 @@ export class ServerNetworkRuntime extends NetworkRuntime {
     get mdnsAdvertiser() {
         if (!this.#mdnsAdvertiser) {
             const port = this.owner.state.network.operationalPort;
-            const options = this.owner.state.commissioning.mdns;
+            const options = {
+                lifetime: this.construction,
+                ...this.owner.state.commissioning.mdns,
+            };
             const crypto = this.owner.env.get(Crypto);
-            const { server } = this.owner.env.get(MdnsService);
+            const { server } = this.#services.get(MdnsService);
             this.#mdnsAdvertiser = new MdnsAdvertiser(crypto, server, { ...options, port });
         }
         return this.#mdnsAdvertiser;
@@ -112,7 +121,10 @@ export class ServerNetworkRuntime extends NetworkRuntime {
     protected get bleAdvertiser() {
         if (this.#bleAdvertiser === undefined) {
             const { peripheralInterface } = this.owner.env.get(Ble);
-            const options = this.owner.state.commissioning.ble;
+            const options = {
+                lifetime: this.construction,
+                ...this.owner.state.commissioning.ble,
+            };
             this.#bleAdvertiser = new BleAdvertiser(peripheralInterface, options);
         }
         return this.#bleAdvertiser;
@@ -191,7 +203,8 @@ export class ServerNetworkRuntime extends NetworkRuntime {
             advertiser.addAdvertiser(this.mdnsAdvertiser);
         }
 
-        if (discoveryCapabilities.ble) {
+        if (!isCommissioned && discoveryCapabilities.ble) {
+            // BLE announcements are only relevant when not commissioned
             advertiser.addAdvertiser(this.bleAdvertiser);
         }
     }
@@ -209,9 +222,9 @@ export class ServerNetworkRuntime extends NetworkRuntime {
     }
 
     /**
-     * On commission we turn off bluetooth and join the IP network if we haven't already.
+     * On commission, we turn off bluetooth and join the IP network if we haven't already.
      *
-     * On decommission we're destroyed so don't need to handle that case.
+     * On decommission, we're destroyed so don't need to handle that case.
      */
     endUncommissionedMode() {
         // Ensure MDNS broadcasting are active when the first fabric is added.  It might not be active initially if the
@@ -253,7 +266,7 @@ export class ServerNetworkRuntime extends NetworkRuntime {
         await this.addTransports(interfaces);
 
         // Initialize MDNS
-        const mdns = await owner.env.load(MdnsService);
+        const mdns = await this.#services.load(MdnsService);
 
         const advertiser = env.get(DeviceAdvertiser);
 
@@ -262,9 +275,6 @@ export class ServerNetworkRuntime extends NetworkRuntime {
         await owner.act("start-network", agent => agent.load(ProductDescriptionServer));
 
         // Apply settings to environmental components
-        env.get(ChannelManager).caseSessionsPerFabricAndNode =
-            // Note that this is "sessions per fabric and node", so we support more than indicated by capabilityMinima
-            owner.state.basicInformation.capabilityMinima.caseSessionsPerFabric;
         env.get(SessionManager).sessionParameters = {
             maxPathsPerInvoke: this.owner.state.basicInformation.maxPathsPerInvoke,
         };
@@ -294,17 +304,24 @@ export class ServerNetworkRuntime extends NetworkRuntime {
 
         await env.load(PeerSet);
 
+        // Prevent new connections when aborted
+        this.abortSignal.addEventListener("abort", () =>
+            this.owner.env.maybeGet(InteractionServer)?.blockNewActivity(),
+        );
+
         await this.owner.act(agent => this.owner.lifecycle.online.emit(agent.context));
     }
 
     protected override async stop() {
-        this.blockNewActivity();
-
         this.#observers.close();
 
         const { env } = this.owner;
 
-        await env.close(DeviceCommissioner);
+        {
+            using _lifetime = this.construction.join("commissioner");
+            await env.close(DeviceCommissioner);
+        }
+
         // Shutdown the Broadcaster if DeviceAdvertiser is not initialized
         // We kick-off the Advertiser shutdown to prevent re-announces when removing sessions and wait a bit later
         const advertisementShutdown = this.owner.env.has(DeviceAdvertiser)
@@ -312,23 +329,51 @@ export class ServerNetworkRuntime extends NetworkRuntime {
             : this.#mdnsAdvertiser?.close();
         this.#mdnsAdvertiser = undefined;
 
-        await this.owner.prepareRuntimeShutdown();
+        {
+            using _lifetime = this.construction.join("preparing");
+            await this.owner.prepareRuntimeShutdown();
+        }
 
         this.#groupNetworking?.close();
         this.#groupNetworking = undefined;
 
         // Now all sessions are closed, so we wait for Advertiser to be gone
-        await advertisementShutdown;
+        {
+            using _advertiser = this.construction.join("advertisement");
+            await advertisementShutdown;
+        }
 
-        await env.close(ExchangeManager);
-        await env.close(SecureChannelProtocol);
-        await env.close(ConnectionlessTransportSet);
-        await env.close(InteractionServer);
-        await env.close(PeerSet);
-    }
+        {
+            using _lifetime = this.construction.join("services");
+            await this.#services.close();
+        }
 
-    protected override blockNewActivity() {
-        this.owner.env.maybeGet(InteractionServer)?.blockNewActivity();
+        {
+            using _lifetime = this.construction.join("exchanges");
+            await env.close(ExchangeManager);
+        }
+
+        {
+            using _lifetime = this.construction.join("protocols");
+            await env.close(SecureChannelProtocol);
+        }
+
+        {
+            using _lifetime = this.construction.join("transports");
+            await env.close(ConnectionlessTransportSet);
+        }
+
+        {
+            using _lifetime = this.construction.join("interactions");
+            await env.close(InteractionServer);
+        }
+
+        {
+            using _lifetime = this.construction.join("peers");
+            await env.close(PeerSet);
+        }
+
+        env.delete(ScannerSet);
     }
 
     async #initializeGroupNetworking() {

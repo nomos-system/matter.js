@@ -7,7 +7,7 @@
 import { ActionContext } from "#behavior/context/ActionContext.js";
 import { OnlineEvent } from "#behavior/Events.js";
 import { BasicInformation } from "#clusters/basic-information";
-import { Diagnostic, ImplementationError, InternalError, Logger, MaybePromise } from "#general";
+import { Diagnostic, ImplementationError, Logger } from "#general";
 import { AttributeModel, EventModel, Schema, Specification } from "#model";
 import { NodeLifecycle } from "#node/NodeLifecycle.js";
 import { Fabric, FabricManager } from "#protocol";
@@ -25,7 +25,7 @@ const Base = BasicInformationBehavior.enable({
  * This is the default server implementation of BasicInformationBehavior.
  */
 export class BasicInformationServer extends Base {
-    override initialize(): MaybePromise {
+    override initialize() {
         const state = this.state;
 
         const defaultsSet = {} as Record<string, any>;
@@ -63,12 +63,11 @@ export class BasicInformationServer extends Base {
         }
 
         const lifecycle = this.endpoint.lifecycle as NodeLifecycle;
-
         this.reactTo(lifecycle.online, this.#online);
         this.reactTo(lifecycle.goingOffline, this.#goingOffline);
 
         if (this.state.reachable !== undefined && this.events.reachable$Changed !== undefined) {
-            const reachableChangedSchema = BasicInformationBehavior.schema!.get(
+            const reachableChangedSchema = BasicInformationBehavior.schema.get(
                 EventModel,
                 BasicInformation.Cluster.events.reachableChanged.id,
             );
@@ -99,11 +98,7 @@ export class BasicInformationServer extends Base {
 
     static override readonly schema = this.enableUniqueIdPersistence(Base.schema);
 
-    static enableUniqueIdPersistence(schema?: Schema): Schema {
-        if (schema === undefined) {
-            throw new InternalError("Basic information schema is undefined");
-        }
-
+    static enableUniqueIdPersistence(schema: Schema.Cluster): Schema.Cluster {
         return schema.extend({}, schema.require(AttributeModel, "uniqueId").extend({ quality: "FN" }));
     }
 
@@ -121,7 +116,7 @@ export class BasicInformationServer extends Base {
         this.events.startUp.emit({ softwareVersion: this.state.softwareVersion }, this.context);
 
         const fabricManager = this.env.get(FabricManager);
-        this.reactTo(fabricManager.events.deleted, this.#handleRemovedFabric);
+        this.reactTo(fabricManager.events.leaving, this.#handleFabricLeave);
     }
 
     #goingOffline() {
@@ -132,7 +127,7 @@ export class BasicInformationServer extends Base {
         this.events.reachableChanged?.emit({ reachableNewValue: reachable }, this.context);
     }
 
-    #handleRemovedFabric({ fabricIndex }: Fabric) {
+    #handleFabricLeave({ fabricIndex }: Fabric) {
         this.events.leave.emit({ fabricIndex }, this.context);
     }
 }

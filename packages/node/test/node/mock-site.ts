@@ -9,6 +9,7 @@ import {
     Crypto,
     Entropy,
     Environment,
+    hex,
     Logger,
     MatterAggregateError,
     MockCrypto,
@@ -54,7 +55,7 @@ export class MockSite {
         );
 
         const index = (config.index ??= this.#nextNetworkIndex++);
-        const id = (config.id ??= `node${index.toString(16).padStart(2, "0")}`);
+        const id = (config.id ??= `node${hex.byte(index)}`);
         const env = (config.environment ??= new Environment(id));
         if (!env.has(Crypto)) {
             const crypto = MockCrypto(index);
@@ -89,21 +90,25 @@ export class MockSite {
         return node;
     }
 
+    async addController(options?: MockServerNode.Options<ServerNode.RootEndpoint>) {
+        options ??= {};
+        if (options.controller?.adminFabricId === undefined) {
+            options.controller ??= {};
+            options.controller.adminFabricId = FabricId(1);
+        }
+        return await this.addNode(undefined, {
+            online: false,
+            ...options,
+            commissioning: { enabled: false, ...options.commissioning },
+        });
+    }
+
     async addUncommissionedPair(options?: MockSite.PairOptions) {
         options ??= {};
-        options.controller ??= {} as MockServerNode.Configuration<any>;
-        if (options.controller.controller?.adminFabricId === undefined) {
-            options.controller.controller ??= {};
-            options.controller.controller.adminFabricId = FabricId(1);
-        }
-        const controller = await this.addNode(undefined, {
-            online: false,
-            ...options.controller,
-            commissioning: { enabled: false, ...options.controller?.commissioning },
-        });
+        const controller = await this.addController(options.controller);
         const device = await this.addNode(undefined, {
-            ...options.device,
             device: OnOffLightDevice,
+            ...options.device,
         });
 
         return { controller, device };

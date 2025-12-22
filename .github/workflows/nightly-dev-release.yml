@@ -22,13 +22,20 @@ on:
         default: false
         type: boolean
 jobs:
-  publish-config:
+  test-and-release:
     if: github.repository == 'matter-js/matter.js'
     runs-on: ubuntu-latest
 
     steps:
+    - name: Maximize build space
+      uses: easimon/maximize-build-space@v10
+      with:
+        root-reserve-mb: 5128
+        remove-dotnet: 'true'
+        remove-android: 'true'
+
     - name: Checkout code
-      uses: actions/checkout@v5
+      uses: actions/checkout@v6
       with:
         fetch-depth: 0 # Fetch the history, or this action won't work
 
@@ -149,7 +156,7 @@ jobs:
     - name: Create Pull Request
       if: steps.changes.outputs.result == 'ok'
       id: cpr
-      uses: peter-evans/create-pull-request@v7
+      uses: peter-evans/create-pull-request@v8
       with:
         token: ${{ secrets.PR_TOKEN }}
         commit-message: "[NIGHTLY DEV RELEASE] ${{ steps.version.outputs.result }}"

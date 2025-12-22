@@ -29,7 +29,7 @@ import { Identity } from "#general";
  * MicrowaveOvenDevice requires MicrowaveOvenControl cluster but MicrowaveOvenControl is not added by default because
  * you must select the features your device supports. You can add manually using MicrowaveOvenDevice.with().
  *
- * @see {@link MatterSpecification.v141.Device} § 13.11
+ * @see {@link MatterSpecification.v142.Device} § 13.11
  */
 export interface MicrowaveOvenDevice extends Identity<typeof MicrowaveOvenDeviceDefinition> {}
 
@@ -94,4 +94,5 @@ export const MicrowaveOvenDeviceDefinition = MutableEndpoint({
     )
 });
 
+Object.freeze(MicrowaveOvenDeviceDefinition);
 export const MicrowaveOvenDevice: MicrowaveOvenDevice = MicrowaveOvenDeviceDefinition;

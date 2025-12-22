@@ -19,6 +19,9 @@ export interface Channel<T> {
     /** Is the transport Reliable? UDP is not, TCP and BTP are. */
     isReliable: boolean;
 
+    /** Does the channel support large messages? */
+    supportsLargeMessages: boolean;
+
     /** Channel name */
     name: string;
 
@@ -35,6 +38,6 @@ export interface IpNetworkChannel<T> extends Channel<T> {
     networkAddress: ServerAddressUdp;
 }
 
-export function isIpNetworkChannel<T>(channel: Channel<T>): channel is IpNetworkChannel<T> {
-    return isObject((channel as IpNetworkChannel<T>).networkAddress);
+export function isIpNetworkChannel<T>(channel?: Channel<T>): channel is IpNetworkChannel<T> {
+    return isObject((channel as IpNetworkChannel<T> | undefined)?.networkAddress);
 }

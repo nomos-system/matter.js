@@ -5,7 +5,18 @@
  */
 
 import { Noc } from "#certificate/kinds/Noc.js";
-import { Bytes, Crypto, CryptoDecryptError, Diagnostic, Logger, PublicKey, UnexpectedDataError } from "#general";
+import { Mark } from "#common/Mark.js";
+import {
+    Bytes,
+    Channel,
+    Crypto,
+    CryptoDecryptError,
+    Diagnostic,
+    EcdsaSignature,
+    Logger,
+    PublicKey,
+    UnexpectedDataError,
+} from "#general";
 import { NodeSession } from "#session/NodeSession.js";
 import { SessionParametersWithDurations } from "#session/pase/PaseMessages.js";
 import { ResumptionRecord, SessionManager } from "#session/SessionManager.js";
@@ -49,25 +60,25 @@ export class CaseServer implements ProtocolHandler {
         try {
             await this.#handleSigma1(messenger);
         } catch (error) {
-            logger.error("An error occurred during the commissioning", error);
-
             if (error instanceof FabricNotFoundError) {
+                logger.error("Error establishing CASE session:", Diagnostic.errorMessage(error));
                 await messenger.sendError(SecureChannelStatusCode.NoSharedTrustRoots);
             }
             // If we received a ChannelStatusResponseError we do not need to send one back, so just cancel pairing
             else if (!(error instanceof ChannelStatusResponseError)) {
+                logger.error("Error establishing CASE session", error);
                 await messenger.sendError(SecureChannelStatusCode.InvalidParam);
             }
         } finally {
             // Destroy the unsecure session used to establish the secure Case session
-            await exchange.session.destroy();
+            await exchange.session.initiateClose();
         }
     }
 
     async #handleSigma1(messenger: CaseServerMessenger) {
-        logger.info("Received pairing request «", Diagnostic.via(messenger.channelName));
+        logger.info("Received pairing request", Mark.INBOUND, Diagnostic.via(messenger.channelName));
 
-        // Initialize context with information from peer
+        // Initialize context with information from a peer
         const { sigma1Bytes, sigma1 } = await messenger.readSigma1();
         const resumptionRecord =
             sigma1.resumptionId !== undefined && sigma1.initiatorResumeMic !== undefined
@@ -77,12 +88,12 @@ export class CaseServer implements ProtocolHandler {
         const context = new Sigma1Context(this.#fabrics.crypto, messenger, sigma1Bytes, sigma1, resumptionRecord);
 
         // Attempt resumption
-        if (await this.#resume(context)) {
+        if (await this.#resume(context, messenger.channel.channel)) {
             return;
         }
 
         // Attempt sigma2 negotiation
-        if (await this.#generateSigma2(context)) {
+        if (await this.#generateSigma2(context, messenger.channel.channel)) {
             return;
         }
 
@@ -98,7 +109,7 @@ export class CaseServer implements ProtocolHandler {
         throw new UnexpectedDataError("Invalid resumption ID or resume MIC.");
     }
 
-    async #resume(cx: Sigma1Context) {
+    async #resume(cx: Sigma1Context, channel: Channel<Bytes>) {
         if (cx.peerResumptionId === undefined || cx.peerResumeMic === undefined || cx.resumptionRecord === undefined) {
             return false;
         }
@@ -126,7 +137,8 @@ export class CaseServer implements ProtocolHandler {
         const responderSessionId = await this.#sessions.getNextAvailableSessionId();
         const secureSessionSalt = Bytes.concat(cx.peerRandom, cx.peerResumptionId);
         const secureSession = await this.#sessions.createSecureSession({
-            sessionId: responderSessionId,
+            channel,
+            id: responderSessionId,
             fabric,
             peerNodeId,
             peerSessionId: cx.peerSessionId,
@@ -152,7 +164,7 @@ export class CaseServer implements ProtocolHandler {
             });
         } catch (error) {
             // If we fail to send the resume message, we destroy the session
-            await secureSession.destroy(false);
+            await secureSession.initiateClose();
             throw error;
         }
 
@@ -169,7 +181,7 @@ export class CaseServer implements ProtocolHandler {
         return true;
     }
 
-    async #generateSigma2(cx: Sigma1Context) {
+    async #generateSigma2(cx: Sigma1Context, channel: Channel<Bytes>) {
         if (
             // No resumption attempted is OK
             !(cx.peerResumptionId === undefined && cx.peerResumeMic === undefined) &&
@@ -194,7 +206,7 @@ export class CaseServer implements ProtocolHandler {
             operationalIdentityProtectionKey,
             responderRandom,
             responderEcdhPublicKey,
-            await crypto.computeSha256(cx.bytes),
+            await crypto.computeHash(cx.bytes),
         );
         const sigma2Key = await crypto.createHkdfKey(sharedSecret, sigma2Salt, KDFSR2_INFO);
         const signatureData = TlvSignedData.encode({
@@ -207,7 +219,7 @@ export class CaseServer implements ProtocolHandler {
         const encryptedData = TlvEncryptedDataSigma2.encode({
             responderNoc: nodeOpCert,
             responderIcac: intermediateCACert,
-            signature,
+            signature: signature.bytes,
             resumptionId: cx.localResumptionId,
         });
         const encrypted = crypto.encrypt(sigma2Key, encryptedData, TBE_DATA2_NONCE);
@@ -227,7 +239,7 @@ export class CaseServer implements ProtocolHandler {
         } = await cx.messenger.readSigma3();
         const sigma3Salt = Bytes.concat(
             operationalIdentityProtectionKey,
-            await crypto.computeSha256([cx.bytes, sigma2Bytes]),
+            await crypto.computeHash([cx.bytes, sigma2Bytes]),
         );
         const sigma3Key = await crypto.createHkdfKey(sharedSecret, sigma3Salt, KDFSR3_INFO);
         const peerDecryptedData = crypto.decrypt(sigma3Key, peerEncrypted, TBE_DATA3_NONCE);
@@ -254,15 +266,16 @@ export class CaseServer implements ProtocolHandler {
             throw new UnexpectedDataError(`Fabric ID mismatch: ${fabric.fabricId} !== ${peerFabricId}`);
         }
 
-        await crypto.verifyEcdsa(PublicKey(peerPublicKey), peerSignatureData, peerSignature);
+        await crypto.verifyEcdsa(PublicKey(peerPublicKey), peerSignatureData, new EcdsaSignature(peerSignature));
 
-        // All good! Create secure session
+        // All good! Create a secure session
         const secureSessionSalt = Bytes.concat(
             operationalIdentityProtectionKey,
-            await crypto.computeSha256([cx.bytes, sigma2Bytes, sigma3Bytes]),
+            await crypto.computeHash([cx.bytes, sigma2Bytes, sigma3Bytes]),
         );
         const secureSession = await this.#sessions.createSecureSession({
-            sessionId: responderSessionId,
+            channel,
+            id: responderSessionId,
             fabric,
             peerNodeId,
             peerSessionId: cx.peerSessionId,

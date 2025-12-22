@@ -17,7 +17,7 @@ import { Identity } from "#general";
 /**
  * A Fan device is typically standalone or mounted on a ceiling or wall and is used to circulate air in a room.
  *
- * @see {@link MatterSpecification.v141.Device} § 9.2
+ * @see {@link MatterSpecification.v142.Device} § 9.2
  */
 export interface FanDevice extends Identity<typeof FanDeviceDefinition> {}
 
@@ -71,4 +71,5 @@ export const FanDeviceDefinition = MutableEndpoint({
     )
 });
 
+Object.freeze(FanDeviceDefinition);
 export const FanDevice: FanDevice = FanDeviceDefinition;

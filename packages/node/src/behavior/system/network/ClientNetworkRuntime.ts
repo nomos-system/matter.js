@@ -6,7 +6,15 @@
 
 import { InternalError, Logger, MatterError, ObserverGroup } from "#general";
 import type { ClientNode } from "#node/ClientNode.js";
-import { ClientInteraction, ExchangeProvider, PeerAddress, PeerSet, SessionManager } from "#protocol";
+import {
+    ClientInteraction,
+    ExchangeProvider,
+    InteractionQueue,
+    PeerAddress,
+    PeerSet,
+    QueuedClientInteraction,
+    SessionManager,
+} from "#protocol";
 import { CommissioningClient } from "../commissioning/CommissioningClient.js";
 import { RemoteDescriptor } from "../commissioning/RemoteDescriptor.js";
 import { NetworkRuntime } from "./NetworkRuntime.js";
@@ -21,6 +29,7 @@ const logger = Logger.get("ClientNetworkRuntime");
  */
 export class ClientNetworkRuntime extends NetworkRuntime {
     #client?: ClientInteraction;
+    #queuedClient?: QueuedClientInteraction;
     #observers = new ObserverGroup();
 
     constructor(owner: ClientNode) {
@@ -54,17 +63,27 @@ export class ClientNetworkRuntime extends NetworkRuntime {
         const networkState = this.owner.state.network;
 
         const exchangeProvider = await peers.exchangeProviderFor(address, {
-            discoveryOptions: { discoveryData: RemoteDescriptor.fromLongForm(commissioningState) },
+            discoveryOptions: {
+                discoveryData: RemoteDescriptor.fromLongForm(commissioningState),
+            },
             caseAuthenticatedTags: networkState.caseAuthenticatedTags
                 ? [...networkState.caseAuthenticatedTags] // needed because the tags are readonly
                 : undefined,
         });
         env.set(ExchangeProvider, exchangeProvider);
 
+        this.#client = new ClientInteraction({ environment: env, abort: this.abortSignal });
+        env.set(ClientInteraction, this.#client);
+        this.#queuedClient = new QueuedClientInteraction({
+            environment: env,
+            abort: this.abortSignal,
+            queue: env.get(InteractionQueue), // created and owned by Peers
+        });
+        env.set(QueuedClientInteraction, this.#queuedClient);
+
         // Monitor sessions to maintain online state.  We consider the node "online" if there is an active session.  If
         // not, we consider the node offline.  This is the only real way we have of determining whether the node is
         // healthy without actively polling
-        this.#client = env.get(ClientInteraction);
         const { sessions } = env.get(SessionManager);
 
         if (sessions.find(session => session.peerIs(address))) {
@@ -105,6 +124,9 @@ export class ClientNetworkRuntime extends NetworkRuntime {
     protected async stop() {
         await this.construction;
 
+        this.owner.env.delete(ClientInteraction, this.#client);
+        this.owner.env.delete(QueuedClientInteraction, this.#queuedClient);
+
         try {
             await this.#client?.close();
         } catch (e) {
@@ -112,9 +134,5 @@ export class ClientNetworkRuntime extends NetworkRuntime {
         }
 
         this.#observers.close();
-    }
-
-    blockNewActivity() {
-        this.owner.env.delete(ClientInteraction, this.#client);
     }
 }

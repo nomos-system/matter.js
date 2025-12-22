@@ -4,80 +4,60 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { SupportedTransportsBitmap } from "#common/SupportedTransportsBitmap.js";
+import type { SupportedTransportsBitmap } from "#common/SupportedTransportsBitmap.js";
 import {
     AsyncObservable,
     Bytes,
+    Channel,
     DataWriter,
     Duration,
     Endian,
+    hex,
+    ImplementationError,
     InternalError,
+    Lifetime,
+    Logger,
+    ObservableValue,
     Time,
     Timespan,
     Timestamp,
 } from "#general";
-import { NodeId, TypeFromPartialBitSchema } from "#types";
-import { DecodedMessage, DecodedPacket, Message, Packet, SessionType } from "../codec/MessageCodec.js";
-import { Fabric } from "../fabric/Fabric.js";
-import { MessageCounter } from "../protocol/MessageCounter.js";
-import { MessageReceptionState } from "../protocol/MessageReceptionState.js";
-import { SessionIntervals } from "./SessionIntervals.js";
-import { type SessionManager } from "./SessionManager.js";
+import { SessionClosedError } from "#protocol/errors.js";
+import { MessageChannel } from "#protocol/MessageChannel.js";
+import type { MessageExchange } from "#protocol/MessageExchange.js";
+import type { NodeId, TypeFromPartialBitSchema } from "#types";
+import type {
+    DecodedMessage,
+    DecodedPacket,
+    Message,
+    Packet,
+    PacketHeader,
+    SessionType,
+} from "../codec/MessageCodec.js";
+import type { Fabric } from "../fabric/Fabric.js";
+import type { MessageCounter } from "../protocol/MessageCounter.js";
+import type { MessageReceptionState } from "../protocol/MessageReceptionState.js";
+import type { SessionManager } from "./SessionManager.js";
+import { SessionParameters } from "./SessionParameters.js";
 
-/** Fallback value for Data Model Revision when not provided in Session parameters. We use Matter 1.2 as assumption. */
-export const FALLBACK_DATAMODEL_REVISION = 17;
-
-/** Fallback value for Interaction Model Revision when not provided in Session parameters. We use Matter 1.2 as assumption. */
-export const FALLBACK_INTERACTIONMODEL_REVISION = 11;
-
-/**
- * Fallback value for Specification Version when not provided in Session parameters. We use 0 as assumption which is
- * "before 1.3".
- */
-export const FALLBACK_SPECIFICATION_VERSION = 0;
-
-/**
- * Fallback value for the maximum number of paths that can be included in a single invoke message when not provided in
- * Session parameters.
- */
-export const FALLBACK_MAX_PATHS_PER_INVOKE = 1;
-
-export const FALLBACK_MAX_TCP_MESSAGE_SIZE = 64000;
-
-export interface SessionParameters extends SessionIntervals {
-    /** Version of Data Model for the Session parameters side where it appears. */
-    dataModelRevision: number;
-
-    /** Version of Interaction Model for the Session parameters side where it appears. */
-    interactionModelRevision: number;
-
-    /** Version of Specification for the Session parameters side where it appears. */
-    specificationVersion: number;
-
-    /** The maximum number of elements in the InvokeRequests list that the Node is able to process. */
-    maxPathsPerInvoke: number;
-
-    /** A bitmap of the supported transport protocols in addition to MRP. */
-    supportedTransports: TypeFromPartialBitSchema<typeof SupportedTransportsBitmap>;
-
-    /**
-     * Maximum size of the message carried over TCP, excluding the framing message length
-     * field, that the node is capable of receiving from its peer.
-     * Default: 64000 bytes
-     */
-    maxTcpMessageSize?: number;
-}
-
-export type SessionParameterOptions = Partial<SessionParameters>;
+const logger = Logger.get("Session");
 
 export abstract class Session {
-    abstract get name(): string;
-    abstract get closingAfterExchangeFinished(): boolean;
+    #channel?: MessageChannel;
+    #lifetime?: Lifetime;
+
+    abstract get via(): string;
     #manager?: SessionManager;
     timestamp = Time.nowMs;
     readonly createdAt = Time.nowMs;
     activeTimestamp: Timestamp = 0;
     abstract type: SessionType;
+
+    #closing = ObservableValue();
+    #gracefulClose = AsyncObservable<[]>();
+    readonly #exchanges = new Set<MessageExchange>();
+    protected deferredClose = false;
+
     protected readonly idleInterval: Duration;
     protected readonly activeInterval: Duration;
     protected readonly activeThreshold: Duration;
@@ -88,42 +68,28 @@ export abstract class Session {
     protected readonly messageCounter: MessageCounter;
     protected readonly messageReceptionState?: MessageReceptionState;
     protected readonly supportedTransports: TypeFromPartialBitSchema<typeof SupportedTransportsBitmap>;
-    protected readonly maxTcpMessageSize: number;
+    protected readonly maxTcpMessageSize?: number;
 
-    /**
-     * If the ExchangeManager performs async work to clean up a session it sets this promise.  This is because
-     * historically we didn't return from destroy() until ExchangeManager was complete.  Not sure if this is entirely
-     * necessary, but it makes sense so this allows us to maintain the old behavior.
-     */
-    closer?: Promise<void>;
-    #destroyed = AsyncObservable<[]>();
-    #closedByPeer = AsyncObservable<[]>();
+    constructor(config: Session.Configuration) {
+        const { manager, channel, messageCounter, messageReceptionState, sessionParameters, setActiveTimestamp } =
+            config;
 
-    constructor(args: {
-        manager?: SessionManager;
-        messageCounter: MessageCounter;
-        messageReceptionState?: MessageReceptionState;
-        sessionParameters?: SessionParameterOptions;
-        setActiveTimestamp: boolean;
-    }) {
         const {
-            manager,
-            messageCounter,
-            messageReceptionState,
-            sessionParameters: {
-                idleInterval = SessionIntervals.defaults.idleInterval,
-                activeInterval = SessionIntervals.defaults.activeInterval,
-                activeThreshold = SessionIntervals.defaults.activeThreshold,
-                dataModelRevision = FALLBACK_DATAMODEL_REVISION,
-                interactionModelRevision = FALLBACK_INTERACTIONMODEL_REVISION,
-                specificationVersion = FALLBACK_SPECIFICATION_VERSION,
-                maxPathsPerInvoke = FALLBACK_MAX_PATHS_PER_INVOKE,
-                supportedTransports = {}, // no TCP support by default
-                maxTcpMessageSize = FALLBACK_MAX_TCP_MESSAGE_SIZE,
-            } = {},
-            setActiveTimestamp,
-        } = args;
+            idleInterval,
+            activeInterval,
+            activeThreshold,
+            dataModelRevision,
+            interactionModelRevision,
+            specificationVersion,
+            maxPathsPerInvoke,
+            supportedTransports,
+            maxTcpMessageSize,
+        } = SessionParameters(sessionParameters);
+
         this.#manager = manager;
+        if (channel) {
+            this.#channel = new MessageChannel(channel, this);
+        }
         this.messageCounter = messageCounter;
         this.messageReceptionState = messageReceptionState;
         this.idleInterval = idleInterval;
@@ -140,12 +106,20 @@ export abstract class Session {
         }
     }
 
-    get destroyed() {
-        return this.#destroyed;
+    get exchanges() {
+        return this.#exchanges;
     }
 
-    get closedByPeer() {
-        return this.#closedByPeer;
+    addExchange(exchange: MessageExchange) {
+        this.#exchanges.add(exchange);
+    }
+
+    deleteExchange(exchange: MessageExchange) {
+        this.#exchanges.delete(exchange);
+    }
+
+    get closing() {
+        return this.#closing;
     }
 
     notifyActivity(messageReceived: boolean) {
@@ -156,7 +130,7 @@ export abstract class Session {
         }
     }
 
-    isPeerActive(): boolean {
+    get isPeerActive(): boolean {
         return Timespan(this.activeTimestamp, Time.nowMs).duration < this.activeThreshold;
     }
 
@@ -169,6 +143,22 @@ export abstract class Session {
             throw new InternalError("MessageReceptionState is not defined for this session");
         }
         this.messageReceptionState.updateMessageCounter(messageCounter);
+    }
+
+    /**
+     * Emits on graceful close.
+     *
+     * During normal operation this should trigger a close message to notify the peer of closure.
+     */
+    get gracefulClose() {
+        return this.#gracefulClose;
+    }
+
+    /**
+     * Once set this flag prevents establishment of new exchanges.
+     */
+    get isClosing(): boolean {
+        return this.#closing.value || this.deferredClose;
     }
 
     protected static generateNonce(securityFlags: number, messageId: number, nodeId: NodeId) {
@@ -217,17 +207,169 @@ export abstract class Session {
 
     abstract decode(packet: DecodedPacket, aad?: Bytes): DecodedMessage;
     abstract encode(message: Message): Packet;
-    abstract end(sendClose: boolean): Promise<void>;
-    abstract destroy(sendClose?: boolean, closeAfterExchangeFinished?: boolean): Promise<void>;
+
+    static idStrOf(source: Packet | PacketHeader | number) {
+        let id;
+        if (typeof source === "number") {
+            id = source;
+        } else {
+            if ("header" in source) {
+                id = source.header?.sessionId;
+            } else if ("sessionId" in source) {
+                id = source.sessionId;
+            }
+            if (typeof id !== "number") {
+                return "?";
+            }
+        }
+
+        return hex.word(id);
+    }
+
+    /**
+     * Close the session.
+     *
+     * This begins the close process.  {@link shutdownLogic} is logic that should run once the session no longer accepts
+     * new exchanges.  It may set {@link deferredClose} to prevent the close from proceeding until all exchanges are
+     * finished.  Otherwise, the close will proceed immediately.
+     */
+    async initiateClose(shutdownLogic?: () => Promise<void>) {
+        if (this.isClosing) {
+            return;
+        }
+
+        this.#lifetime?.closing();
+
+        this.#closing.emit(true);
+
+        await shutdownLogic?.();
+
+        if (this.deferredClose && this.hasActiveExchanges) {
+            return;
+        }
+
+        await this.close();
+    }
+
+    /**
+     * Force-close the session.
+     *
+     * This terminates (potentially) subscriptions and exchanges without notifying peers.  It places the session in a
+     * closing state so no further exchanges are accepted.
+     *
+     * @param except an exchange that should not be forced close; this allows the current exchange to remain open
+     * @param keepSubscriptions whether to keep the subscriptions open after force-closing the session.
+     *  TODO refactor when moving subscriptions away from sessions
+     */
+    async initiateForceClose(except?: MessageExchange, keepSubscriptions = false) {
+        await this.initiateClose(async () => {
+            if (!keepSubscriptions) {
+                await this.closeSubscriptions();
+            }
+            for (const exchange of this.#exchanges) {
+                if (exchange === except) {
+                    this.deferredClose = true;
+                    continue;
+                }
+                await exchange.close(true);
+            }
+        });
+    }
+
+    get isClosed() {
+        return !this.#channel;
+    }
+
+    /**
+     * The {@link MessageChannel} other components use for session communication.
+     */
+    get channel(): MessageChannel {
+        if (this.#channel === undefined) {
+            throw new SessionClosedError(`Session ${this.via} ended`);
+        }
+        return this.#channel;
+    }
+
+    get usesMrp() {
+        return this.supportsMRP && !this.#channel?.isReliable;
+    }
+
+    get supportsLargeMessages() {
+        return this.#channel !== undefined && !!this.#channel?.supportsLargeMessages;
+    }
+
+    get hasActiveExchanges() {
+        return !!this.#exchanges.size;
+    }
+
+    async closeSubscriptions(_cancelledByPeer = false): Promise<number> {
+        return 0;
+    }
+
+    detachChannel() {
+        const channel = this.#channel;
+        this.#channel = undefined;
+        logger.info(this.via, "Channel detached");
+        return channel;
+    }
+
+    protected async close() {
+        using _closing = this.#lifetime?.closing();
+
+        if (this.#channel) {
+            await this.#channel.close();
+            this.#channel = undefined;
+            logger.info(this.via, "Session ended");
+        }
+    }
 
     protected get manager() {
         return this.#manager;
     }
 
     /**
-     * @deprecated
+     * This is primarily intended for testing.
      */
-    get owner() {
-        return this.#manager?.owner;
+    protected set channel(channel: MessageChannel) {
+        if (this.#channel !== undefined) {
+            throw new ImplementationError("Cannot replace active channel");
+        }
+        this.#channel = channel;
+    }
+
+    join(...name: unknown[]): Lifetime {
+        return this.activate().join(...name);
+    }
+
+    /**
+     * Invoked by manager when the session is "live".
+     *
+     * This is separate from construction because we sometimes discard sessions without installing in a manager or
+     * closing.
+     */
+    activate(): Lifetime {
+        if (!this.#lifetime) {
+            this.#lifetime = (this.#manager?.construction ?? Lifetime.process).join("session", this.via);
+        }
+
+        return this.#lifetime;
+    }
+
+    protected set lifetime(lifetime: Lifetime) {
+        this.#lifetime = lifetime;
+    }
+}
+
+export namespace Session {
+    export interface CommonConfig {
+        manager?: SessionManager;
+        channel?: Channel<Bytes>;
+    }
+
+    export interface Configuration extends CommonConfig {
+        messageCounter: MessageCounter;
+        messageReceptionState?: MessageReceptionState;
+        sessionParameters?: SessionParameters.Config;
+        setActiveTimestamp: boolean;
     }
 }

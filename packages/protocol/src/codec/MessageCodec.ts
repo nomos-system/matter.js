@@ -4,12 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { Mark } from "#common/Mark.js";
 import {
     Bytes,
     DataReader,
     DataWriter,
     Diagnostic,
     Endian,
+    hex,
     InternalError,
     NotImplementedError,
     UnexpectedDataError,
@@ -53,11 +55,48 @@ export interface Packet {
 export interface DecodedPacket extends Packet {
     header: DecodedPacketHeader;
 }
+
 export interface Message {
     packetHeader: PacketHeader;
     payloadHeader: PayloadHeader;
     securityExtension?: Bytes;
     payload: Bytes;
+}
+
+export namespace Message {
+    export function via({ via }: { via: string }, { packetHeader: { messageId } }: Message) {
+        return Diagnostic.via(`${via}${Mark.MESSAGE}${hex.fixed(messageId, 8)}`);
+    }
+
+    export function diagnosticsOf(context: { via: string }, message: Message, logContext?: ExchangeLogContext) {
+        const {
+            payloadHeader: { messageType, protocolId, ackedMessageId, requiresAck },
+            payload,
+        } = message;
+
+        const duplicate = !!logContext?.duplicate;
+        const forInfo = logContext?.for;
+        const log = { ...logContext };
+        delete log.duplicate;
+        delete log.for;
+        const { type, for: forType } = mapProtocolAndMessageType(protocolId, messageType);
+        return Diagnostic.dict(
+            {
+                for: forInfo ?? forType,
+                ...log,
+                id: Message.via(context, message),
+                type,
+                acked: ackedMessageId === undefined ? undefined : hex.fixed(ackedMessageId, 8),
+                msgFlags: Diagnostic.asFlags({
+                    reqAck: requiresAck,
+                    dup: duplicate,
+                }),
+                size: payload.byteLength ? payload.byteLength : undefined,
+                payload: payload.byteLength ? payload : undefined,
+            },
+            true,
+        );
+    }
 }
 
 export interface DecodedMessage extends Message {
@@ -289,38 +328,6 @@ export class MessageCodec {
         if (destNodeId !== undefined) writer.writeUInt64(destNodeId);
         if (destGroupId !== undefined) writer.writeUInt16(destGroupId);
         return writer.toByteArray();
-    }
-
-    static messageDiagnostics(
-        {
-            packetHeader: { messageId, sessionId },
-            payloadHeader: { exchangeId, messageType, protocolId, ackedMessageId, requiresAck },
-            payload,
-        }: Message,
-        logContext?: ExchangeLogContext,
-    ) {
-        const duplicate = !!logContext?.duplicate;
-        const forInfo = logContext?.for;
-        const log = { ...logContext };
-        delete log.duplicate;
-        delete log.for;
-        const { type, for: forType } = mapProtocolAndMessageType(protocolId, messageType);
-        return Diagnostic.dict(
-            {
-                for: forInfo ?? forType,
-                ...log,
-                msgId: `${sessionId}/${exchangeId}/${messageId}`,
-                type,
-                acked: ackedMessageId,
-                msgFlags: Diagnostic.asFlags({
-                    reqAck: requiresAck,
-                    dup: duplicate,
-                }),
-                size: payload.byteLength ? payload.byteLength : undefined,
-                payload: payload.byteLength ? payload : undefined,
-            },
-            true,
-        );
     }
 
     private static encodePayloadHeader({

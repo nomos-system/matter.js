@@ -10,7 +10,7 @@ import { MatterDefinition } from "../MatterDefinition.js";
 import { DeviceTypeElement as DeviceType, RequirementElement as Requirement } from "../../elements/index.js";
 
 export const MicrowaveOvenDt = DeviceType(
-    { name: "MicrowaveOven", id: 0x79 },
+    { name: "MicrowaveOven", id: 0x79, classification: "simple" },
     Requirement(
         { name: "Descriptor", id: 0x1d, element: "serverCluster" },
         Requirement({ name: "DeviceTypeList", default: [ { deviceType: 121, revision: 2 } ], element: "attribute" })
@@ -27,7 +27,8 @@ export const MicrowaveOvenDt = DeviceType(
         Requirement({ name: "AIRFLOWDIRECTION", conformance: "X", element: "feature" })
     ),
     Requirement({ name: "MicrowaveOvenMode", id: 0x5e, conformance: "M", element: "serverCluster" }),
-    Requirement({ name: "MicrowaveOvenControl", id: 0x5f, conformance: "M", element: "serverCluster" })
+    Requirement({ name: "MicrowaveOvenControl", id: 0x5f, conformance: "M", element: "serverCluster" }),
+    Requirement({ name: "OnOffLight", id: 0x100, conformance: "O", element: "deviceType" })
 );
 
 MatterDefinition.children.push(MicrowaveOvenDt);

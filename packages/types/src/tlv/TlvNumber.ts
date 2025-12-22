@@ -4,8 +4,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 import {
+    Days,
     FLOAT32_MAX,
     FLOAT32_MIN,
+    FLOAT64_MAX,
+    FLOAT64_MIN,
     INT16_MAX,
     INT16_MIN,
     INT32_MAX,
@@ -14,6 +17,8 @@ import {
     INT64_MIN,
     INT8_MAX,
     INT8_MIN,
+    ImplementationError,
+    Seconds,
     UINT16_MAX,
     UINT24_MAX,
     UINT32_MAX,
@@ -36,13 +41,32 @@ import { TlvWrapper } from "./TlvWrapper.js";
  * @see {@link MatterSpecification.v10.Core} § A.11.1
  */
 export class TlvNumericSchema<T extends bigint | number> extends TlvSchema<T> {
+    #min?: T;
+    #max?: T;
+
     constructor(
-        protected readonly type: TlvType.UnsignedInt | TlvType.SignedInt | TlvType.Float,
+        readonly type: TlvType.UnsignedInt | TlvType.SignedInt | TlvType.Float,
         protected readonly lengthProvider: (value: T) => TlvLength,
-        protected readonly min?: T,
-        protected readonly max?: T,
+        readonly baseTypeMin: T,
+        readonly baseTypeMax: T,
+        min?: T,
+        max?: T,
     ) {
         super();
+        if (min !== undefined && min > baseTypeMin) {
+            this.#min = min;
+        }
+        if (max !== undefined && max < baseTypeMax) {
+            this.#max = max;
+        }
+    }
+
+    get min() {
+        return this.#min ?? this.baseTypeMin;
+    }
+
+    get max() {
+        return this.#max ?? this.baseTypeMax;
     }
 
     override encodeTlvInternal(writer: TlvWriter, value: T, tag?: TlvTag): void {
@@ -90,10 +114,12 @@ export class TlvNumberSchema extends TlvNumericSchema<number> {
     constructor(
         type: TlvType.UnsignedInt | TlvType.SignedInt | TlvType.Float,
         lengthProvider: (value: number) => TlvLength,
+        baseTypeMin: number,
+        baseTypeMax: number,
         min?: number,
         max?: number,
     ) {
-        super(type, lengthProvider, min, max);
+        super(type, lengthProvider, baseTypeMin, baseTypeMax, min, max);
     }
 
     override decodeTlvInternalValue(reader: TlvReader, typeLength: TlvTypeLength) {
@@ -102,7 +128,14 @@ export class TlvNumberSchema extends TlvNumericSchema<number> {
     }
 
     override bound({ min, max }: NumericConstraints<number>): TlvNumericSchema<number> {
-        return new TlvNumberSchema(this.type, this.lengthProvider, maxValue(min, this.min), minValue(max, this.max));
+        return new TlvNumberSchema(
+            this.type,
+            this.lengthProvider,
+            this.baseTypeMin,
+            this.baseTypeMax,
+            maxValue(min, this.min),
+            minValue(max, this.max),
+        );
     }
 
     override validate(value: number): void {
@@ -116,7 +149,7 @@ export const TlvLongNumberSchema = TlvNumericSchema<number | bigint>;
 
 /** Unsigned integer TLV schema. */
 export const TlvFloat = new TlvNumberSchema(TlvType.Float, _value => TlvLength.FourBytes, FLOAT32_MIN, FLOAT32_MAX);
-export const TlvDouble = new TlvNumberSchema(TlvType.Float, _value => TlvLength.EightBytes);
+export const TlvDouble = new TlvNumberSchema(TlvType.Float, _value => TlvLength.EightBytes, FLOAT64_MIN, FLOAT64_MAX);
 export const TlvInt8 = new TlvNumberSchema(
     TlvType.SignedInt,
     value => TlvCodec.getIntTlvLength(value),
@@ -198,8 +231,61 @@ export const TlvPercent = TlvUInt8.bound({ max: 100 });
 export const TlvPercent100ths = TlvUInt16.bound({ max: 10000 });
 
 // Time Number types
-export const TlvEpochUs = TlvUInt64;
-export const TlvEpochS = TlvUInt32;
 export const TlvPosixMs = TlvUInt64;
 export const TlvSysTimeUs = TlvUInt64;
 export const TlvSysTimeMS = TlvUInt64;
+
+/** Milliseconds from Unix epoch (1970-01-01) to Matter epoch (2000-01-01) */
+export const MATTER_EPOCH_OFFSET = Days(10_957);
+
+/** Seconds from Unix epoch (1970-01-01) to Matter epoch (2000-01-01) */
+export const MATTER_EPOCH_OFFSET_S = Seconds.of(MATTER_EPOCH_OFFSET);
+
+/** Microseconds from Unix epoch (1970-01-01) to Matter epoch (2000-01-01) */
+export const MATTER_EPOCH_OFFSET_US = BigInt(MATTER_EPOCH_OFFSET * 1_000);
+
+/**
+ * TLV Schema for Epoch time in seconds since Matter epoch (2000-01-01). You can just use the normal unix epoch
+ * time (since 1970-01-01) number and it will be converted automatically.
+ */
+export const TlvEpochS = new TlvWrapper<number, number>(
+    new TlvNumberSchema(
+        TlvType.UnsignedInt,
+        value => TlvCodec.getUIntTlvLength(value),
+        0, // too low values will be caught in the wrapper
+        UINT32_MAX + MATTER_EPOCH_OFFSET_S,
+    ),
+    unixEpoch => {
+        const value = unixEpoch - MATTER_EPOCH_OFFSET_S;
+        if (value < 0) {
+            throw new ImplementationError(
+                "Do not convert Epoch-values yourself, use TlvEpochS directly with unix epoch values.",
+            );
+        }
+        return value;
+    },
+    epochS => epochS + MATTER_EPOCH_OFFSET_S,
+);
+
+/**
+ * TLV Schema for Epoch time in microseconds since Matter epoch (2000-01-01). You can just use the unix epoch as
+ * microseconds (since 1970-01-01) number and it will be converted automatically.
+ */
+export const TlvEpochUs = new TlvWrapper<number | bigint, number | bigint>(
+    new TlvLongNumberSchema(
+        TlvType.UnsignedInt,
+        value => TlvCodec.getUIntTlvLength(value),
+        0, // too low values will be caught in the wrapper
+        UINT64_MAX + MATTER_EPOCH_OFFSET_US,
+    ),
+    unixEpoch => {
+        const result = BigInt(unixEpoch) - MATTER_EPOCH_OFFSET_US;
+        if (result < BigInt(0)) {
+            throw new ImplementationError(
+                "Do not convert Epoch-values yourself, use TlvEpochUs directly with unix epoch values.",
+            );
+        }
+        return result;
+    },
+    epochUs => BigInt(epochUs) + MATTER_EPOCH_OFFSET_US,
+);

@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { Diagnostic } from "#log/Diagnostic.js";
 import { Duration } from "#time/Duration.js";
 import { Time, Timer } from "#time/Time.js";
 import { Instant, Millis, Seconds } from "#time/TimeUnit.js";
@@ -30,9 +31,11 @@ const logger = Logger.get("Observable");
  * @param payload a list of arguments to be emitted
  */
 export interface Observer<T extends any[] = any[], R = void> {
-    (...payload: T): MaybePromise<R | undefined>;
+    (...payload: T): R | undefined;
     [observant]?: boolean;
 }
+
+export interface AsyncObserver<T extends any[] = any[], R = void> extends Observer<T, MaybePromise<R>> {}
 
 /**
  * A discrete event that may be monitored via callback.  Could call it "event" but that could be confused with Matter
@@ -114,6 +117,11 @@ export interface Observable<T extends any[] = any[], R = void> extends AsyncIter
     ): Promise<TResult1 | TResult2>;
 
     /**
+     * A diagnostic aid; set this to produce detailed logs of emission.
+     */
+    traceAs: string | undefined;
+
+    /**
      * Observable supports standard "for await (const value of observable").
      *
      * Using an observer in this manner limits your listener to the first parameter normally emitted and your observer
@@ -139,8 +147,7 @@ export interface Observable<T extends any[] = any[], R = void> extends AsyncIter
  * result in rejection if awaited.
  */
 export interface ObservableValue<T extends [any, ...any[]] = [boolean], R extends MaybePromise<void> = void>
-    extends Observable<T, R>,
-        Promise<T[0]> {
+    extends Observable<T, R>, Promise<T[0]> {
     value: T[0] | undefined;
     error?: Error;
 
@@ -194,6 +201,7 @@ export class BasicObservable<T extends any[] = any[], R = void> implements Obser
     #handlePromise!: ObserverPromiseHandler;
     #observers?: Set<Observer<T, R>>;
     #once?: Set<Observer<T, R>>;
+    #instrumentAs?: string;
 
     #joinIteration?: () => Promise<Next<T>>;
     #removeIterator?: () => void;
@@ -206,6 +214,10 @@ export class BasicObservable<T extends any[] = any[], R = void> implements Obser
         } else {
             this.isAsync = asyncConfig ?? false;
         }
+    }
+
+    set traceAs(name: string | undefined) {
+        this.#instrumentAs = name;
     }
 
     [Symbol.dispose]() {
@@ -228,7 +240,8 @@ export class BasicObservable<T extends any[] = any[], R = void> implements Obser
             // Promises handled by emitter
             this.#handlePromise = promise => promise;
         } else {
-            // We log promise errors but do not otherwise track
+            // We log promise errors but do not otherwise track.  This generally should not be invoked because types
+            // should align with this.#isAsync, so observers should not be returning promises
             this.#handlePromise = (promise, observer) => {
                 promise.catch(error => {
                     let identity: string;
@@ -291,55 +304,103 @@ export class BasicObservable<T extends any[] = any[], R = void> implements Obser
         }
 
         // Iterate over a clone of observers so we do not trigger new observers added during observation
-        const iterator = [...this.#observers][Symbol.iterator]();
+        const observers = [...this.#observers];
 
-        const emitNext = (previousEmitResult?: R): R | undefined => {
-            if (previousEmitResult !== undefined) {
-                return previousEmitResult;
+        let nextObserver = 0;
+
+        const next = () => {
+            const observer = observers[nextObserver];
+
+            if (this.#once?.has(observer)) {
+                this.#once.delete(observer);
+                this.#observers?.delete(observer);
             }
 
-            for (let iteration = iterator.next(); !iteration.done; iteration = iterator.next()) {
-                let result;
-
-                const observer = iteration.value;
-
-                try {
-                    result = observer(...payload);
-                } catch (e) {
-                    this.#handleError(asError(e), observer);
-                }
-
-                if (this.#once?.has(observer)) {
-                    this.#once.delete(observer);
-                    this.#observers?.delete(observer);
-                }
-
-                if (result === undefined) {
-                    continue;
-                }
-
-                if (MaybePromise.is(result)) {
-                    result = this.#handlePromise(Promise.resolve(result), observer as Observer) as R | undefined;
-
-                    if (MaybePromise.is(result)) {
-                        return result.then(result => {
-                            if (result === undefined) {
-                                return emitNext();
-                            }
-                            return result;
-                        }) as R;
-                    }
-
-                    if (result === undefined) {
-                        continue;
-                    }
-                }
-
-                return result;
+            if (this.#instrumentAs) {
+                logger.debug(
+                    Diagnostic.strong(this.#instrumentAs),
+                    `invoking #${nextObserver++}`,
+                    Diagnostic.strong(observer.name || "(anon)"),
+                );
             }
+
+            return observer;
         };
 
-        return emitNext();
+        let log: undefined | ((observer: Observer<any, any>) => void), done: undefined | (() => void);
+        if (this.#instrumentAs) {
+            logger.debug(Diagnostic.strong(this.#instrumentAs), "emitting");
+
+            log = (observer: Observer<any, any>) => {
+                logger.debug(
+                    Diagnostic.strong(this.#instrumentAs),
+                    `invoking #${nextObserver++}`,
+                    Diagnostic.strong(observer.name || "(anon)"),
+                );
+            };
+
+            done = () => {
+                logger.debug(Diagnostic.strong(this.#instrumentAs), "emission complete");
+            };
+        }
+
+        // Initially emit using a synchronous loop.  When we hit the first promies we convert to an async function
+        for (; nextObserver < observers.length; nextObserver++) {
+            let result: ReturnType<Observer<T, R>>;
+
+            let observer = next();
+
+            try {
+                log?.(observer);
+                result = observer(...payload);
+            } catch (e) {
+                this.#handleError(asError(e), observer);
+            }
+
+            if (result === undefined) {
+                continue;
+            }
+
+            // If observer was async (which we can only conclude after invocation), switch to async emission
+            if (MaybePromise.is(result)) {
+                const emitAsync = async () => {
+                    while (true) {
+                        if (MaybePromise.is(result)) {
+                            try {
+                                result = await result;
+                            } catch (e) {
+                                this.#handleError(asError(e), observer);
+                            }
+                        }
+
+                        if (result !== undefined) {
+                            return result;
+                        }
+
+                        nextObserver++;
+                        if (nextObserver >= observers.length) {
+                            break;
+                        }
+
+                        observer = next();
+
+                        try {
+                            result = observer(...payload);
+                        } catch (e) {
+                            this.#handleError(asError(e), observer);
+                        }
+                    }
+
+                    done?.();
+                };
+
+                return emitAsync() as R | undefined;
+            }
+
+            done?.();
+
+            return result;
+        }
     }
 
     on(observer: Observer<T, R>) {
@@ -380,11 +441,35 @@ export class BasicObservable<T extends any[] = any[], R = void> implements Obser
                 const next = await promise;
                 if (next) {
                     promise = next.promise;
-                    yield next.value;
+                    yield next.value[0];
                 }
             }
         } finally {
             this.#removeIterator?.();
+        }
+    }
+
+    detachObservers(): DetachedObservers<T, R> | undefined {
+        if (!this.#observers) {
+            return;
+        }
+
+        return {
+            observers: this.#observers,
+            once: this.#once,
+        };
+    }
+
+    attachObservers(detached: DetachedObservers<T, R>) {
+        if (!detached.observers) {
+            return;
+        }
+        for (const observer of detached.observers) {
+            if (this.#once?.has(observer)) {
+                this.once(observer);
+            } else {
+                this.on(observer);
+            }
         }
     }
 
@@ -593,7 +678,7 @@ function constructAsyncObservableValue(value?: unknown, handleError?: ObserverEr
  */
 export class EventEmitter {
     // True private screws up TS types
-    private events?: Record<string, Observable | undefined>;
+    private events?: Record<string, AsyncObservable | undefined>;
 
     emit<This, N extends EventEmitter.NamesOf<This>>(this: This, name: N, ...payload: EventEmitter.PayloadOf<This, N>) {
         event(this, name).emit(...payload);
@@ -615,7 +700,7 @@ export class EventEmitter {
         event(this, name).off(handler as any);
     }
 
-    addEvent(name: string, event?: Observable) {
+    addEvent(name: string, event?: AsyncObservable) {
         if (!this.events) {
             this.events = {};
         }
@@ -736,6 +821,18 @@ export class ObserverGroup {
         this.#defaultTarget = target;
     }
 
+    on<T extends any[], R>(
+        observable: Observable<T, R>,
+        observer: Observer<ObserverGroup.VarArgs<NoInfer<T>>, NoInfer<R>>,
+        target?: {},
+    ): void;
+
+    on<T extends any[], R>(
+        observable: AsyncObservable<T, R>,
+        observer: AsyncObserver<ObserverGroup.VarArgs<NoInfer<T>>, NoInfer<R>>,
+        target?: {},
+    ): void;
+
     /**
      * Add an observer.
      *
@@ -810,6 +907,14 @@ export class ObserverGroup {
     }
 }
 
+/**
+ * {@link Observer}s detached from an {@link Observable}.
+ */
+export interface DetachedObservers<T extends any[] = any[], R = void> {
+    observers?: Set<Observer<T, R>>;
+    once?: Set<Observer<T, R>>;
+}
+
 export namespace ObserverGroup {
     /**
      * This is a workaround for a TS bug, without this the observer must provide a full argument set even if it does not
@@ -821,20 +926,23 @@ export namespace ObserverGroup {
 /**
  * An {@link Observable} that emits an algorithmically-reduced number of events.
  */
-export class QuietObservable<T extends any[] = any[]> extends BasicObservable<T> implements QuietObservable.State<T> {
+export class QuietObservable<T extends any[] = any[], R extends MaybePromise<void> = void>
+    extends BasicObservable<T, R>
+    implements QuietObservable.State<T, R>
+{
     #emitAutomatically = QuietObservable.defaults.emitAutomatically;
     #suppressionEnabled = QuietObservable.defaults.suppressionEnabled;
     #minimumEmitInterval = QuietObservable.defaults.minimumEmitInterval;
     #shouldEmit?: QuietObservable.EmitPredicate<T>;
-    #source?: Observable<T>;
-    #sink?: Observable<T>;
-    #sourceObserver?: Observer<T>;
-    #sinkObserver?: Observer<T>;
+    #source?: Observable<T, R>;
+    #sink?: Observable<T, R>;
+    #sourceObserver?: Observer<T, R>;
+    #sinkObserver?: Observer<T, R>;
     #deferredPayload?: T;
     #lastEmitAt?: number;
     #emitTimer?: Timer;
 
-    constructor(config?: QuietObservable.Configuration<T>) {
+    constructor(config?: QuietObservable.Configuration<T, R>) {
         super();
         if (config) {
             this.config = config;
@@ -845,7 +953,7 @@ export class QuietObservable<T extends any[] = any[]> extends BasicObservable<T>
         return this;
     }
 
-    set config(config: QuietObservable.Configuration<T>) {
+    set config(config: QuietObservable.Configuration<T, R>) {
         const { suppressionEnabled, minimumEmitInterval, emitAutomatically } = config;
         if (emitAutomatically !== undefined) {
             this.emitAutomatically = emitAutomatically;
@@ -918,7 +1026,7 @@ export class QuietObservable<T extends any[] = any[]> extends BasicObservable<T>
         return this.#source;
     }
 
-    set source(source: Observable<T> | undefined) {
+    set source(source: Observable<T, R> | undefined) {
         if (this.#source === source) {
             return;
         }
@@ -937,7 +1045,7 @@ export class QuietObservable<T extends any[] = any[]> extends BasicObservable<T>
         return this.#sink;
     }
 
-    set sink(sink: Observable<T> | undefined) {
+    set sink(sink: Observable<T, R> | undefined) {
         if (this.#sink === sink) {
             return;
         }
@@ -968,11 +1076,11 @@ export class QuietObservable<T extends any[] = any[]> extends BasicObservable<T>
         return super.isObserved || this.#sink?.isObserved || false;
     }
 
-    override isObservedBy(observer: Observer<T>): boolean {
+    override isObservedBy(observer: Observer<T, R>): boolean {
         return this.#sink?.isObservedBy(observer) || this.isObservedBy(observer) || false;
     }
 
-    override emit(...payload: T) {
+    override emit(...payload: T): R | undefined {
         const shouldEmit = this.#shouldEmit?.(...payload);
         if (shouldEmit === false) {
             return;
@@ -1023,7 +1131,7 @@ export class QuietObservable<T extends any[] = any[]> extends BasicObservable<T>
         this.#deferredPayload = undefined;
         this.#lastEmitAt = now ?? Time.nowMs;
         this.#stop();
-        super.emit(...payload);
+        return super.emit(...payload);
     }
 
     #start(now?: number) {
@@ -1055,7 +1163,7 @@ export class QuietObservable<T extends any[] = any[]> extends BasicObservable<T>
 }
 
 export namespace QuietObservable {
-    export interface State<T extends any[] = any[]> {
+    export interface State<T extends any[] = any[], R extends MaybePromise<void> = void> {
         /**
          * If true this observable will emit within the suppression constraints.  If false it will only emit after calls
          * to {@link emitSoon} or {@link emitNow}.
@@ -1075,12 +1183,12 @@ export namespace QuietObservable {
         /**
          * An input observable this observable will automatically observe to produce events.
          */
-        source?: Observable<T>;
+        source?: Observable<T, R>;
 
         /**
          * An output observable this observable will automatically emit to whenever it emits.
          */
-        sink?: Observable<T>;
+        sink?: Observable<T, R>;
 
         /**
          * A predicate that determine whether a payload should emit.
@@ -1121,7 +1229,9 @@ export namespace QuietObservable {
         (...payload: T): EmitDirective;
     }
 
-    export interface Configuration<T extends any[] = any[]> extends Partial<State<T>> {}
+    export interface Configuration<T extends any[] = any[], R extends MaybePromise<void> = void> extends Partial<
+        State<T, R>
+    > {}
 
     export const defaults: State = {
         emitAutomatically: true,

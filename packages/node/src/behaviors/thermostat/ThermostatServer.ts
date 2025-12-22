@@ -22,6 +22,8 @@ import {
     Observable,
 } from "#general";
 import { FieldElement } from "#model";
+import { Node } from "#node/Node.js";
+import { ServerNode } from "#node/ServerNode.js";
 import { hasLocalActor, Val } from "#protocol";
 import { ClusterType, StatusResponse, TypeFromPartialBitSchema } from "#types";
 import { AtomicWriteHandler } from "./AtomicWriteHandler.js";
@@ -39,7 +41,7 @@ const ThermostatBehaviorLogicBase = ThermostatBehavior.with(
 );
 
 // Enhance Schema to define conformance for some of the additional state attributes
-const schema = ThermostatBehaviorLogicBase.schema!.extend({
+const schema = ThermostatBehaviorLogicBase.schema.extend({
     children: [
         FieldElement({
             name: "PersistedPresets",
@@ -123,10 +125,11 @@ export class ThermostatBaseServer extends ThermostatBehaviorLogicBase {
             throw new ImplementationError("minSetpointDeadBand is out of valid range 0..127");
         }
 
+        const node = Node.forEndpoint(this.endpoint);
+        this.reactTo(node.lifecycle.online, this.#nodeOnline);
+
         // Initialize all the validation and logic handling
         this.#setupValidations();
-        this.#setupTemperatureMeasurementIntegration();
-        this.#setupOccupancyIntegration();
         this.#setupModeHandling();
         this.#setupThermostatLogic();
         this.#setupPresets();
@@ -134,6 +137,13 @@ export class ThermostatBaseServer extends ThermostatBehaviorLogicBase {
         // We store these values internally because we need to restore them after any write try
         this.internal.minSetpointDeadBand = this.state.minSetpointDeadBand;
         this.internal.controlSequenceOfOperation = this.state.controlSequenceOfOperation;
+    }
+
+    #nodeOnline() {
+        // TODO Also react to structure changes to add/remove endpoints that are being added or removed but might be used
+        //  for temperature or occupancy sensing
+        this.#setupTemperatureMeasurementIntegration();
+        this.#setupOccupancyIntegration();
     }
 
     /**
@@ -154,12 +164,11 @@ export class ThermostatBaseServer extends ThermostatBehaviorLogicBase {
 
         amount *= 10; // Convert to same base as the setpoints
 
-        // We only care about Occupied setpoints as by SDK implementation
         if (mode === Thermostat.SetpointRaiseLowerMode.Both) {
             if (this.features.heating && this.features.cooling) {
-                let desiredCoolingSetpoint = this.state.occupiedCoolingSetpoint + amount;
+                let desiredCoolingSetpoint = this.coolingSetpoint + amount;
                 const coolLimit = desiredCoolingSetpoint - this.#clampSetpointToLimits("Cool", desiredCoolingSetpoint);
-                let desiredHeatingSetpoint = this.state.occupiedHeatingSetpoint + amount;
+                let desiredHeatingSetpoint = this.heatingSetpoint + amount;
                 const heatLimit = desiredHeatingSetpoint - this.#clampSetpointToLimits("Heat", desiredHeatingSetpoint);
                 if (coolLimit !== 0 || heatLimit !== 0) {
                     if (Math.abs(coolLimit) <= Math.abs(heatLimit)) {
@@ -172,36 +181,27 @@ export class ThermostatBaseServer extends ThermostatBehaviorLogicBase {
                         desiredCoolingSetpoint = desiredCoolingSetpoint - coolLimit;
                     }
                 }
-                this.state.occupiedCoolingSetpoint = desiredCoolingSetpoint;
-                this.state.occupiedHeatingSetpoint = desiredHeatingSetpoint;
+                this.coolingSetpoint = desiredCoolingSetpoint;
+                this.heatingSetpoint = desiredHeatingSetpoint;
             } else if (this.features.cooling) {
-                this.state.occupiedCoolingSetpoint = this.#clampSetpointToLimits(
-                    "Cool",
-                    this.state.occupiedCoolingSetpoint + amount,
-                );
+                this.coolingSetpoint = this.#clampSetpointToLimits("Cool", this.coolingSetpoint + amount);
             } else {
-                this.state.occupiedHeatingSetpoint = this.#clampSetpointToLimits(
-                    "Heat",
-                    this.state.occupiedHeatingSetpoint + amount,
-                );
+                this.heatingSetpoint = this.#clampSetpointToLimits("Heat", this.heatingSetpoint + amount);
             }
             return;
         }
 
         if (mode === Thermostat.SetpointRaiseLowerMode.Cool) {
-            const desiredCoolingSetpoint = this.#clampSetpointToLimits(
-                "Cool",
-                this.state.occupiedCoolingSetpoint + amount,
-            );
+            const desiredCoolingSetpoint = this.#clampSetpointToLimits("Cool", this.coolingSetpoint + amount);
             if (this.features.autoMode) {
-                let heatingSetpoint = this.state.occupiedHeatingSetpoint;
+                let heatingSetpoint = this.heatingSetpoint;
                 if (desiredCoolingSetpoint - heatingSetpoint < this.setpointDeadBand) {
                     // We are limited by the Heating Setpoint
                     heatingSetpoint = desiredCoolingSetpoint - this.setpointDeadBand;
                     if (heatingSetpoint === this.#clampSetpointToLimits("Heat", heatingSetpoint)) {
                         // Desired cooling setpoint is enforceable
                         // Set the new cooling and heating setpoints
-                        this.state.occupiedHeatingSetpoint = heatingSetpoint;
+                        this.heatingSetpoint = heatingSetpoint;
                     } else {
                         throw new StatusResponse.InvalidCommandError(
                             "Could Not adjust heating setpoint to maintain dead band!",
@@ -209,24 +209,21 @@ export class ThermostatBaseServer extends ThermostatBehaviorLogicBase {
                     }
                 }
             }
-            this.state.occupiedCoolingSetpoint = desiredCoolingSetpoint;
+            this.coolingSetpoint = desiredCoolingSetpoint;
             return;
         }
 
         if (mode === Thermostat.SetpointRaiseLowerMode.Heat) {
-            const desiredHeatingSetpoint = this.#clampSetpointToLimits(
-                "Heat",
-                this.state.occupiedHeatingSetpoint + amount,
-            );
+            const desiredHeatingSetpoint = this.#clampSetpointToLimits("Heat", this.heatingSetpoint + amount);
             if (this.features.autoMode) {
-                let coolingSetpoint = this.state.occupiedCoolingSetpoint;
+                let coolingSetpoint = this.coolingSetpoint;
                 if (coolingSetpoint - desiredHeatingSetpoint < this.setpointDeadBand) {
                     // We are limited by the Cooling Setpoint
                     coolingSetpoint = desiredHeatingSetpoint + this.setpointDeadBand;
                     if (coolingSetpoint === this.#clampSetpointToLimits("Cool", coolingSetpoint)) {
                         // Desired cooling setpoint is enforceable
                         // Set the new cooling and heating setpoints
-                        this.state.occupiedCoolingSetpoint = coolingSetpoint;
+                        this.coolingSetpoint = coolingSetpoint;
                     } else {
                         throw new StatusResponse.InvalidCommandError(
                             "Could Not adjust cooling setpoint to maintain dead band!",
@@ -234,7 +231,7 @@ export class ThermostatBaseServer extends ThermostatBehaviorLogicBase {
                     }
                 }
             }
-            this.state.occupiedHeatingSetpoint = desiredHeatingSetpoint;
+            this.heatingSetpoint = desiredHeatingSetpoint;
             return;
         }
 
@@ -264,7 +261,7 @@ export class ThermostatBaseServer extends ThermostatBehaviorLogicBase {
 
     /**
      * This default implementation of the SetActivePresetRequest command handler sets the active preset and
-     * (additionally to specification requirements!) adjusts the occupied setpoints to the preset values if defined.
+     * (additionally to specification requirements!) adjusts the setpoints to the preset values if defined.
      *
      * If you do not want this behavior, you can override this method but should call handleSetActivePresetRequest to
      * ensure compliance with the specification.
@@ -275,10 +272,10 @@ export class ThermostatBaseServer extends ThermostatBehaviorLogicBase {
         if (preset !== undefined) {
             const { heatingSetpoint, coolingSetpoint } = preset;
             if (this.features.heating && heatingSetpoint !== null && heatingSetpoint !== undefined) {
-                this.state.occupiedHeatingSetpoint = this.#clampSetpointToLimits("Heat", heatingSetpoint);
+                this.heatingSetpoint = this.#clampSetpointToLimits("Heat", heatingSetpoint);
             }
             if (this.features.cooling && coolingSetpoint !== null && coolingSetpoint !== undefined) {
-                this.state.occupiedCoolingSetpoint = this.#clampSetpointToLimits("Cool", coolingSetpoint);
+                this.coolingSetpoint = this.#clampSetpointToLimits("Cool", coolingSetpoint);
             }
         }
     }
@@ -304,12 +301,28 @@ export class ThermostatBaseServer extends ThermostatBehaviorLogicBase {
         return this.state.unoccupiedHeatingSetpoint;
     }
 
+    protected set heatingSetpoint(value: number) {
+        if (this.occupied) {
+            this.state.occupiedHeatingSetpoint = value;
+        } else {
+            this.state.unoccupiedHeatingSetpoint = value;
+        }
+    }
+
     /** The current cooling setpoint depending on occupancy */
     protected get coolingSetpoint() {
         if (this.occupied) {
             return this.state.occupiedCoolingSetpoint;
         }
         return this.state.unoccupiedCoolingSetpoint;
+    }
+
+    protected set coolingSetpoint(value: number) {
+        if (this.occupied) {
+            this.state.occupiedCoolingSetpoint = value;
+        } else {
+            this.state.unoccupiedCoolingSetpoint = value;
+        }
     }
 
     /** Setup basic Thermostat state and logic */
@@ -412,20 +425,29 @@ export class ThermostatBaseServer extends ThermostatBehaviorLogicBase {
         }
 
         let localTemperature = null;
-        if (!preferRemoteTemperature && this.agent.has(TemperatureMeasurementServer)) {
-            logger.debug(
-                "Using existing TemperatureMeasurement cluster on same endpoint for local temperature measurement",
-            );
-            if (this.state.externalMeasuredIndoorTemperature !== undefined) {
+        const localTempEndpoint = this.state.localIndoorTemperatureMeasurementEndpoint;
+        if (!preferRemoteTemperature && localTempEndpoint !== undefined) {
+            const endpoints = this.env.get(ServerNode).endpoints;
+            const endpoint = endpoints.has(localTempEndpoint) ? endpoints.for(localTempEndpoint) : undefined;
+            if (endpoint !== undefined && endpoint.behaviors.has(TemperatureMeasurementServer)) {
+                logger.debug(
+                    `Using existing TemperatureMeasurement cluster on endpoint #${localTempEndpoint} for local temperature measurement`,
+                );
+                if (this.state.externalMeasuredIndoorTemperature !== undefined) {
+                    logger.warn(
+                        "Both local TemperatureMeasurement cluster and externalMeasuredIndoorTemperature state are set, using local cluster",
+                    );
+                }
+                this.reactTo(
+                    endpoint.eventsOf(TemperatureMeasurementServer).measuredValue$Changed,
+                    this.#handleMeasuredTemperatureChange,
+                );
+                localTemperature = endpoint.stateOf(TemperatureMeasurementServer).measuredValue;
+            } else {
                 logger.warn(
-                    "Both local TemperatureMeasurement cluster and externalMeasuredIndoorTemperature state are set, using local cluster",
+                    `No TemperatureMeasurement cluster found on endpoint #${localTempEndpoint}, falling back to externalMeasuredIndoorTemperature state if set`,
                 );
             }
-            this.reactTo(
-                this.agent.get(TemperatureMeasurementServer).events.measuredValue$Changed,
-                this.#handleMeasuredTemperatureChange,
-            );
-            localTemperature = this.endpoint.stateOf(TemperatureMeasurementServer).measuredValue;
         } else {
             if (this.state.externalMeasuredIndoorTemperature === undefined) {
                 logger.warn(
@@ -437,7 +459,9 @@ export class ThermostatBaseServer extends ThermostatBehaviorLogicBase {
             }
             this.reactTo(this.events.externalMeasuredIndoorTemperature$Changed, this.#handleMeasuredTemperatureChange);
         }
-        this.#handleMeasuredTemperatureChange(localTemperature); // and initialize
+        if (localTemperature !== null) {
+            this.#handleMeasuredTemperatureChange(localTemperature); // and initialize
+        }
     }
 
     /**
@@ -469,20 +493,30 @@ export class ThermostatBaseServer extends ThermostatBehaviorLogicBase {
         if (!this.features.occupancy) {
             return;
         }
-        let currentOccupancy: boolean;
+        let currentOccupancy = true;
         const preferRemoteOccupancy = !!this.state.remoteSensing?.occupancy;
-        if (!preferRemoteOccupancy && this.agent.has(OccupancySensingServer)) {
-            logger.debug("Using existing OccupancySensing cluster on same endpoint for local occupancy sensing");
-            if (this.state.externallyMeasuredOccupancy !== undefined) {
+        const localOccupancyEndpoint = this.state.localOccupancyMeasurementEndpoint;
+        if (!preferRemoteOccupancy && localOccupancyEndpoint !== undefined) {
+            const endpoints = this.env.get(ServerNode).endpoints;
+            const endpoint = endpoints.has(localOccupancyEndpoint) ? endpoints.for(localOccupancyEndpoint) : undefined;
+            if (endpoint !== undefined && endpoint.behaviors.has(OccupancySensingServer)) {
+                logger.debug(
+                    `Using existing OccupancySensing cluster on endpoint ${localOccupancyEndpoint} for local occupancy sensing`,
+                );
+                if (this.state.externallyMeasuredOccupancy !== undefined) {
+                    logger.warn(
+                        "Both local OccupancySensing cluster and externallyMeasuredOccupancy state are set, using local cluster",
+                    );
+                }
+                this.reactTo(endpoint.eventsOf(OccupancySensingServer).occupancy$Changed, this.#handleOccupancyChange);
+                currentOccupancy = !!endpoint.stateOf(OccupancySensingServer).occupancy.occupied;
+            } else {
                 logger.warn(
-                    "Both local OccupancySensing cluster and externallyMeasuredOccupancy state are set, using local cluster",
+                    `No OccupancySensing cluster found on endpoint ${localOccupancyEndpoint}, falling back to externallyMeasuredOccupancy state if set`,
                 );
             }
-            this.reactTo(this.agent.get(OccupancySensingServer).events.occupancy$Changed, this.#handleOccupancyChange);
-            currentOccupancy = !!this.endpoint.stateOf(OccupancySensingServer).occupancy.occupied;
         } else {
             if (this.state.externallyMeasuredOccupancy === undefined) {
-                currentOccupancy = true;
                 logger.warn(
                     "No local OccupancySensing cluster available and externallyMeasuredOccupancy state not set",
                 );
@@ -999,7 +1033,7 @@ export class ThermostatBaseServer extends ThermostatBehaviorLogicBase {
      * true.
      */
     #handleTemperatureChangeForMode(temperature: number | null) {
-        if (temperature == null) {
+        if (temperature === null) {
             return;
         }
         const consideration = this.temperatureConsideration;
@@ -1352,11 +1386,23 @@ export namespace ThermostatBaseServer {
         externalMeasuredIndoorTemperature?: number;
 
         /**
+         * Endpoint (Number or string-Id) where to find the indoor temperature measurement cluster to use as
+         * local temperature measurement for the thermostat behavior.
+         */
+        localIndoorTemperatureMeasurementEndpoint?: number | string;
+
+        /**
          * Otherwise measured occupancy as boolean.
          * Use this if you have an external occupancy sensor that should be used for thermostat control instead of a
          * internal occupancy sensing cluster.
          */
         externallyMeasuredOccupancy?: boolean;
+
+        /**
+         * Endpoint (Number or string-Id) where to find the occupancy sensing cluster to use as
+         * local occupancy measurement for the thermostat behavior.
+         */
+        localOccupancyMeasurementEndpoint?: number | string;
 
         /**
          * Use to enable the automatic mode management, implemented by this standard implementation.  This is beyond

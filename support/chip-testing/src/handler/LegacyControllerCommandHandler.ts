@@ -8,13 +8,13 @@ import { Bytes, Logger, Seconds } from "@matter/general";
 import { NodeId, Observable, ServerAddressUdp } from "@matter/main";
 import { GeneralCommissioning, GroupKeyManagement } from "@matter/main/clusters";
 import {
+    Certificate,
     CertificateAuthority,
-    InteractionClient,
-    MessageChannel,
+    IPK_DEFAULT_EPOCH_START_TIME,
     NodeDiscoveryType,
+    SecureSession,
     SupportedTransportsSchema,
     TlvCertSigningRequest,
-    X509Base,
 } from "@matter/main/protocol";
 import {
     Attribute,
@@ -36,6 +36,7 @@ import {
     VendorId,
 } from "@matter/main/types";
 import { CommissioningController, NodeCommissioningOptions } from "@project-chip/matter.js";
+import { InteractionClient } from "@project-chip/matter.js/cluster";
 import { CustomCommissioningFlow } from "../CustomCommissioningFlow.js";
 import {
     CommandHandler,
@@ -66,7 +67,7 @@ export class LegacyControllerCommandHandler extends CommandHandler {
     #identity: string;
     #controllerInstance: CommissioningController;
     #started = false;
-    #paseChannel?: MessageChannel;
+    #paseSession?: SecureSession;
 
     constructor(identity: string, controllerInstance: CommissioningController) {
         super();
@@ -93,33 +94,33 @@ export class LegacyControllerCommandHandler extends CommandHandler {
             await this.#controllerInstance.groups.setFromGroupKeySet({
                 groupKeySetId: 0x01a1,
                 epochKey0: Bytes.fromHex("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"),
-                epochStartTime0: 1110000,
+                epochStartTime0: IPK_DEFAULT_EPOCH_START_TIME + BigInt(1110000),
                 epochKey1: Bytes.fromHex("b0b1b2b3b4b5b6b7b8b9babbbcbdbebf"),
-                epochStartTime1: 1110001,
+                epochStartTime1: IPK_DEFAULT_EPOCH_START_TIME + BigInt(1110001),
                 epochKey2: Bytes.fromHex("c0c1c2c3c4c5c6c7c8c9cacbcccdcecf"),
-                epochStartTime2: 1110002,
+                epochStartTime2: IPK_DEFAULT_EPOCH_START_TIME + BigInt(1110002),
                 groupKeySecurityPolicy: GroupKeyManagement.GroupKeySecurityPolicy.CacheAndSync,
                 groupKeyMulticastPolicy: GroupKeyManagement.GroupKeyMulticastPolicy.PerGroupId,
             });
             await this.#controllerInstance.groups.setFromGroupKeySet({
                 groupKeySetId: 0x01a2,
                 epochKey0: Bytes.fromHex("d0d1d2d3d4d5d6d7d8d9dadbdcdddedf"),
-                epochStartTime0: 2220000,
+                epochStartTime0: IPK_DEFAULT_EPOCH_START_TIME + BigInt(2220000),
                 epochKey1: Bytes.fromHex("e0e1e2e3e4e5e6e7e8e9eaebecedeeef"),
-                epochStartTime1: 2220001,
+                epochStartTime1: IPK_DEFAULT_EPOCH_START_TIME + BigInt(2220001),
                 epochKey2: Bytes.fromHex("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"),
-                epochStartTime2: 2220002,
+                epochStartTime2: IPK_DEFAULT_EPOCH_START_TIME + BigInt(2220002),
                 groupKeySecurityPolicy: GroupKeyManagement.GroupKeySecurityPolicy.CacheAndSync,
                 groupKeyMulticastPolicy: GroupKeyManagement.GroupKeyMulticastPolicy.PerGroupId,
             });
             await this.#controllerInstance.groups.setFromGroupKeySet({
                 groupKeySetId: 0x01a3,
                 epochKey0: Bytes.fromHex("d0d1d2d3d4d5d6d7d8d9dadbdcdddedf"),
-                epochStartTime0: 2220000,
+                epochStartTime0: IPK_DEFAULT_EPOCH_START_TIME + BigInt(2220000),
                 epochKey1: Bytes.fromHex("d1d1d2d3d4d5d6d7d8d9dadbdcdddedf"),
-                epochStartTime1: 2220001,
+                epochStartTime1: IPK_DEFAULT_EPOCH_START_TIME + BigInt(2220001),
                 epochKey2: Bytes.fromHex("d2d1d2d3d4d5d6d7d8d9dadbdcdddedf"),
-                epochStartTime2: 2220002,
+                epochStartTime2: IPK_DEFAULT_EPOCH_START_TIME + BigInt(2220002),
                 groupKeySecurityPolicy: GroupKeyManagement.GroupKeySecurityPolicy.CacheAndSync,
                 groupKeyMulticastPolicy: GroupKeyManagement.GroupKeyMulticastPolicy.PerGroupId,
             });
@@ -334,12 +335,13 @@ export class LegacyControllerCommandHandler extends CommandHandler {
             suppressResponse,
         } = data;
         let client: InteractionClient;
-        if (this.#paseChannel) {
-            logger.info("Force reuse of PASE connection", this.#paseChannel.name);
+        if (this.#paseSession) {
+            logger.info("Force reuse of PASE connection", this.#paseSession.via);
             client = await this.#controllerInstance.createInteractionClient(
-                this.#paseChannel,
-                NodeDiscoveryType.FullDiscovery,
+                this.#paseSession,
+                NodeDiscoveryType.TimedDiscovery,
                 {
+                    discoveryTimeout: Seconds(10),
                     forcedConnection: true,
                 },
             );
@@ -347,7 +349,8 @@ export class LegacyControllerCommandHandler extends CommandHandler {
             const node = await this.#controllerInstance.getNode(nodeId, true);
             client = node.isConnected
                 ? await (await this.#controllerInstance.getNode(nodeId, true)).getInteractionClient()
-                : await this.#controllerInstance.createInteractionClient(nodeId, NodeDiscoveryType.FullDiscovery, {
+                : await this.#controllerInstance.createInteractionClient(nodeId, NodeDiscoveryType.TimedDiscovery, {
+                      discoveryTimeout: Seconds(10),
                       forcedConnection: true,
                   });
         }
@@ -502,7 +505,7 @@ export class LegacyControllerCommandHandler extends CommandHandler {
 
     async handlePaseConnection(data: InitialPairingRequest): Promise<void> {
         await this.disconnectNode(data.nodeId);
-        this.#paseChannel = await this.#controllerInstance.connectPaseChannel(this.#determineCommissionOptions(data));
+        this.#paseSession = await this.#controllerInstance.connectPaseChannel(this.#determineCommissionOptions(data));
     }
 
     async handleInitialPairing(data: InitialPairingRequest): Promise<void> {
@@ -541,7 +544,7 @@ export class LegacyControllerCommandHandler extends CommandHandler {
         const ca = await CertificateAuthority.create(this.#controllerInstance.crypto, caConfig);
 
         const { certSigningRequest } = TlvCertSigningRequest.decode(elements);
-        const operationalPublicKey = await X509Base.getPublicKeyFromCsr(
+        const operationalPublicKey = await Certificate.getPublicKeyFromCsr(
             this.#controllerInstance.crypto,
             certSigningRequest,
         );
@@ -549,6 +552,7 @@ export class LegacyControllerCommandHandler extends CommandHandler {
         return {
             IPK: identityProtectionKey,
             NOC: await ca.generateNoc(operationalPublicKey, fabricId, nodeId),
+            ICAC: ca.icacCert,
             RCAC: rootCertBytes,
         };
     }
@@ -564,7 +568,8 @@ export class LegacyControllerCommandHandler extends CommandHandler {
                 // ignore
             }
         }
-        await this.#controllerInstance.createInteractionClient(nodeId, NodeDiscoveryType.FullDiscovery, {
+        await this.#controllerInstance.createInteractionClient(nodeId, NodeDiscoveryType.TimedDiscovery, {
+            discoveryTimeout: Seconds(10),
             forcedConnection: expireExistingSession,
         });
     }

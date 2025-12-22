@@ -4,15 +4,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { camelize, decamelize, ImplementationError } from "#general";
+import { camelize, decamelize, ImplementationError, NodeJsStyleInspectable } from "#general";
 import { DefinitionError, ElementTag, Metatype, Specification } from "../common/index.js";
 import { AnyElement, BaseElement } from "../elements/index.js";
 import { ModelTraversal } from "../logic/ModelTraversal.js";
 import { Children, InternalChildren } from "./Children.js";
 import type { MatterModel } from "./MatterModel.js";
 import { Resource, ResourceBundle } from "./Resource.js";
-
-const inspect = Symbol.for("nodejs.util.inspect.custom");
 
 /**
  * Thrown when model API is used incorrectly.
@@ -54,7 +52,7 @@ export abstract class Model<E extends BaseElement = BaseElement, C extends Model
      *
      * This is an operational implementation hint and does not override conformance.
      */
-    isSupported?: boolean;
+    operationalIsSupported?: boolean;
 
     #id: E["id"];
     #name: string;
@@ -330,6 +328,17 @@ export abstract class Model<E extends BaseElement = BaseElement, C extends Model
     }
 
     /**
+     * Obtain the "is supported" flag from inheritance.
+     */
+    get effectiveIsSupported(): boolean | undefined {
+        if (this.operationalIsSupported !== undefined) {
+            return this.operationalIsSupported;
+        }
+
+        return this.base?.effectiveIsSupported;
+    }
+
+    /**
      * Update a subset of fields.
      *
      * Only allows for updates to element properties.  Recurses to children.
@@ -532,16 +541,15 @@ export abstract class Model<E extends BaseElement = BaseElement, C extends Model
      */
     extend<This extends Model>(
         this: This,
-        properties?: Partial<BaseElement.Properties<E>>,
+        properties?: Partial<Model.Definition<This>>,
         ...children: Model.ChildDefinition<Model>[]
     ): This {
         const constructor = this.constructor as new (properties: unknown) => This;
-
         const definition = {
             id: this.id,
             name: this.name,
 
-            ...properties,
+            ...properties!, // This assertion may be a lie, but necessary due to apparent TS bug
 
             tag: this.tag,
             operationalBase: this,
@@ -573,7 +581,7 @@ export abstract class Model<E extends BaseElement = BaseElement, C extends Model
         this.isSeed = definition.isSeed;
         this.operationalBase = definition.operationalBase;
         this.operationalShadow = definition.operationalShadow;
-        this.isSupported = definition.isSupported;
+        this.operationalIsSupported = definition.operationalIsSupported;
 
         if (isClone) {
             if (definition.hasLocalResource) {
@@ -716,30 +724,30 @@ export abstract class Model<E extends BaseElement = BaseElement, C extends Model
     get hasLocalResource() {
         return !!(this.#resource || (this.#root?.resources || ResourceBundle.default).get(this));
     }
-
-    [inspect](_depth: any, options: any, inspect: any) {
-        const json = this.valueOf() as Record<string, unknown>;
-        const props = {
-            name: json.name,
-        } as Record<string, unknown>;
-        if (json.id !== undefined) {
-            props.id = json.id;
-        }
-        for (const key in json) {
-            if (key === "id" || key === "name" || key === "tag") {
-                continue;
-            }
-            props[key] = json[key];
-        }
-        if (this.#children !== undefined && this.#children.length) {
-            props.children = this.#children.length;
-        }
-        if (!inspect) {
-            inspect = (value: unknown) => `${value}`;
-        }
-        return `${inspect(props, options)}`.replace(/^\{/, `${decamelize(this.tag)} {`);
-    }
 }
+
+NodeJsStyleInspectable(Model.prototype, function (_depth, options, inspect) {
+    const json = this.valueOf() as Record<string, unknown>;
+    const props = {
+        name: json.name,
+    } as Record<string, unknown>;
+    if (json.id !== undefined) {
+        props.id = json.id;
+    }
+    for (const key in json) {
+        if (key === "id" || key === "name" || key === "tag") {
+            continue;
+        }
+        props[key] = json[key];
+    }
+    if (this.children.length) {
+        props.children = this.children.length;
+    }
+    if (!inspect) {
+        inspect = (value: unknown) => `${value}`;
+    }
+    return `${inspect(props, options)}`.replace(/^\{/, `${decamelize(this.tag)} {`);
+});
 
 export namespace Model {
     /**
@@ -762,7 +770,7 @@ export namespace Model {
               parent?: Model;
               operationalBase?: Model;
               operationalShadow?: Model;
-              isSupported?: boolean;
+              operationalIsSupported?: boolean;
           })
         | T;
 

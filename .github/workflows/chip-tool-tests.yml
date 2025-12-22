@@ -1,6 +1,6 @@
 # This workflow executes the chip tool tests against matter.js (Dockerized and not dockerized ones)
 # This workflow is triggered by:
-# * A schedule (every day at 5am UTC)
+# * A schedule
 # * A manual trigger
 # * For commits and pull requests to the main branch
 
@@ -8,7 +8,7 @@ name: Chip Tool tests
 
 on:
   schedule:
-    - cron: 0 5 * * * # Every day at 05:00
+    - cron: 0 1 * * * # Every day at 01:00
   workflow_dispatch: # Manually on demand
   push:
     branches: [ "main" ]
@@ -29,7 +29,7 @@ jobs:
       head-commit-message: ${{ steps.get_head_commit_message.outputs.headCommitMsg }}
     steps:
       - name: Get repo
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Print head git commit message
@@ -50,7 +50,7 @@ jobs:
       chip-slowapp-tests-required: ${{ steps.check-long-tests.outputs.chip-slowapp-tests-required || steps.check-slowapp-tests.outputs.chip-slowapp-tests-required }}
     steps:
       - name: Check out matter.js
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - uses: dorny/paths-filter@v3
         id: changes
@@ -134,7 +134,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out matter.js
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Prepare chip tests and rebuild chip-tool if needed
         uses: ./.github/actions/prepare-chip-testing
@@ -149,7 +149,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out matter.js
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Initialize chip tests
         uses: ./.github/actions/prepare-chip-testing
@@ -194,7 +194,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out matter.js
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Initialize chip tests
         uses: ./.github/actions/prepare-chip-testing
@@ -240,7 +240,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out matter.js
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Initialize chip tests
         uses: ./.github/actions/prepare-chip-testing
@@ -273,7 +273,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out matter.js
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Initialize chip tests
         uses: ./.github/actions/prepare-chip-testing
@@ -309,7 +309,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out matter.js
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Initialize chip tests
         uses: ./.github/actions/prepare-chip-testing
@@ -343,7 +343,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out matter.js
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Initialize chip tests
         uses: ./.github/actions/prepare-chip-testing
@@ -373,7 +373,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out matter.js
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Initialize chip tests
         uses: ./.github/actions/prepare-chip-testing
@@ -406,7 +406,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out matter.js
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Initialize chip tests
         uses: ./.github/actions/prepare-chip-testing
@@ -484,6 +484,7 @@ jobs:
           scripts/run_in_python_env.sh out/venv './scripts/tests/run_python_test.py --load-from-env /tmp/test_env.yaml --script src/python_testing/TC_OPCREDS_3_2.py'
           scripts/run_in_python_env.sh out/venv './scripts/tests/run_python_test.py --load-from-env /tmp/test_env.yaml --script src/python_testing/TC_OPCREDS_3_4.py'
           scripts/run_in_python_env.sh out/venv './scripts/tests/run_python_test.py --load-from-env /tmp/test_env.yaml --script src/python_testing/TC_OPCREDS_3_5.py'
+          scripts/run_in_python_env.sh out/venv './scripts/tests/run_python_test.py --load-from-env /tmp/test_env.yaml --script src/python_testing/TC_OPCREDS_3_8.py'
           scripts/run_in_python_env.sh out/venv './scripts/tests/run_python_test.py --load-from-env /tmp/test_env.yaml --script src/python_testing/TC_SC_3_6.py'
           scripts/run_in_python_env.sh out/venv './scripts/tests/run_python_test.py --load-from-env /tmp/test_env.yaml --script src/python_testing/TC_SC_7_1.py'
 

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { b$, Bytes, PublicKey, StandardCrypto } from "#general";
+import { b$, Bytes, EcdsaSignature, PublicKey, StandardCrypto } from "#general";
 import { TlvEncryptedDataSigma2, TlvEncryptedDataSigma3, TlvSignedData } from "#session/case/CaseMessages.js";
 
 describe("CasePairing", () => {
@@ -21,7 +21,7 @@ describe("CasePairing", () => {
             const peerPubKey = b$`04ae6e458cf40ad53761ee90bc458aa577e6a1acf75410524551bb0bc4c708832c6525991ee2eed47df35ce2d83dad743bff6769ebbf731395d62453cb37303e03`;
             const fabricPubKey = b$`04531a14e4c1b4cc7ac69aa5e403d5ccc3c5152c29fddedc29ac98ecff6c8f8695317446029cf3eb3e295ee18f0fd0ba9f06f7fa229138db0bc8d8c6f9875c9707`;
 
-            const sigma2Salt = Bytes.concat(ipk, random, pubKey, await crypto.computeSha256(sigma1Bytes));
+            const sigma2Salt = Bytes.concat(ipk, random, pubKey, await crypto.computeHash(sigma1Bytes));
 
             expect(Bytes.toHex(sigma2Salt)).to.equal(
                 "0c677d9b5ac585827b577470bd9bd51675d1443943a23371699bb017958a87e9ec6bbcad5f990aa3822a45bec778648904e2690445cc017a388853eaeca3a1ffd2712f6898e0bb523b8b496590804a39bf1555300bbd2a159e927b428397fb07a41e26c8cdf858ec62a310d0480d94eb64df506d7014c72ed4a18169954cf24a5cacf44fc7c13eb39906c06a50864f8106",
@@ -43,7 +43,7 @@ describe("CasePairing", () => {
 
             const signature = b$`1736972364d84c4ae069f642f491256c6e74c86eda9f5ed4d89dfd7cadb68b67574f032afa2764fcc890e9218eaedcc484576d2d65e4df1ae22dd916f12ab59e`;
 
-            await crypto.verifyEcdsa(PublicKey(fabricPubKey), signatureData, signature);
+            await crypto.verifyEcdsa(PublicKey(fabricPubKey), signatureData, new EcdsaSignature(signature));
 
             const encryptedDataPlain = TlvEncryptedDataSigma2.encode({
                 responderNoc: noc,
@@ -65,7 +65,9 @@ describe("CasePairing", () => {
         it("generates the right signature", async () => {
             const fabricPubKey = b$`049bfa105c3d209ff226c31da689dafb297b73499ec1844bba89c60ce65938b722300dd0abbb201e9451c6ab284ec99b8d90c5dd892388c59fde30c299c64af8c4`;
             const signatureData = b$`153001f1153001010124020137032414001826048012542826058015203b370624150124115d18240701240801300941049bfa105c3d209ff226c31da689dafb297b73499ec1844bba89c60ce65938b722300dd0abbb201e9451c6ab284ec99b8d90c5dd892388c59fde30c299c64af8c4370a3501280118240201360304020401183004142c3494bc756f4b58a73bde64a3141285a3efd5c9300514e766069362d7e35b79687161644d222bdde93a6818300b406772b5445ef466a669d9e5e5663238b817511e73ce992937ddd975690abda8b86b0a79f2fd49bae78c653fad9bd3d53463d4abd7f996964988a7644c4cc1d0321830020030034104473bd04e2a9c4e6a12b9008739c64a16d0113295822faf17e3d2ffcb77b0cae437701b0f0525ddcc6139da5a56dfda2af2b86a2836ef6b03f8f5c231dbaf950b3004410441838848a7e58ab46a1a71a539c474780002bf22adccbeaa43ee07f5176c61aaa3d718102333fc856595ea3a6a5bfd37d2890049acb82c49440e1f490cd970e018`;
-            const signature = b$`75e35c22a5da60805d65772b3d4decc8c6eabe30bd2925608524ea12b729efd00a12faeb5757cdfc65aaefddd01c57be9f14d37e2c0beca43434f8ebdd81d635`;
+            const signature = new EcdsaSignature(
+                b$`75e35c22a5da60805d65772b3d4decc8c6eabe30bd2925608524ea12b729efd00a12faeb5757cdfc65aaefddd01c57be9f14d37e2c0beca43434f8ebdd81d635`,
+            );
 
             await crypto.verifyEcdsa(PublicKey(fabricPubKey), signatureData, signature);
         });
@@ -82,7 +84,7 @@ describe("CasePairing", () => {
 
             const sigma3Salt = Bytes.concat(
                 identityProtectionKey,
-                await crypto.computeSha256([sigma1Bytes, sigma2Bytes]),
+                await crypto.computeHash([sigma1Bytes, sigma2Bytes]),
             );
 
             expect(Bytes.toHex(sigma3Salt)).to.equal(
@@ -114,7 +116,7 @@ describe("CasePairing", () => {
 
             const secureSessionSalt = Bytes.concat(
                 identityProtectionKey,
-                await crypto.computeSha256([sigma1Bytes, sigma2Bytes, sigma3Bytes]),
+                await crypto.computeHash([sigma1Bytes, sigma2Bytes, sigma3Bytes]),
             );
             const decryptKey = await crypto.createHkdfKey(
                 sharedSecret,

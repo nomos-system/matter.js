@@ -5,8 +5,5 @@
  */
 
 describe("LVL", () => {
-    chip("LVL/*").exclude(
-        // TODO - requires scenes management features
-        "LVL/9.1",
-    );
+    chip("LVL/*");
 });

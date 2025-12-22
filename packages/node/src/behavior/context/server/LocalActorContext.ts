@@ -5,23 +5,25 @@
  */
 
 import { ValueSupervisor } from "#behavior/supervision/ValueSupervisor.js";
-import type { Agent } from "#endpoint/Agent.js";
-import { Diagnostic, InternalError, MaybePromise, Transaction } from "#general";
+import { Diagnostic, InternalError, Lifetime, MaybePromise, Transaction } from "#general";
 import { AccessLevel } from "#model";
-import { AccessControl } from "#protocol";
+import { AccessControl, Mark } from "#protocol";
 import { Contextual } from "../Contextual.js";
 import type { NodeActivity } from "../NodeActivity.js";
 export let nextInternalId = 1;
 
 let ReadOnly: LocalActorContext | undefined;
 
-export interface LocalActorContext extends ValueSupervisor.LocalActorSession {}
+export interface LocalActorContext extends ValueSupervisor.LocalActorSession {
+    /**
+     * @deprecated use `context.fabric === undefined` or `hasLocalActor(context)` to detect a local actor
+     */
+    offline: true;
+}
 
 /**
  * The context for operations triggered locally, either for in-process node implementations or remote nodes that are
  * peers of a local node.
- *
- * You can also use {@link LocalActorContext.ReadOnly} for read-only {@link Agent} access.
  */
 export const LocalActorContext = {
     /**
@@ -63,7 +65,7 @@ export const LocalActorContext = {
     open(purpose: string, options?: LocalActorContext.Options): LocalActorContext & Transaction.Finalization {
         const id = nextInternalId;
         nextInternalId = (nextInternalId + 1) % 65535;
-        const via = Diagnostic.via(`${purpose}#${id.toString(16)}`);
+        const via = Diagnostic.via(`${Mark.LOCAL_SESSION}${purpose}#${id.toString(16)}`);
 
         let frame: NodeActivity.Activity | undefined;
         let transaction: (Transaction & Transaction.Finalization) | undefined;
@@ -71,7 +73,7 @@ export const LocalActorContext = {
         try {
             frame = options?.activity?.begin(via);
 
-            transaction = Transaction.open(via, options?.isolation);
+            transaction = Transaction.open(via, options?.lifetime ?? Lifetime.process, options?.isolation);
 
             if (frame) {
                 transaction.onClose(frame.close.bind(frame));
@@ -79,9 +81,6 @@ export const LocalActorContext = {
 
             const context = Object.freeze({
                 ...options,
-
-                // Disable access level enforcement
-                offline: true,
 
                 transaction,
                 activity: frame,
@@ -101,6 +100,8 @@ export const LocalActorContext = {
 
                 resolve: transaction.resolve.bind(transaction),
                 reject: transaction.reject.bind(transaction),
+
+                offline: true,
             });
 
             return context;
@@ -131,7 +132,7 @@ export const LocalActorContext = {
         return ReadOnly;
     },
 
-    [Symbol.toStringTag]: "OfflineContext",
+    [Symbol.toStringTag]: "LocalActorContext",
 };
 
 export namespace LocalActorContext {
@@ -139,6 +140,7 @@ export namespace LocalActorContext {
      * {@link LocalActorContext} configuration options.
      */
     export interface Options {
+        lifetime?: Lifetime.Owner;
         command?: boolean;
         activity?: NodeActivity;
         isolation?: Transaction.IsolationLevel;

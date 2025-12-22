@@ -4,11 +4,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type { RemoteActorContext } from "#behavior/context/server/RemoteActorContext.js";
 import { AdministratorCommissioningServer } from "#behaviors/administrator-commissioning";
 import { BasicInformationServer } from "#behaviors/basic-information";
 import { AdministratorCommissioning } from "#clusters/administrator-commissioning";
 import { GeneralCommissioning } from "#clusters/general-commissioning";
-import { Bytes, Diagnostic, Logger, MatterFlowError, MaybePromise, Seconds } from "#general";
+import { Diagnostic, hex, Logger, MatterFlowError, MaybePromise, Seconds } from "#general";
 import type { ServerNode } from "#node/ServerNode.js";
 import {
     assertRemoteActor,
@@ -55,12 +56,13 @@ export class GeneralCommissioningServer extends GeneralCommissioningBehavior {
     /** As required by Commissioning Flows any new PASE session needs to arm the failsafe for 60s. */
     async #handleAddedPaseSessions(session: NodeSession) {
         if (
+            session.isInitiator || // Only server sessions
             !session.isPase || // Only PASE sessions
             session.fabric !== undefined // That does not have an assigned fabric (can never happen in real usecases)
         ) {
             return;
         }
-        logger.debug(`New PASE session added: ${session.id}. Arming Failsafe for 60s.`);
+        logger.debug(session.via, `New PASE session, arming failsafe for 60s`);
         await this.#armFailSafe({ breadcrumb: this.state.breadcrumb, expiryLengthSeconds: 60 }, session);
     }
 
@@ -68,7 +70,7 @@ export class GeneralCommissioningServer extends GeneralCommissioningBehavior {
         { breadcrumb, expiryLengthSeconds }: GeneralCommissioning.ArmFailSafeRequest,
         session: SecureSession,
     ) {
-        NodeSession.assert(session, "armFailSafe can only be called on a secure session");
+        NodeSession.assert(session, "Failsafe may only be armed on a secure session");
         const commissioner = this.env.get(DeviceCommissioner);
 
         try {
@@ -84,11 +86,15 @@ export class GeneralCommissioningServer extends GeneralCommissioningBehavior {
                 !session.isPase
             ) {
                 // TODO - should this set status to Status.BusyWithOtherAdmin?
-                throw new MatterFlowError("Failed to arm failsafe using CASE while commissioning window is opened.");
+                throw new MatterFlowError("Cannot arm failsafe using CASE while commissioning window is opened");
             }
 
             if (commissioner.isFailsafeArmed) {
-                await commissioner.failsafeContext.extend(session.fabric, Seconds(expiryLengthSeconds));
+                await commissioner.failsafeContext.extend(
+                    session.fabric,
+                    Seconds(expiryLengthSeconds),
+                    (this.context as RemoteActorContext).exchange,
+                );
             } else {
                 // If ExpiryLengthSeconds is 0 and the fail-safe timer was not armed, then this command invocation SHALL
                 // lead to a success response with no side effect against the fail-safe context.
@@ -118,7 +124,7 @@ export class GeneralCommissioningServer extends GeneralCommissioningBehavior {
         } catch (error) {
             MatterFlowError.accept(error);
 
-            logger.debug(`Error while arming failSafe timer`, error);
+            logger.debug(`Error while arming failSafe timer:`, error);
             return {
                 errorCode: GeneralCommissioning.CommissioningError.BusyWithOtherAdmin,
                 debugText: error.message,
@@ -226,13 +232,13 @@ export class GeneralCommissioningServer extends GeneralCommissioningBehavior {
         }
         const failsafeContext = commissioner.failsafeContext;
 
-        SecureSession.assert(session, "commissioningComplete can only be called on a secure session");
+        SecureSession.assert(session, "Commissioning may only complete on a secure session");
 
         const timedFabric = failsafeContext.associatedFabric?.fabricIndex;
         if (fabric.fabricIndex !== timedFabric) {
             return {
                 errorCode: GeneralCommissioning.CommissioningError.InvalidAuthentication,
-                debugText: `Associated fabric ${fabric.fabricIndex} does not match the one from the failsafe context ${timedFabric}.`,
+                debugText: `Associated fabric index ${fabric.fabricIndex} does not match failsafe fabric index ${timedFabric}`,
             };
         }
 
@@ -251,8 +257,8 @@ export class GeneralCommissioningServer extends GeneralCommissioningBehavior {
         logger.info(
             "Commissioned",
             Diagnostic.dict({
-                fabric: `${Bytes.toHex(fabric.operationalId)} (#${fabric.fabricIndex})`,
-                node: fabric.nodeId.toString(16).padStart(16, "0"),
+                fabric: `${hex.fixed(fabric.globalId, 16)} (#${fabric.fabricIndex})`,
+                node: hex.fixed(fabric.nodeId, 16),
             }),
         );
 

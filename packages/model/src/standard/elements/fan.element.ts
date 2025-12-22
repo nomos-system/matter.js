@@ -10,7 +10,7 @@ import { MatterDefinition } from "../MatterDefinition.js";
 import { DeviceTypeElement as DeviceType, RequirementElement as Requirement } from "../../elements/index.js";
 
 export const FanDt = DeviceType(
-    { name: "Fan", id: 0x2b },
+    { name: "Fan", id: 0x2b, classification: "simple" },
     Requirement(
         { name: "Descriptor", id: 0x1d, element: "serverCluster" },
         Requirement({ name: "DeviceTypeList", default: [ { deviceType: 43, revision: 3 } ], element: "attribute" })
@@ -21,7 +21,8 @@ export const FanDt = DeviceType(
     Requirement(
         { name: "FanControl", id: 0x202, conformance: "M", element: "serverCluster" },
         Requirement({ name: "FanModeSequence", access: "R V", conformance: "Matter", element: "attribute" })
-    )
+    ),
+    Requirement({ name: "Thermostat", id: 0x301, conformance: "O", element: "deviceType" })
 );
 
 MatterDefinition.children.push(FanDt);

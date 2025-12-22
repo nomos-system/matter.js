@@ -3,7 +3,7 @@
  * Copyright 2022-2025 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
-import { FabricManager, FabricNotFoundError, FabricTableFullError } from "#fabric/FabricManager.js";
+import { FabricManager, FabricTableFullError } from "#fabric/FabricManager.js";
 import { TestFabric } from "#fabric/TestFabric.js";
 import { MatterFlowError, StandardCrypto, StorageBackendMemory, StorageManager } from "#general";
 import { FabricIndex } from "#types";
@@ -73,16 +73,9 @@ describe("FabricManager", () => {
         it("remove an added fabric", async () => {
             const fabric = await TestFabric();
             fabrics.addFabric(fabric);
-            await fabrics.removeFabric(fabric.fabricIndex);
+            await fabric.delete();
 
             expect(fabrics.fabrics).to.deep.equal([]);
-        });
-
-        it("throws when removing a non-existent fabric", async () => {
-            await expect(fabrics.removeFabric(FabricIndex(1))).to.be.rejectedWith(
-                FabricNotFoundError,
-                `Fabric with index 1 cannot be removed because it does not exist.`,
-            );
         });
     });
 
@@ -99,14 +92,14 @@ describe("FabricManager", () => {
 
         it("get next fabric index after adding fabric and removing it", async () => {
             const fabric = await TestFabric({ fabrics });
-            await fabrics.removeFabric(fabric.fabricIndex);
+            await fabric.delete();
 
             expect(fabrics.allocateFabricIndex()).to.equal(2);
         });
 
         it("get next fabric index after adding fabric and revoking it", async () => {
             const fabric = await TestFabric({ fabrics });
-            await fabrics.revokeFabric(fabric.fabricIndex);
+            await fabric.delete();
 
             expect(fabrics.allocateFabricIndex()).to.equal(2);
         });
@@ -114,7 +107,7 @@ describe("FabricManager", () => {
         it("get jumps over one fabric index after adding fabric and revoking it", async () => {
             const fabric = await TestFabric({ fabrics }); // Index 1
             await TestFabric({ fabrics }); // Index 2
-            await fabrics.revokeFabric(fabric.fabricIndex); // We do not remove the last generated Index
+            await fabric.delete(); // We do not remove the last generated Index
 
             expect(fabrics.allocateFabricIndex()).to.equal(3); // So index now changed
         });
@@ -123,7 +116,7 @@ describe("FabricManager", () => {
             for (let i = 1; i < 255; i++) {
                 await TestFabric({ fabrics });
             }
-            await fabrics.removeFabric(FabricIndex(100));
+            await fabrics.for(FabricIndex(100)).delete();
 
             expect(fabrics.allocateFabricIndex()).to.equal(100);
         });
@@ -132,7 +125,7 @@ describe("FabricManager", () => {
             for (let i = 1; i < 255; i++) {
                 await TestFabric({ fabrics });
             }
-            await fabrics.removeFabric(FabricIndex(1));
+            await fabrics.for(FabricIndex(1)).delete();
 
             expect(fabrics.allocateFabricIndex()).to.equal(1);
         });

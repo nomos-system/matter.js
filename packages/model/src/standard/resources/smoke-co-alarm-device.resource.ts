@@ -9,7 +9,7 @@
 import { Resource } from "#models/Resource.js";
 
 Resource.add({
-    tag: "deviceType", name: "SmokeCoAlarm", classification: "simple", xref: "device§7.9",
+    tag: "deviceType", name: "SmokeCoAlarm", xref: "device§7.9",
 
     details: "A Smoke CO Alarm device is capable of sensing smoke, carbon monoxide or both. It is capable of " +
         "issuing a visual and audible alert to indicate elevated concentration of smoke or carbon monoxide." +
@@ -29,6 +29,7 @@ Resource.add({
         { tag: "requirement", name: "SmokeCoAlarm", xref: "device§7.9.5" },
         { tag: "requirement", name: "RelativeHumidityMeasurement", xref: "device§7.9.5" },
         { tag: "requirement", name: "TemperatureMeasurement", xref: "device§7.9.5" },
-        { tag: "requirement", name: "CarbonMonoxideConcentrationMeasurement", xref: "device§7.9.5" }
+        { tag: "requirement", name: "CarbonMonoxideConcentrationMeasurement", xref: "device§7.9.5" },
+        { tag: "requirement", name: "PowerSource", xref: "device§7.9.4" }
     ]
 });

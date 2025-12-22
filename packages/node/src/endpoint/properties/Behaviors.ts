@@ -6,7 +6,6 @@
 
 import { Behavior } from "#behavior/Behavior.js";
 import type { ClusterBehavior } from "#behavior/cluster/ClusterBehavior.js";
-import { limitEndpointAttributeDataToAllowedFabrics } from "#behavior/cluster/FabricScopedDataHandler.js";
 import { ActionContext } from "#behavior/context/ActionContext.js";
 import { NodeActivity } from "#behavior/context/NodeActivity.js";
 import { LocalActorContext } from "#behavior/context/server/LocalActorContext.js";
@@ -14,9 +13,11 @@ import { Events } from "#behavior/Events.js";
 import { BehaviorBacking } from "#behavior/internal/BehaviorBacking.js";
 import { Datasource } from "#behavior/state/managed/Datasource.js";
 import {
+    BasicObservable,
     camelize,
     Construction,
     describeList,
+    DetachedObservers,
     Diagnostic,
     EventEmitter,
     Immutable,
@@ -28,7 +29,7 @@ import {
 } from "#general";
 import { FeatureSet } from "#model";
 import { ProtocolService } from "#node/integration/ProtocolService.js";
-import { ClusterTypeProtocol, FabricManager, Val } from "#protocol";
+import { ClusterTypeProtocol, Val } from "#protocol";
 import { ClusterType, VoidSchema } from "#types";
 import type { Agent } from "../Agent.js";
 import type { Endpoint } from "../Endpoint.js";
@@ -41,6 +42,7 @@ import type { SupportedBehaviors } from "./SupportedBehaviors.js";
 const logger = Logger.get("Behaviors");
 
 export interface SupportedElements {
+    features: Set<string>;
     attributes: Set<string>;
     commands: Set<string>;
     events: Set<string>;
@@ -53,14 +55,33 @@ export class Behaviors {
     #endpoint: Endpoint;
     #supported: SupportedBehaviors;
     #backings: Record<string, BehaviorBacking> = {};
+    #events: Record<string, EventEmitter> = {};
     #options: Record<string, object | undefined>;
     #protocol?: ProtocolService;
+    #detachedObservers?: Record<string, DetachedObservers>;
 
     /**
      * The {@link SupportedBehaviors} of the {@link Endpoint}.
      */
     get supported() {
         return this.#supported;
+    }
+
+    /**
+     * Obtain the specific {@link Behavior.Type} used by the endpoint for implementation if the endpoint supports
+     * {@link type}.
+     */
+    typeFor<T extends Behavior.Type>(type: T): T | undefined {
+        const supported = this.#supported[type.id];
+        if (!supported) {
+            return;
+        }
+
+        if (!supported.supports(type)) {
+            return undefined;
+        }
+
+        return supported as T;
     }
 
     /**
@@ -224,16 +245,6 @@ export class Behaviors {
                 promise = endpointInitializer.behaviorsInitialized(agent);
             }
 
-            if (this.#endpoint.env.has(FabricManager)) {
-                const fabricIndices = this.#endpoint.env.get(FabricManager).fabrics.map(fabric => fabric.fabricIndex);
-                if (fabricIndices.length > 0) {
-                    // Make sure the state on startup only includes allowed Fabric scoped data
-                    return MaybePromise.then(promise, () =>
-                        limitEndpointAttributeDataToAllowedFabrics(this.#endpoint, fabricIndices),
-                    );
-                }
-            }
-
             return promise;
         };
 
@@ -241,7 +252,10 @@ export class Behaviors {
         const activity = this.#endpoint.env.get(NodeActivity);
 
         // Perform initialization
-        let promise = LocalActorContext.act(`initialize<${this.#endpoint}>`, initializeBehaviors, { activity });
+        let promise = LocalActorContext.act(`initialize<${this.#endpoint}>`, initializeBehaviors, {
+            activity,
+            lifetime: this.#endpoint.construction,
+        });
 
         // Once behaviors are ready the endpoint we consider the endpoint "ready"
         const onReady = () => {
@@ -259,7 +273,17 @@ export class Behaviors {
     /**
      * Does the {@link Endpoint} support a specified behavior?
      */
-    has<T extends Behavior.Type>(type: T) {
+    has<T extends Behavior.Type>(type: T): boolean;
+
+    /**
+     * Does the {@link Endpoint} support a specified behavior by its behavior Id?
+     */
+    has(typeId: string): boolean;
+
+    has(type: Behavior.Type | string): boolean {
+        if (typeof type === "string") {
+            return !!this.#supported[type];
+        }
         const myType = this.#supported[type.id];
         return myType === type || myType?.supports(type);
     }
@@ -278,12 +302,6 @@ export class Behaviors {
         }
 
         this.inject(type, options);
-
-        this.#endpoint.lifecycle.change(EndpointLifecycle.Change.ServersChanged);
-
-        if (type.early && this.#endpoint.lifecycle.isInstalled) {
-            this.#activateLate(type);
-        }
     }
 
     /**
@@ -375,7 +393,11 @@ export class Behaviors {
     /**
      * Determine if a specified behavior is supported and active.
      */
-    isActive(type: Behavior.Type) {
+    isActive(type: Behavior.Type | string) {
+        if (typeof type === "string") {
+            return this.#backings[type] !== undefined;
+        }
+
         const backing = this.#backings[type.id];
         return !!backing && backing.type.supports(type);
     }
@@ -426,17 +448,22 @@ export class Behaviors {
             `close<${this.#endpoint}>`,
             dispose,
 
-            // Note - do not close in an activity because this can cause deadlock
-            //, {
-            //    activity: this.#endpoint.env.get(NodeActivity),
-            //},
+            {
+                lifetime: this.#endpoint.construction,
+
+                // Note - do not close in an activity because this can cause deadlock
+                // activity: this.#endpoint.env.get(NodeActivity),
+            },
         );
     }
 
     /**
-     * Add support for an additional behavior statically.  Should only be invoked prior to initialization.
+     * Add support for an additional behavior.
+     *
+     * This should generally only be used prior to initialization.  It may cause subtle errors if incompatible types are
+     * injected once the endpoint is initialized.
      */
-    inject(type: Behavior.Type, options?: Behavior.Options) {
+    inject(type: Behavior.Type, options?: Behavior.Options, notify = true) {
         if (options) {
             this.#options[type.id] = options;
         }
@@ -445,14 +472,71 @@ export class Behaviors {
             this.#supported = { ...this.#supported };
         }
 
-        // TODO how to better solve that?
-        if (this.#endpoint.env.has(EndpointInitializer)) {
-            type = this.#endpoint.env.get(EndpointInitializer).finalizeType(type);
-        }
-
         this.#supported[type.id] = type;
 
         this.#augmentEndpoint(type);
+
+        if (notify) {
+            this.#endpoint.lifecycle.change(EndpointLifecycle.Change.ServersChanged);
+        }
+
+        if (!this.#endpoint.lifecycle.isInstalled) {
+            return;
+        }
+
+        const activeBacking = this.#backings[type.id];
+        if (activeBacking) {
+            activeBacking.type = type;
+        } else if (type.early) {
+            this.#activateLate(type);
+        }
+    }
+
+    /**
+     * Drop support for a behavior.
+     *
+     * This is intended for synchronization with peers and should not be used for servers as Matter does not allow an
+     * endpoint to change its set of supported clusters.
+     */
+    drop(id: string): MaybePromise<void> {
+        const supported = this.#supported[id];
+        if (!supported) {
+            return;
+        }
+
+        delete this.#supported[id];
+
+        let promise: undefined | MaybePromise<void>;
+        const backing = this.#backings[id];
+        if (backing) {
+            logger.warn(`Removing ${backing} from active endpoint`);
+            promise = backing.close();
+            delete this.#backings[id];
+        }
+
+        this.#endpoint.lifecycle.change(EndpointLifecycle.Change.ServersChanged);
+
+        // Detach observers for reuse if present
+        const events = this.#events[id];
+        if (events) {
+            let detachedObservers: undefined | Record<string, DetachedObservers>;
+
+            for (const key in events) {
+                const observable = (events as unknown as Record<string, BasicObservable | undefined>)[key];
+                if (observable && "detachObservers" in observable) {
+                    const detached = observable.detachObservers();
+                    if (detached) {
+                        (detachedObservers ??= {})[key] = detached;
+                    }
+                }
+            }
+
+            if (detachedObservers) {
+                (this.#detachedObservers ??= {})[id] = detachedObservers;
+            }
+        }
+
+        return promise;
     }
 
     /**
@@ -548,7 +632,18 @@ export class Behaviors {
     /**
      * Obtain current data version of behavior.
      */
-    versionOf(type: Behavior.Type) {
+    versionOf(type: Behavior.Type): number;
+
+    /**
+     * Obtain current data version of behavior by its behavior Id, if existing
+     */
+    versionOf(typeId: string): number | undefined;
+
+    versionOf(type: Behavior.Type | string) {
+        if (typeof type === "string") {
+            const backing = this.#backings[type];
+            return backing?.maybeDatasource?.version;
+        }
         const backing = this.#backingFor(type);
         return backing.datasource.version;
     }
@@ -593,7 +688,7 @@ export class Behaviors {
                 const backing = this.#backingFor(type);
                 return backing.construction.ready;
             },
-            { activity: this.#endpoint.env.get(NodeActivity) },
+            { lifetime: this.#endpoint.construction },
         );
 
         if (MaybePromise.is(result)) {
@@ -654,6 +749,13 @@ export class Behaviors {
 
         const backing = this.#endpoint.env.get(EndpointInitializer).createBacking(this.#endpoint, myType);
         this.#backings[backing.type.id] = backing;
+
+        // The EndpointInitializer may choose to replace the behavior implementation.  If so the replacement should be
+        // compatible, but update our support map to designate the specific implementation
+        if (backing.type !== myType) {
+            this.#supported[backing.type.id] = backing.type;
+        }
+
         if (!this.#protocol) {
             this.#protocol = this.#endpoint.env.get(ProtocolService);
         }
@@ -680,17 +782,33 @@ export class Behaviors {
      * Updates endpoint "state" and "events" properties to include properties for a supported behavior.
      */
     #augmentEndpoint(type: Behavior.Type) {
+        const { id, Events } = type;
+
         const get = () => this.#backingFor(type).stateView;
-        Object.defineProperty(this.#endpoint.state, type.id, { get, enumerable: true });
-        if (type.schema?.id !== undefined) {
-            Object.defineProperty(this.#endpoint.state, type.schema.id, { get });
+        Object.defineProperty(this.#endpoint.state, id, { get, enumerable: true, configurable: true });
+        if (type.schema.id !== undefined) {
+            Object.defineProperty(this.#endpoint.state, type.schema.id, { get, configurable: true });
         }
 
-        let events: undefined | EventEmitter;
-        Object.defineProperty(this.#endpoint.events, type.id, {
+        // When replacing a behavior, transplant listeners from previous incarnation if present
+        const detachedObservers = this.#detachedObservers?.[type.id];
+        if (detachedObservers) {
+            delete this.#detachedObservers![type.id];
+            const newEvents = new Events();
+            for (const key in detachedObservers) {
+                const newEvent = (newEvents as unknown as Record<string, BasicObservable | undefined>)[key];
+                if (newEvent && "attachObservers" in newEvent) {
+                    newEvent.attachObservers(detachedObservers);
+                }
+            }
+            this.#events[id] = newEvents;
+        }
+
+        Object.defineProperty(this.#endpoint.events, id, {
             get: () => {
+                let events = this.#events[id];
                 if (!events) {
-                    events = new type.Events();
+                    events = this.#events[id] = new Events();
 
                     if (typeof (events as Events).setContext === "function") {
                         (events as Events).setContext(this.#endpoint, type);
@@ -700,6 +818,7 @@ export class Behaviors {
             },
 
             enumerable: true,
+            configurable: true,
         });
     }
 }

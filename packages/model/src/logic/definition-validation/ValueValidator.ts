@@ -43,7 +43,7 @@ export class ValueValidator<T extends ValueModel> extends ModelValidator<T> {
                 }
             }
         });
-        this.model.conformance.validateComputation(this, this.model.owner(ClusterModel)?.featureNames);
+        this.model.conformance.validateComputation(this, this.model.owner(ClusterModel)?.definedFeatures);
 
         this.#validateAspect("constraint");
         this.#validateAspect("access");
@@ -193,7 +193,7 @@ export class ValueValidator<T extends ValueModel> extends ModelValidator<T> {
                     this.error(`CHILDLESS_${metatype.toUpperCase()}`, `${this.model.type} with no children`);
                 }
 
-                if (metatype == Metatype.enum) {
+                if (metatype === Metatype.enum) {
                     this.#validateEnumKeys();
                 } else {
                     this.#validateBitFields();

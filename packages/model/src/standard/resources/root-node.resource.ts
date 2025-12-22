@@ -9,7 +9,7 @@
 import { Resource } from "#models/Resource.js";
 
 Resource.add({
-    tag: "deviceType", name: "RootNode", classification: "node", xref: "device§2.1",
+    tag: "deviceType", name: "RootNode", xref: "device§2.1",
 
     details: "This defines conformance for a root node endpoint (see System Model specification). This endpoint is " +
         "akin to a \"read me first\" endpoint that describes itself and the other endpoints that make up the " +
@@ -43,6 +43,7 @@ Resource.add({
         { tag: "requirement", name: "WiFiNetworkDiagnostics", xref: "device§2.1.5" },
         { tag: "requirement", name: "ThreadNetworkDiagnostics", xref: "device§2.1.5" },
         { tag: "requirement", name: "IcdManagement", xref: "device§2.1.5" },
+        { tag: "requirement", name: "PowerSource", xref: "device§2.1.4" },
 
         {
             tag: "field", name: "conditions",

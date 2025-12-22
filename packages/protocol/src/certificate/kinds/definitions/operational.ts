@@ -69,7 +69,7 @@ export namespace OperationalCertificate {
         const fields = {
             // Standard DNs
             commonName: TlvOptionalField(1, TlvString),
-            sureName: TlvOptionalField(2, TlvString),
+            surName: TlvOptionalField(2, TlvString),
             serialNum: TlvOptionalField(3, TlvString),
             countryName: TlvOptionalField(4, TlvString),
             localityName: TlvOptionalField(5, TlvString),
@@ -90,7 +90,7 @@ export namespace OperationalCertificate {
 
             // Standard DNs when encoded as Printable String
             commonNamePs: TlvOptionalField(129, TlvString),
-            sureNamePs: TlvOptionalField(130, TlvString),
+            surNamePs: TlvOptionalField(130, TlvString),
             serialNumPs: TlvOptionalField(131, TlvString),
             countryNamePs: TlvOptionalField(132, TlvString),
             localityNamePs: TlvOptionalField(133, TlvString),
@@ -167,8 +167,15 @@ export namespace OperationalCertificate {
 
     export const TlvIcac = BaseMatterCertificate({
         subject: {
-            icacId: TlvField(19, TlvUInt64),
+            icacId: TlvOptionalField(19, TlvUInt64),
             fabricId: TlvOptionalField(21, TlvFabricId),
+        },
+        issuer: AllowedSubjectAndIssuerMatterFields,
+    });
+
+    export const TlvVvsc = BaseMatterCertificate({
+        subject: {
+            vvsId: TlvField(23, TlvUInt64),
         },
         issuer: AllowedSubjectAndIssuerMatterFields,
     });
@@ -176,4 +183,5 @@ export namespace OperationalCertificate {
     export type Rcac = TypeFromSchema<typeof TlvRcac>;
     export type Icac = TypeFromSchema<typeof TlvIcac>;
     export type Noc = TypeFromSchema<typeof TlvNoc>;
+    export type Vvsc = TypeFromSchema<typeof TlvVvsc>;
 }

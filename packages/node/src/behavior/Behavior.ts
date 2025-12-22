@@ -9,6 +9,7 @@ import {
     AsyncObservable,
     EventEmitter,
     GeneratedClass,
+    Lifetime,
     MaybePromise,
     NotImplementedError,
     Observable,
@@ -68,7 +69,7 @@ export abstract class Behavior {
      * control.
      */
     static get schema() {
-        return Schema(this);
+        return Schema(this) ?? Schema.empty;
     }
 
     /**
@@ -178,6 +179,17 @@ export abstract class Behavior {
      */
     toString() {
         return `${this.endpoint}.${this.type.id}`;
+    }
+
+    /**
+     * Lifetime associated with this behavior type for {@link endpoint}.
+     */
+    get lifetime(): Lifetime.Owner {
+        return {
+            join: (...name: unknown[]) => {
+                return (this as unknown as Internal)[BACKING].construction.join(...name);
+            },
+        };
     }
 
     /**
@@ -371,7 +383,7 @@ export namespace Behavior {
         readonly supports: typeof Behavior.supports;
         readonly defaults: Record<string, any>;
 
-        readonly schema?: Schema;
+        readonly schema: Schema.Struct;
         readonly early: boolean;
         readonly supervisor: RootSupervisor;
         readonly dependencies?: Iterable<Behavior.Type>;

@@ -14,7 +14,8 @@ import {
     UnexpectedDataError,
     UninitializedDependencyError,
 } from "#general";
-import { SecureSession } from "#session/SecureSession.js";
+import type { MessageExchange } from "#protocol/MessageExchange.js";
+import type { NodeSession } from "#session/NodeSession.js";
 import { CaseAuthenticatedTag, NodeId, ValidationError, VendorId } from "#types";
 import { Fabric, FabricBuilder } from "../fabric/Fabric.js";
 import { FabricManager } from "../fabric/FabricManager.js";
@@ -63,8 +64,11 @@ export abstract class FailsafeContext {
 
             // If ExpiryLengthSeconds is non-zero and the fail-safe timer was not currently armed, then the fail-safe
             // timer SHALL be armed for that duration.
-            this.#failsafe = new FailsafeTimer(this.#associatedFabric, expiryLength, maxCumulativeFailsafe, () =>
-                this.#failSafeExpired(),
+            this.#failsafe = new FailsafeTimer(
+                this.#associatedFabric,
+                expiryLength,
+                maxCumulativeFailsafe,
+                this.#failSafeExpired.bind(this),
             );
             logger.debug(`Arm failSafe timer for ${Duration.format(expiryLength)}`);
 
@@ -78,9 +82,9 @@ export abstract class FailsafeContext {
         });
     }
 
-    async extend(fabric: Fabric | undefined, expiryLength: Duration) {
+    async extend(fabric: Fabric | undefined, expiryLength: Duration, currentExchange?: MessageExchange) {
         await this.#construction;
-        await this.#failsafe?.reArm(fabric, expiryLength);
+        await this.#failsafe?.reArm(fabric, expiryLength, currentExchange);
         if (expiryLength > 0) {
             logger.debug(`Extend failSafe timer for ${Duration.format(expiryLength)}`);
         }
@@ -141,7 +145,7 @@ export abstract class FailsafeContext {
         // TODO 3. Any temporary administrative privileges automatically granted to any open PASE session SHALL be revoked (see Section 6.6.2.8, “Bootstrapping of the Access Control Cluster”).
 
         // 4. The Secure Session Context of any PASE session still established at the Server SHALL be cleared.
-        await this.removePaseSession();
+        await this.closePaseSession();
 
         await this.close();
     }
@@ -155,16 +159,8 @@ export abstract class FailsafeContext {
         return this.#fabrics.allocateFabricIndex();
     }
 
-    async addFabric(fabric: Fabric) {
-        this.#fabrics.addFabric(fabric);
-        if (this.#failsafe !== undefined) {
-            this.#associatedFabric = this.#failsafe.associatedFabric = fabric;
-        }
-        return fabric.fabricIndex;
-    }
-
-    async updateFabric(fabric: Fabric) {
-        await this.#fabrics.updateFabric(fabric);
+    async replaceFabric(fabric: Fabric) {
+        await this.#fabrics.replaceFabric(fabric);
         await this.#sessions.deleteResumptionRecordsForFabric(fabric);
     }
 
@@ -183,19 +179,19 @@ export abstract class FailsafeContext {
         return result;
     }
 
-    async removePaseSession() {
+    async closePaseSession(currentExchange?: MessageExchange) {
         const session = this.#sessions.getPaseSession();
         if (session) {
-            await session.close(true);
+            await session.initiateForceClose(currentExchange);
         }
     }
 
-    async close() {
+    async close(currentExchange?: MessageExchange) {
         await this.#construction.close(async () => {
             if (this.#failsafe) {
                 await this.#failsafe.close();
                 this.#failsafe = undefined;
-                await this.rollback();
+                await this.rollback(currentExchange);
             }
         });
     }
@@ -248,36 +244,43 @@ export abstract class FailsafeContext {
         }
 
         await builder.setOperationalCert(nocValue, icacValue);
-        const fabricAlreadyExisting = this.#fabrics.find(fabric => builder.matchesToFabric(fabric));
+        const newGlobalId = await builder.globalId;
 
-        if (fabricAlreadyExisting) {
+        if (this.#fabrics.has(newGlobalId)) {
             throw new MatterFabricConflictError(
                 `Fabric with Id ${builder.fabricId} and Node Id ${builder.nodeId} already exists.`,
             );
         }
 
-        return builder
+        this.#associatedFabric = await builder
             .setRootVendorId(adminVendorId)
             .setIdentityProtectionKey(ipkValue)
             .setRootNodeId(caseAdminSubject)
             .build(this.#fabrics.allocateFabricIndex());
+        this.#fabrics.addFabric(this.#associatedFabric);
+
+        if (this.#failsafe) {
+            this.#failsafe.associatedFabric = this.#associatedFabric;
+        }
+
+        return this.#associatedFabric;
     }
 
-    async #failSafeExpired() {
+    async #failSafeExpired(currentExchange?: MessageExchange) {
         logger.info("Failsafe timer expired; resetting fabric builder");
 
-        await this.close();
+        await this.close(currentExchange);
     }
 
-    protected async rollback() {
+    protected async rollback(currentExchange?: MessageExchange) {
         if (this.fabricIndex !== undefined && !this.#forUpdateNoc) {
-            logger.debug(`Revoking fabric with index ${this.fabricIndex}`);
-            await this.#fabrics.revokeFabric(this.fabricIndex);
+            logger.debug(`Revoking fabric index ${this.fabricIndex}`);
+            await this.#associatedFabric?.delete(currentExchange);
         }
 
         // On expiry of the fail-safe timer, the following actions SHALL be performed in order:
         // 1. Terminate any open PASE secure session by clearing any associated Secure Session Context at the Server.
-        await this.removePaseSession();
+        await this.closePaseSession(currentExchange);
 
         // TODO 2. Revoke the temporary administrative privileges granted to any open PASE session (see Section 6.6.2.8, “Bootstrapping of the Access Control Cluster”) at the Server.
 
@@ -287,9 +290,8 @@ export abstract class FailsafeContext {
             const fabricIndex = this.fabricIndex;
             if (this.#fabrics.has(fabricIndex)) {
                 fabric = this.#fabrics.for(fabricIndex);
-                const session = this.#sessions.getSessionForNode(fabric.addressOf(fabric.rootNodeId));
-                if (session !== undefined && session.isSecure) {
-                    await session.close(false);
+                for (const session of this.#sessions.sessionsForFabricIndex(fabricIndex)) {
+                    await session.initiateForceClose(currentExchange);
                 }
             }
         }
@@ -309,10 +311,7 @@ export abstract class FailsafeContext {
         // 6. If an AddNOC command had been successfully invoked, achieve the equivalent effect of invoking the RemoveFabric command against the Fabric Index stored in the Fail-Safe Context for the Fabric Index that was the subject of the AddNOC command. This SHALL remove all associations to that Fabric including all fabric-scoped data, and MAY possibly factory-reset the device depending on current device state. This SHALL only apply to Fabrics added during the fail-safe period as the result of the AddNOC command.
         // 7. Remove any RCACs added by the AddTrustedRootCertificate command that are not currently referenced by any entry in the Fabrics attribute.
         if (!this.#forUpdateNoc && fabric !== undefined) {
-            const fabricIndex = this.fabricIndex;
-            if (fabricIndex !== undefined && this.#fabrics.has(fabricIndex)) {
-                await this.revokeFabric(this.#fabrics.for(fabricIndex));
-            }
+            await this.#associatedFabric?.delete();
         }
 
         // 8. Reset the Breadcrumb attribute to zero.
@@ -329,10 +328,8 @@ export abstract class FailsafeContext {
     abstract restoreNetworkState(): Promise<void>;
 
     async restoreFabric(fabric: Fabric) {
-        await this.updateFabric(fabric);
+        await this.replaceFabric(fabric);
     }
-
-    abstract revokeFabric(fabric: Fabric): Promise<void>;
 
     abstract restoreBreadcrumb(): Promise<void>;
 
@@ -350,6 +347,6 @@ export namespace FailsafeContext {
         fabrics: FabricManager;
         expiryLength: Duration;
         maxCumulativeFailsafe: Duration;
-        session: SecureSession;
+        session: NodeSession;
     }
 }

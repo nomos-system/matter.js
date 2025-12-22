@@ -4,6 +4,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// Must import first to avoid ESM load issues
+export * from "./session/index.js";
+
 export * from "./action/index.js";
 export * from "./advertisement/index.js";
 export * from "./bdx/index.js";
@@ -18,7 +21,7 @@ export * from "./fabric/index.js";
 export * from "./groups/index.js";
 export * from "./interaction/index.js";
 export * from "./mdns/index.js";
+export * from "./ota/index.js";
 export * from "./peer/index.js";
 export * from "./protocol/index.js";
 export * from "./securechannel/index.js";
-export * from "./session/index.js";

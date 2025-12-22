@@ -9,7 +9,7 @@
 import { Resource } from "#models/Resource.js";
 
 Resource.add({
-    tag: "deviceType", name: "ExtractorHood", classification: "simple", xref: "device§13.10",
+    tag: "deviceType", name: "ExtractorHood", xref: "device§13.10",
 
     details: "An Extractor Hood is a device that is generally installed above a cooking surface in residential " +
         "kitchens. An Extractor Hood’s primary purpose is to reduce odors that arise during the cooking " +
@@ -34,6 +34,7 @@ Resource.add({
         { tag: "requirement", name: "Identify", xref: "device§13.10.5" },
         { tag: "requirement", name: "HepaFilterMonitoring", xref: "device§13.10.5" },
         { tag: "requirement", name: "ActivatedCarbonFilterMonitoring", xref: "device§13.10.5" },
-        { tag: "requirement", name: "FanControl", xref: "device§13.10.5" }
+        { tag: "requirement", name: "FanControl", xref: "device§13.10.5" },
+        { tag: "requirement", name: "OnOffLight", xref: "device§13.10.4" }
     ]
 });

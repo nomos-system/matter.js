@@ -4,13 +4,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { DecodedPacket } from "#codec/MessageCodec.js";
+import type { DecodedPacket } from "#codec/MessageCodec.js";
 import { SupportedTransportsSchema } from "#common/SupportedTransportsBitmap.js";
 import { FabricManager } from "#fabric/FabricManager.js";
 import {
     BasicSet,
     Bytes,
+    Channel,
+    ConnectionlessTransportSet,
     Construction,
+    Crypto,
     Duration,
     Environment,
     Environmental,
@@ -23,42 +26,25 @@ import {
     ObserverGroup,
     StorageContext,
     StorageManager,
+    Time,
+    Timestamp,
     toHex,
 } from "#general";
-import { Subscription } from "#interaction/Subscription.js";
-import { Specification } from "#model";
+import type { Subscription } from "#interaction/Subscription.js";
 import { PeerAddress, PeerAddressMap } from "#peer/PeerAddress.js";
+import { SessionClosedError } from "#protocol/errors.js";
 import { GroupSession } from "#session/GroupSession.js";
-import { CaseAuthenticatedTag, DEFAULT_MAX_PATHS_PER_INVOKE, FabricId, FabricIndex, GroupId, NodeId } from "#types";
+import { CaseAuthenticatedTag, FabricId, FabricIndex, GroupId, NodeId } from "#types";
 import { UnexpectedDataError } from "@matter/general";
-import { ExposedFabricInformation, Fabric } from "../fabric/Fabric.js";
+import type { ExposedFabricInformation, Fabric } from "../fabric/Fabric.js";
 import { MessageCounter } from "../protocol/MessageCounter.js";
-import { InsecureSession } from "./InsecureSession.js";
 import { NodeSession } from "./NodeSession.js";
 import { SecureSession } from "./SecureSession.js";
-import {
-    FALLBACK_DATAMODEL_REVISION,
-    FALLBACK_INTERACTIONMODEL_REVISION,
-    FALLBACK_MAX_PATHS_PER_INVOKE,
-    FALLBACK_MAX_TCP_MESSAGE_SIZE,
-    FALLBACK_SPECIFICATION_VERSION,
-    Session,
-    SessionParameterOptions,
-    SessionParameters,
-} from "./Session.js";
-import { SessionIntervals } from "./SessionIntervals.js";
+import type { Session } from "./Session.js";
+import { SessionParameters } from "./SessionParameters.js";
+import { UnsecuredSession } from "./UnsecuredSession.js";
 
 const logger = Logger.get("SessionManager");
-
-const DEFAULT_SESSION_PARAMETERS = {
-    ...SessionIntervals.defaults,
-    dataModelRevision: Specification.DATA_MODEL_REVISION,
-    interactionModelRevision: Specification.INTERACTION_MODEL_REVISION,
-    specificationVersion: Specification.SPECIFICATION_VERSION,
-    maxPathsPerInvoke: DEFAULT_MAX_PATHS_PER_INVOKE,
-    supportedTransports: {},
-    maxTcpMessageSize: FALLBACK_MAX_TCP_MESSAGE_SIZE,
-};
 
 export interface ResumptionRecord {
     sharedSecret: Bytes;
@@ -112,7 +98,7 @@ export interface SessionManagerContext {
     /**
      * Parameter overrides.
      */
-    parameters?: Partial<SessionParameters>;
+    parameters?: SessionParameters.Config;
 
     /**
      * This is an arbitrary contextual object attached to sessions used for compatibility with legacy APIs.
@@ -129,32 +115,47 @@ const ID_SPACE_UPPER_BOUND = 0xffff;
  */
 export class SessionManager {
     readonly #context: SessionManagerContext;
-    readonly #insecureSessions = new Map<NodeId, InsecureSession>();
+    readonly #unsecuredSessions = new Map<NodeId, UnsecuredSession>();
     readonly #sessions = new BasicSet<NodeSession>();
     readonly #groupSessions = new Map<NodeId, BasicSet<GroupSession>>();
     #nextSessionId: number;
     #resumptionRecords = new PeerAddressMap<ResumptionRecord>();
     readonly #globalUnencryptedMessageCounter;
-    readonly #subscriptionsChanged = Observable<[session: NodeSession, subscription: Subscription]>();
     #sessionParameters: SessionParameters;
-    readonly #retry = Observable<[session: Session, number: number]>();
     readonly #construction: Construction<SessionManager>;
     readonly #observers = new ObserverGroup();
     readonly #subscriptionUpdateMutex = new Mutex(this);
     #idUpperBound = ID_SPACE_UPPER_BOUND;
+
+    readonly #subscriptionsChanged = Observable<[session: NodeSession, subscription: Subscription]>();
+    readonly #retry = Observable<[session: Session, number: number]>();
 
     constructor(context: SessionManagerContext) {
         this.#context = context;
         const {
             fabrics: { crypto },
         } = context;
-        this.#sessionParameters = { ...DEFAULT_SESSION_PARAMETERS, ...context.parameters };
+        this.#sessionParameters = SessionParameters({ ...SessionParameters.defaults, ...context.parameters });
         this.#nextSessionId = crypto.randomUint16;
         this.#globalUnencryptedMessageCounter = new MessageCounter(crypto);
 
         // When fabric is removed, also remove the resumption record
-        this.#observers.on(context.fabrics.events.deleted, async fabric => {
+        this.#observers.on(context.fabrics.events.deleting, async fabric => {
             await this.deleteResumptionRecordsForFabric(fabric);
+        });
+
+        // Add subscription monitors to new node sessions
+        this.#sessions.added.on(session => {
+            const subscriptionsChanged = (subscription: Subscription) => {
+                if (session.isClosing) {
+                    return;
+                }
+
+                this.#subscriptionsChanged.emit(session, subscription);
+            };
+
+            session.subscriptions.added.on(subscriptionsChanged);
+            session.subscriptions.deleted.on(subscriptionsChanged);
         });
 
         this.#construction = Construction(this, () => this.#initialize());
@@ -189,10 +190,10 @@ export class SessionManager {
     }
 
     /**
-     * Active insecure sessions.
+     * Active unsecured sessions.
      */
-    get insecureSessions() {
-        return this.#insecureSessions;
+    get unsecuredSessions() {
+        return this.#unsecuredSessions;
     }
 
     /**
@@ -251,23 +252,25 @@ export class SessionManager {
         return this.#context.owner;
     }
 
-    createInsecureSession(options: {
+    createUnsecuredSession(options: {
+        channel: Channel<Bytes>;
         initiatorNodeId?: NodeId;
-        sessionParameters?: SessionParameterOptions;
+        sessionParameters?: SessionParameters.Config;
         isInitiator?: boolean;
     }) {
         this.#construction.assert();
 
-        const { initiatorNodeId, sessionParameters, isInitiator } = options;
+        const { channel, initiatorNodeId, sessionParameters, isInitiator } = options;
         if (initiatorNodeId !== undefined) {
-            if (this.#insecureSessions.has(initiatorNodeId)) {
-                throw new MatterFlowError(`UnsecureSession with NodeId ${initiatorNodeId} already exists.`);
+            if (this.#unsecuredSessions.has(initiatorNodeId)) {
+                throw new MatterFlowError(`UnsecuredSession with NodeId ${initiatorNodeId} already exists.`);
             }
         }
         while (true) {
-            const session = new InsecureSession({
+            const session = new UnsecuredSession({
                 crypto: this.#context.fabrics.crypto,
                 manager: this,
+                channel,
                 messageCounter: this.#globalUnencryptedMessageCounter,
                 initiatorNodeId,
                 sessionParameters,
@@ -275,68 +278,20 @@ export class SessionManager {
             });
 
             const ephemeralNodeId = session.nodeId;
-            if (this.#insecureSessions.has(ephemeralNodeId)) continue;
+            if (this.#unsecuredSessions.has(ephemeralNodeId)) continue;
 
-            this.#insecureSessions.set(ephemeralNodeId, session);
+            this.#unsecuredSessions.set(ephemeralNodeId, session);
+            session.activate();
             return session;
         }
     }
 
-    async createSecureSession(args: {
-        sessionId: number;
-        fabric: Fabric | undefined;
-        peerNodeId: NodeId;
-        peerSessionId: number;
-        sharedSecret: Bytes;
-        salt: Bytes;
-        isInitiator: boolean;
-        isResumption: boolean;
-        peerSessionParameters?: SessionParameterOptions;
-        caseAuthenticatedTags?: CaseAuthenticatedTag[];
-    }) {
-        await this.construction;
-
-        const {
-            sessionId,
-            fabric,
-            peerNodeId,
-            peerSessionId,
-            sharedSecret,
-            salt,
-            isInitiator,
-            isResumption,
-            peerSessionParameters,
-            caseAuthenticatedTags,
-        } = args;
-        const session = await NodeSession.create({
+    async createSecureSession(config: Omit<NodeSession.CreateConfig, "crypto"> & { crypto?: Crypto }) {
+        return await NodeSession.create({
             crypto: this.crypto,
+            ...config,
             manager: this,
-            id: sessionId,
-            fabric,
-            peerNodeId,
-            peerSessionId,
-            sharedSecret,
-            salt,
-            isInitiator,
-            isResumption,
-            peerSessionParameters: peerSessionParameters,
-            caseAuthenticatedTags,
         });
-
-        const subscriptionsChanged = (subscription: Subscription) => {
-            if (session.isClosing) {
-                return;
-            }
-
-            this.#subscriptionsChanged.emit(session, subscription);
-        };
-
-        session.subscriptions.added.on(subscriptionsChanged);
-        session.subscriptions.deleted.on(subscriptionsChanged);
-
-        this.#sessions.add(session);
-
-        return session;
     }
 
     /**
@@ -405,7 +360,10 @@ export class SessionManager {
 
         // All session ids are taken, search for the oldest unused session, and close it and re-use its ID
         const oldestSession = this.findOldestInactiveSession();
-        await oldestSession.end(true, false);
+
+        await oldestSession.initiateClose(async () => {
+            await oldestSession.closeSubscriptions(true);
+        });
         this.#nextSessionId = oldestSession.id;
         return this.#nextSessionId++;
     }
@@ -419,9 +377,7 @@ export class SessionManager {
     getPaseSession() {
         this.#construction.assert();
 
-        return [...this.#sessions].find(
-            session => NodeSession.is(session) && session.isPase && !session.closingAfterExchangeFinished,
-        ) as NodeSession;
+        return [...this.#sessions].find(session => NodeSession.is(session) && session.isPase && !session.isClosing);
     }
 
     forFabric(fabric: Fabric) {
@@ -433,45 +389,89 @@ export class SessionManager {
         );
     }
 
-    getSessionForNode(address: PeerAddress) {
-        this.#construction.assert();
+    sessionFor(peer: PeerAddress) {
+        const session = this.maybeSessionFor(peer);
+        if (session) {
+            return session;
+        }
 
-        //TODO: It can have multiple sessions for one node ...
-        return [...this.#sessions].find(session => {
-            if (!session.isSecure) return false;
-            return session.peerIs(address);
-        });
+        throw new SessionClosedError(`Not currently connected to ${PeerAddress(peer)}`);
     }
 
-    async removeAllSessionsForNode(address: PeerAddress, sendClose = false, closeBeforeCreatedTimestamp?: number) {
-        await this.#construction;
+    maybeSessionFor(address: PeerAddress) {
+        this.#construction.assert();
 
+        // Prefer the most recently used session.  Older ones may not work with broken peers (e.g. CHIP test harness)
+        let found: NodeSession | undefined;
         for (const session of this.#sessions) {
-            if (!session.isSecure) continue;
-            if (closeBeforeCreatedTimestamp !== undefined && session.createdAt >= closeBeforeCreatedTimestamp) continue;
-            const secureSession = session;
-            if (secureSession.peerIs(address)) {
-                await secureSession.destroy(sendClose, false);
-                this.#sessions.delete(session);
+            if (!session.peerIs(address) || session.isClosing) {
+                continue;
+            }
+
+            if (!found || found.timestamp < session.timestamp) {
+                found = session;
             }
         }
+
+        return found;
     }
 
-    getUnsecureSession(sourceNodeId?: NodeId) {
-        this.#construction.assert();
+    sessionsFor(address: PeerAddress) {
+        address = PeerAddress(address);
+        return this.#sessions.filter(session => session.peerAddress === address && !session.isClosing);
+    }
 
-        if (sourceNodeId === undefined) {
-            return this.#insecureSessions.get(NodeId.UNSPECIFIED_NODE_ID);
-        }
-        return this.#insecureSessions.get(sourceNodeId);
+    sessionsForFabricIndex(fabricIndex: FabricIndex) {
+        return this.#sessions.filter(session => session.fabric?.fabricIndex === fabricIndex);
     }
 
     /**
-     * Creates or Returns a Group Session for a Group Peer Address.
-     * This is used for sending group messages because it returns the session for the current
-     * Group Epoch key. The Source Node Id is the own Node.
+     * Removes all Peer sessions but keeps subscriptions intact because they could be refreshed on restart when the
+     * device supports persistent subscriptions.
      */
-    groupSessionForAddress(address: PeerAddress) {
+    handlePeerShutdown(address: PeerAddress, asOf?: Timestamp) {
+        return this.#handlePeerLoss({ address, asOf: asOf ?? Time.nowMs, keepSubscriptions: true });
+    }
+
+    /**
+     * Removes all Peer sessions and closes subscriptions.
+     */
+    handlePeerLoss(address: PeerAddress, asOf?: Timestamp) {
+        return this.#handlePeerLoss({ address, asOf: asOf ?? Time.nowMs });
+    }
+
+    async #handlePeerLoss(options: { address: PeerAddress; asOf?: Timestamp; keepSubscriptions?: boolean }) {
+        await this.#construction;
+
+        const { address, asOf, keepSubscriptions } = options;
+        for (const session of this.#sessions) {
+            if (!session.peerIs(address)) {
+                continue;
+            }
+
+            if (asOf !== undefined && session.createdAt >= asOf) {
+                continue;
+            }
+
+            await session.handlePeerLoss({ keepSubscriptions });
+        }
+    }
+
+    getUnsecuredSession(sourceNodeId?: NodeId) {
+        this.#construction.assert();
+
+        if (sourceNodeId === undefined) {
+            return this.#unsecuredSessions.get(NodeId.UNSPECIFIED_NODE_ID);
+        }
+        return this.#unsecuredSessions.get(sourceNodeId);
+    }
+
+    /**
+     * Obtain an outbound group session for a specific group.
+     *
+     * Returns the session for the current group epoch key.  The source is this node and the peer is the group.
+     */
+    async groupSessionForAddress(address: PeerAddress, transports: ConnectionlessTransportSet) {
         const groupId = GroupId.fromNodeId(address.nodeId);
         GroupId.assertGroupId(groupId);
 
@@ -483,23 +483,29 @@ export class SessionManager {
             );
         }
 
-        let session = this.#groupSessions.get(fabric.nodeId)?.get("id", sessionId);
-        if (session === undefined) {
-            session = new GroupSession({
-                manager: this,
-                id: sessionId,
-                fabric,
-                keySetId,
-                operationalGroupKey: key,
-                peerNodeId: address.nodeId, // The peer node ID is the group node ID
-            });
+        const session = this.#groupSessions.get(fabric.nodeId)?.get("id", sessionId);
+        if (session) {
+            return session;
         }
-        return session;
+
+        return await GroupSession.create({
+            transports,
+            manager: this,
+            id: sessionId,
+            fabric,
+            keySetId,
+            operationalGroupKey: key,
+            groupNodeId: address.nodeId,
+        });
     }
 
     /**
-     * Creates or Returns the Group session based on an incoming packet.
-     * The Session ID is determined by trying to decrypt te packet with possible keys.
+     * Obtain a Group session for an incoming packet.
+     *
+     * The session ID is determined by decrypting the packet with possible keys.
+     *
+     * Note that the resulting session is non-operational in the sense that attempting outbound communication will
+     * result in an error.
      */
     groupSessionFromPacket(packet: DecodedPacket, aad: Bytes) {
         const groupId = packet.header.destGroupId;
@@ -606,17 +612,7 @@ export class SessionManager {
                 fabricId,
                 fabricIndex,
                 peerNodeId,
-                sessionParameters: {
-                    idleInterval,
-                    activeInterval,
-                    activeThreshold,
-                    dataModelRevision,
-                    interactionModelRevision,
-                    specificationVersion,
-                    maxPathsPerInvoke,
-                    supportedTransports,
-                    maxTcpMessageSize,
-                } = {},
+                sessionParameters,
                 caseAuthenticatedTags,
             }) => {
                 const fabric = this.#context.fabrics.find(
@@ -645,21 +641,8 @@ export class SessionManager {
                     resumptionId,
                     fabric,
                     peerNodeId,
-                    sessionParameters: {
-                        // Make sure to initialize default values when restoring an older resumption record
-                        idleInterval: idleInterval ?? SessionIntervals.defaults.idleInterval,
-                        activeInterval: activeInterval ?? SessionIntervals.defaults.activeInterval,
-                        activeThreshold: activeThreshold ?? SessionIntervals.defaults.activeThreshold,
-                        dataModelRevision: dataModelRevision ?? FALLBACK_DATAMODEL_REVISION,
-                        interactionModelRevision: interactionModelRevision ?? FALLBACK_INTERACTIONMODEL_REVISION,
-                        specificationVersion: specificationVersion ?? FALLBACK_SPECIFICATION_VERSION,
-                        maxPathsPerInvoke: maxPathsPerInvoke ?? FALLBACK_MAX_PATHS_PER_INVOKE,
-                        supportedTransports:
-                            supportedTransports !== undefined
-                                ? SupportedTransportsSchema.decode(supportedTransports)
-                                : {},
-                        maxTcpMessageSize: maxTcpMessageSize ?? FALLBACK_MAX_TCP_MESSAGE_SIZE,
-                    },
+                    // Make sure to initialize default values when restoring an older resumption record
+                    sessionParameters: SessionParameters(sessionParameters),
                     caseAuthenticatedTags,
                 });
             },
@@ -671,11 +654,11 @@ export class SessionManager {
         return [...this.#sessions]
             .filter(session => session.isSecure && !session.isPase)
             .map(session => ({
-                name: session.name,
+                name: session.via,
                 nodeId: session.nodeId,
                 peerNodeId: session.peerNodeId,
                 fabric: session instanceof SecureSession ? session.fabric?.externalInformation : undefined,
-                isPeerActive: session.isPeerActive(),
+                isPeerActive: session.isPeerActive,
                 secure: session.isSecure,
                 lastInteractionTimestamp: session instanceof SecureSession ? session.timestamp : undefined,
                 lastActiveTimestamp: session instanceof SecureSession ? session.activeTimestamp : undefined,
@@ -688,52 +671,52 @@ export class SessionManager {
             await this.#construction;
         }
 
-        await this.#subscriptionUpdateMutex;
-
         this.#observers.close();
         await this.#storeResumptionRecords();
+
+        await this.closeAllSessions();
+    }
+
+    async clear() {
+        if (this.#construction.status === Lifecycle.Status.Initializing) {
+            await this.#construction;
+        }
+
+        await this.closeAllSessions();
+        await this.#context.storage.clear();
+        this.#resumptionRecords.clear();
+    }
+
+    async closeAllSessions() {
+        if (this.#construction.status === Lifecycle.Status.Initializing) {
+            await this.#construction;
+        }
+
+        await this.#subscriptionUpdateMutex;
+
         const closePromises = this.#sessions.map(async session => {
-            await session?.end(false);
+            await session.closeSubscriptions(true);
+
+            // TODO - some CHIP tests (CASERecovery for one) expect us to exit without closing the session and will fail
+            // if we end gracefully.  Not clear why this behavior would be desirable as it leads to a timeout when the
+            // node attempts contact even if we've already restarted
+            await session.initiateForceClose();
+
             this.#sessions.delete(session);
         });
-        for (const session of this.#insecureSessions.values()) {
-            closePromises.push(session?.end());
+
+        for (const session of this.#unsecuredSessions.values()) {
+            closePromises.push(session.initiateForceClose());
         }
+
         for (const sessions of this.#groupSessions.values()) {
             for (const session of sessions) {
-                closePromises.push(session?.end());
+                closePromises.push(session.initiateForceClose());
             }
         }
         await MatterAggregateError.allSettled(closePromises, "Error closing sessions").catch(error =>
             logger.error(error),
         );
-    }
-
-    async clear() {
-        await this.close();
-        await this.#context.storage.clear();
-        this.#resumptionRecords.clear();
-    }
-
-    updateAllSubscriptions() {
-        this.#subscriptionUpdateMutex.run(async () => {
-            for (const session of this.#sessions) {
-                for (const subscription of session.subscriptions) {
-                    await subscription.update();
-                }
-            }
-        });
-    }
-
-    /** Clears all subscriptions for a given node and returns how many were cleared. */
-    async clearSubscriptionsForNode(peerAddress: PeerAddress, flushSubscriptions?: boolean) {
-        let clearedCount = 0;
-        for (const session of this.#sessions) {
-            if (PeerAddress.is(session.peerAddress, peerAddress)) {
-                clearedCount += await session.clearSubscriptions(flushSubscriptions, true);
-            }
-        }
-        return clearedCount;
     }
 
     /**

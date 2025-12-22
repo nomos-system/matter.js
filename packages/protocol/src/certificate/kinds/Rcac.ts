@@ -6,6 +6,7 @@
 
 import { Bytes, Crypto, Diagnostic, PublicKey } from "#general";
 import { FabricId } from "#types";
+import { Certificate } from "./Certificate.js";
 import { CertificateError } from "./common.js";
 import { ExtensionKeyUsageSchema } from "./definitions/base.js";
 import { OperationalCertificate } from "./definitions/operational.js";
@@ -15,6 +16,16 @@ export class Rcac extends OperationalBase<OperationalCertificate.Rcac> {
     /** Construct the class from a Tlv version of the certificate */
     static fromTlv(tlv: Bytes): Rcac {
         return new Rcac(OperationalCertificate.TlvRcac.decode(tlv));
+    }
+
+    static publicKeyOfTlv(tlv: Bytes): Bytes {
+        return Rcac.fromTlv(tlv).cert.ellipticCurvePublicKey;
+    }
+
+    /** Construct the class from an ASN.1/DER encoded certificate */
+    static fromAsn1(asn1: Bytes): Rcac {
+        const cert = Certificate.parseAsn1Certificate(asn1);
+        return new Rcac(cert as OperationalCertificate.Rcac);
     }
 
     /** Validates all basic certificate fields on construction. */
@@ -34,7 +45,7 @@ export class Rcac extends OperationalBase<OperationalCertificate.Rcac> {
      * If the certificate is not signed, it throws a CertificateError.
      */
     asSignedTlv() {
-        return OperationalCertificate.TlvRcac.encode({ ...this.cert, signature: this.signature });
+        return OperationalCertificate.TlvRcac.encode({ ...this.cert, signature: this.signature.bytes });
     }
 
     /**
@@ -77,6 +88,11 @@ export class Rcac extends OperationalBase<OperationalCertificate.Rcac> {
         // The subject DN SHALL NOT encode any matter-noc-cat attribute.
         if ("caseAuthenticatedTags" in subject) {
             throw new CertificateError(`Root certificate must not contain a caseAuthenticatedTags.`);
+        }
+
+        // The subject DN SHALL NOT encode any matter-vsc-id attribute.
+        if ("vvsId" in subject) {
+            throw new CertificateError(`Root certificate must not contain a vvsId.`);
         }
 
         // The basic constraints extension SHALL be encoded with is-ca set to true.

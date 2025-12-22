@@ -18,7 +18,7 @@ import { Identity } from "#general";
 /**
  * This defines conformance to the Water Freeze Detector device type.
  *
- * @see {@link MatterSpecification.v141.Device} § 7.11
+ * @see {@link MatterSpecification.v142.Device} § 7.11
  */
 export interface WaterFreezeDetectorDevice extends Identity<typeof WaterFreezeDetectorDeviceDefinition> {}
 
@@ -64,4 +64,5 @@ export const WaterFreezeDetectorDeviceDefinition = MutableEndpoint({
     )
 });
 
+Object.freeze(WaterFreezeDetectorDeviceDefinition);
 export const WaterFreezeDetectorDevice: WaterFreezeDetectorDevice = WaterFreezeDetectorDeviceDefinition;

@@ -14,7 +14,7 @@ import {
 } from "../../elements/index.js";
 
 export const BridgedNodeDt = DeviceType(
-    { name: "BridgedNode", id: 0x13 },
+    { name: "BridgedNode", id: 0x13, classification: "utility" },
     Requirement(
         { name: "Descriptor", id: 0x1d, element: "serverCluster" },
         Requirement({ name: "DeviceTypeList", default: [ { deviceType: 19, revision: 3 } ], element: "attribute" })
@@ -26,6 +26,7 @@ export const BridgedNodeDt = DeviceType(
         { name: "EcosystemInformation", id: 0x750, conformance: "FabricSynchronizedNode, O", element: "serverCluster" }
     ),
     Requirement({ name: "AdministratorCommissioning", id: 0x3c, conformance: "FabricSynchronizedNode", element: "serverCluster" }),
+    Requirement({ name: "PowerSource", id: 0x11, conformance: "O", element: "deviceType" }),
     Field({ name: "conditions", type: "enum8" }, Field({ name: "FabricSynchronizedNode" }))
 );
 

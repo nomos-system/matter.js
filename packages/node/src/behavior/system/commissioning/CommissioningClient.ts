@@ -6,13 +6,17 @@
 
 import { Behavior } from "#behavior/Behavior.js";
 import { Events as BaseEvents } from "#behavior/Events.js";
+import { SoftwareUpdateManager } from "#behavior/system/software-update/SoftwareUpdateManager.js";
 import { OperationalCredentialsClient } from "#behaviors/operational-credentials";
+import { OtaSoftwareUpdateProviderServer } from "#behaviors/ota-software-update-provider";
+import { OperationalCredentials } from "#clusters/operational-credentials";
 import {
+    ClassExtends,
     Diagnostic,
     Duration,
     ImplementationError,
-    isIpNetworkChannel,
     Logger,
+    MatterError,
     NotImplementedError,
     Observable,
     ServerAddress,
@@ -36,17 +40,19 @@ import {
     vendorId,
 } from "#model";
 import type { ClientNode } from "#node/ClientNode.js";
-import type { Node } from "#node/Node.js";
+import type { ServerNode } from "#node/ServerNode.js";
 import { IdentityService } from "#node/server/IdentityService.js";
 import {
-    ChannelManager,
     CommissioningMode,
     ControllerCommissioner,
+    ControllerCommissioningFlow,
     DiscoveryData,
     Fabric,
     FabricAuthority,
     FabricManager,
     LocatedNodeCommissioningOptions,
+    PeerAddress,
+    PeerSet,
     PeerAddress as ProtocolPeerAddress,
     SessionIntervals as ProtocolSessionIntervals,
     Subscribe,
@@ -90,14 +96,34 @@ export class CommissioningClient extends Behavior {
             this.state.discoveredAt = Time.nowMs;
         }
 
-        this.reactTo((this.endpoint as Node).lifecycle.partsReady, this.#initializeNode);
+        if (this.state.peerAddress !== undefined) {
+            // If restored from the storage, ensure we have the proper logging sugar, else it is "just" an object
+            this.state.peerAddress = PeerAddress(this.state.peerAddress);
+        }
+
+        const node = this.endpoint as ClientNode;
+        this.reactTo(node.lifecycle.partsReady, this.#initializeNode);
+        this.reactTo(node.lifecycle.online, this.#nodeOnline);
         this.reactTo(this.events.peerAddress$Changed, this.#peerAddressChanged);
     }
 
-    commission(passcode: number): Promise<ClientNode>;
+    #nodeOnline() {
+        if (this.state.peerAddress !== undefined) {
+            this.#updateAddresses(this.state.peerAddress);
+        }
+    }
 
+    #findServerOtaProviderEndpoint() {
+        const node = this.endpoint.owner as ServerNode;
+        for (const endpoint of node.endpoints) {
+            if (endpoint.behaviors.has(OtaSoftwareUpdateProviderServer)) {
+                return endpoint;
+            }
+        }
+    }
+
+    commission(passcode: number | string): Promise<ClientNode>;
     commission(options: CommissioningClient.CommissioningOptions): Promise<ClientNode>;
-
     async commission(options: number | string | CommissioningClient.CommissioningOptions) {
         // Commissioning can only happen once
         const node = this.endpoint as ClientNode;
@@ -114,17 +140,17 @@ export class CommissioningClient extends Behavior {
 
         // Validate passcode
         let { passcode } = opts;
-        if (typeof passcode !== "number" || !Number.isFinite(passcode)) {
+        if (!Number.isFinite(passcode)) {
             passcode = Number.parseInt(passcode as unknown as string);
             if (!Number.isFinite(passcode)) {
                 throw new ImplementationError(`You must provide the numeric passcode to commission a node`);
             }
         }
 
-        // Ensure controller is initialized
+        // Ensure the controller is initialized
         await node.owner?.act(agent => agent.load(ControllerBehavior));
 
-        // Obtain the fabric we will commission into
+        // Get the fabric we will commission into
         const fabricAuthority = opts.fabricAuthority ?? this.env.get(FabricAuthority);
         let { fabric } = opts;
         if (fabric === undefined) {
@@ -163,7 +189,24 @@ export class CommissioningClient extends Behavior {
             nodeId: address.nodeId,
             passcode,
             discoveryData: this.descriptor,
+            commissioningFlowImpl: options.commissioningFlowImpl,
+            // TODO Allow to configure all relevant commissioning options like
+            //  * wifi/thread credentials
+            //  * regulatory config
+            //  * custom otaUpdateProviderLocation
         };
+
+        // Check if our server has an OTA Provider (later: and no custom one is provided) and register the location
+        const otaProviderEndpoint = this.#findServerOtaProviderEndpoint();
+        if (
+            otaProviderEndpoint !== undefined &&
+            otaProviderEndpoint.stateOf(SoftwareUpdateManager).announceAsDefaultProvider
+        ) {
+            commissioningOptions.otaUpdateProviderLocation = {
+                nodeId: fabric.rootNodeId,
+                endpoint: otaProviderEndpoint.number,
+            };
+        }
 
         if (this.finalizeCommissioning !== CommissioningClient.prototype.finalizeCommissioning) {
             commissioningOptions.finalizeCommissioning = this.finalizeCommissioning.bind(this);
@@ -181,10 +224,8 @@ export class CommissioningClient extends Behavior {
 
         const network = this.agent.get(NetworkClient);
         network.state.defaultSubscription = opts.defaultSubscription;
-        if (opts.autoSubscribe || opts.autoSubscribe === undefined) {
-            // Nodes we commission are auto-subscribed by default, unless disabled explicitly
-            network.state.autoSubscribe = opts.autoSubscribe ?? true;
-        }
+        // Nodes we commission are auto-subscribed by default, unless disabled explicitly
+        network.state.autoSubscribe = opts.autoSubscribe !== false;
         network.state.caseAuthenticatedTags = opts.caseAuthenticatedTags;
 
         logger.notice(
@@ -220,7 +261,16 @@ export class CommissioningClient extends Behavior {
 
         const opcreds = this.agent.get(OperationalCredentialsClient);
 
-        await opcreds.removeFabric({ fabricIndex: opcreds.state.currentFabricIndex });
+        const fabricIndex = opcreds.state.currentFabricIndex;
+        logger.debug(`Removing node ${formerAddress} by removing fabric ${fabricIndex} on the node`);
+
+        const result = await opcreds.removeFabric({ fabricIndex });
+
+        if (result.statusCode !== OperationalCredentials.NodeOperationalCertStatus.Ok) {
+            throw new MatterError(
+                `Removing node ${formerAddress} failed with status ${result.statusCode} "${result.debugText}".`,
+            );
+        }
 
         this.state.peerAddress = undefined;
 
@@ -257,23 +307,26 @@ export class CommissioningClient extends Behavior {
         endpoint.lifecycle.initialized.emit(this.state.peerAddress !== undefined);
     }
 
+    #updateAddresses(addr: ProtocolPeerAddress) {
+        const node = this.endpoint as ClientNode;
+        if (!node.env.has(PeerSet)) {
+            return;
+        }
+
+        const peer = node.env.get(PeerSet).for(addr);
+        if (peer) {
+            if (peer.descriptor.operationalAddress) {
+                this.state.addresses = [peer.descriptor.operationalAddress];
+            }
+            this.descriptor = peer.descriptor.discoveryData;
+        }
+    }
+
     #peerAddressChanged(addr?: ProtocolPeerAddress) {
         const node = this.endpoint as ClientNode;
 
         if (addr) {
-            const channels = node.env.get(ChannelManager);
-            if (channels.hasChannel(addr)) {
-                const channel = channels.getChannel(addr).channel;
-                const operationalAddress = isIpNetworkChannel(channel) ? channel.networkAddress : undefined;
-                if (operationalAddress) {
-                    if (this.state.addresses === undefined) {
-                        this.state.addresses = [];
-                    }
-                    if (!this.state.addresses.some(a => ServerAddress.isEqual(ServerAddress(a), operationalAddress))) {
-                        this.state.addresses.push(ServerAddress.definitionOf(operationalAddress));
-                    }
-                }
-            }
+            this.#updateAddresses(addr);
 
             node.lifecycle.commissioned.emit(this.context);
         } else {
@@ -324,7 +377,7 @@ export namespace CommissioningClient {
      */
     export class NetworkAddress implements ServerAddress.Definition {
         @field(string, mandatory)
-        type: "udp" | "tcp" | "ble";
+        type!: "udp" | "tcp" | "ble";
 
         @field(string)
         ip?: string;
@@ -496,6 +549,11 @@ export namespace CommissioningClient {
         fabricAuthority?: FabricAuthority;
 
         /**
+         * Custom commissioning flow implementation to use instead of the default.
+         */
+        commissioningFlowImpl?: ClassExtends<ControllerCommissioningFlow>;
+
+        /**
          * Discovery capabilities to use for discovery. These are included in the QR code normally and defined if BLE
          * is supported for initial commissioning.
          */
@@ -521,15 +579,15 @@ export namespace CommissioningClient {
          * ```
          *
          * Note that certain clusters like Descriptor and Basic Information contain critical operational data. If your
-         * read omits them then the node will only be partially functional once initialized or relevant clusters and
-         * endpoints need to be enabled manually.
+         * read omits them then the node will only be partially functional once initialized.
          */
         defaultSubscription?: Subscribe;
 
         /**
          * By default, nodes we commission are automatically subscribed to using the {@link defaultSubscription} (or a
          * full wildcard subscription if that is undefined).
-         * When set to false, the node will not be automatically subscribed.
+         *
+         * Matter.js will not subscribe automatically if set to false.
          */
         autoSubscribe?: boolean;
 

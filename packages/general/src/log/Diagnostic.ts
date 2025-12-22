@@ -165,6 +165,16 @@ export namespace Diagnostic {
 
     /**
      * Create a value identifying the source of a diagnostic event.
+     *
+     * Conventions for via:
+     *
+     *   - Use padded hex for random(ish) fixed-width numbers
+     *
+     *   - If there is an ID associated with a name, associate using "name#id"
+     *
+     *   - If there are subcomponents, associate with ":" (e.g. "sessionId:exchangeId:messageId")
+     *
+     *   - Use "/" as a separator if there are distinct subcomponents commonly delineated with ":"
      */
     export function via(value: string) {
         if (Diagnostic.presentationOf(value)) {
@@ -193,7 +203,7 @@ export namespace Diagnostic {
      * A node in a diagnostic tree.  Top-level diagnostic sources registered with DiagnosticSource should present as
      * nodes.
      */
-    export function node(icon: string, label: unknown, detail: { self?: unknown; children?: unknown[] }) {
+    export function node(icon: string, label: unknown, detail: { self?: unknown; children?: Iterable<unknown> }) {
         const result = [icon, Diagnostic.strong(label)] as unknown[];
         if (detail?.self !== undefined) {
             result.push(detail.self);
@@ -302,6 +312,10 @@ export namespace Diagnostic {
             toString() {
                 return Duration.format(this.time);
             },
+
+            get [Diagnostic.value]() {
+                return this.toString();
+            },
         };
     }
 
@@ -334,9 +348,15 @@ export namespace Diagnostic {
 
     /**
      * Convert a number or bigint to a hex string which is prefixed by "0x" for logging purposes
+     * @param value The number or bigint to convert
+     * @param padding Optional padding width (pads with leading zeros). When padding is specified, the "0x" prefix is omitted for cleaner aligned output.
      */
-    export function hex(value: number | bigint) {
-        return `0x${value.toString(16)}`;
+    export function hex(value: number | bigint, padding?: number) {
+        const hexString = value.toString(16);
+        if (padding !== undefined) {
+            return hexString.padStart(padding, "0");
+        }
+        return `0x${hexString}`;
     }
 
     /**

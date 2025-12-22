@@ -7,16 +7,19 @@
 import { Behavior } from "#behavior/Behavior.js";
 import { ClusterBehavior } from "#behavior/cluster/ClusterBehavior.js";
 import { ActionContext } from "#behavior/context/ActionContext.js";
+import { FeatureMismatchError } from "#behavior/internal/ServerBehaviorBacking.js";
 import { StateType } from "#behavior/state/StateType.js";
 import { BasicInformationBehavior } from "#behaviors/basic-information";
 import { LevelControlServer } from "#behaviors/level-control";
 import { NetworkCommissioningServer } from "#behaviors/network-commissioning";
 import { OnOffServer } from "#behaviors/on-off";
+import { BehaviorInitializationError } from "#endpoint/errors.js";
 import {
     AsyncObservable,
     BasicObservable,
     EventEmitter,
     ImplementationError,
+    MatterAggregateError,
     MaybePromise,
     Observable,
 } from "#general";
@@ -32,6 +35,7 @@ import {
     TlvString,
 } from "#types";
 import { MockEndpoint } from "../../endpoint/mock-endpoint.js";
+import { MockEndpointType } from "../mock-behavior.js";
 import { My, MyBehavior, MyCluster } from "./cluster-behavior-test-util.js";
 
 class MyEventedBehavior extends MyBehavior {
@@ -102,7 +106,6 @@ describe("ClusterBehavior", () => {
                 becomeAwesome?: undefined;
             };
             expect(typeof MyBehavior.prototype.reqCmd).equals("function");
-            expect((MyBehavior.prototype as any).becomeAwesome).equals(undefined);
 
             ({}) as MyBehavior satisfies {
                 events: EventEmitter & {
@@ -112,7 +115,7 @@ describe("ClusterBehavior", () => {
 
             ({}) as MyBehavior satisfies {
                 events: {
-                    reqEv: Observable<[string, context?: ActionContext]>;
+                    reqEv: AsyncObservable<[string, context?: ActionContext]>;
                 };
             };
         });
@@ -314,12 +317,12 @@ describe("ClusterBehavior", () => {
                 becomeAwesome(value: number): void;
 
                 events: EventEmitter & {
-                    becameAwesome: Observable<[number, ActionContext]>;
+                    becameAwesome: AsyncObservable<[number, ActionContext]>;
                 };
             };
 
             expect(AwesomeBehavior.cluster.supportedFeatures).deep.equals({ awesome: true });
-            expect((AwesomeBehavior.schema as ClusterModel).supportedFeatures).deep.equals(new Set(["AWE"]));
+            expect(AwesomeBehavior.schema.supportedFeatures).deep.equals(new Set(["AWE"]));
         });
 
         it("allows extension and base command overrides", () => {
@@ -341,6 +344,29 @@ describe("ClusterBehavior", () => {
             expect(EthernetCommissioningServer.cluster.supportedFeatures.wiFiNetworkInterface).false;
             expect(EthernetCommissioningServer.cluster.supportedFeatures.threadNetworkInterface).false;
         });
+
+        it("prevents feature mismatch", async () => {
+            const AwesomeBehavior = MyBehavior.with("Awesome");
+            try {
+                await MockEndpoint.create(MockEndpointType.with(AwesomeBehavior), {
+                    myCluster: {
+                        featureMap: {
+                            awesome: false,
+                        },
+                    },
+                } as any);
+                throw new Error("MockEndpoint should have thrown FeatureMismatchError");
+            } catch (e) {
+                expect(e instanceof MatterAggregateError);
+                const cause1 = (e as MatterAggregateError).errors[0];
+                expect(cause1 instanceof BehaviorInitializationError);
+                const cause2 = cause1.cause;
+                expect(cause2) instanceof FeatureMismatchError;
+                expect(cause2.message).equals(
+                    'The featureMap for node0.part0.myCluster does not match the implementation; please use MyClusterBehavior.with("FeatureName") to configure features',
+                );
+            }
+        });
     });
 
     describe("enable", () => {
@@ -353,7 +379,7 @@ describe("ClusterBehavior", () => {
             ({}) as InstanceType<typeof Events2> satisfies EventEmitter;
 
             const eventsInstance = new Events2();
-            void (eventsInstance.startUp satisfies Observable);
+            void (eventsInstance.startUp satisfies AsyncObservable);
             expect(eventsInstance.startUp).not.undefined;
         });
 
@@ -365,6 +391,4 @@ describe("ClusterBehavior", () => {
             expect(new MyLevelControl2.State().remainingTime).equals(0);
         });
     });
-
-    describe("defaults", () => {});
 });

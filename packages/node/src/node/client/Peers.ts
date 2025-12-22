@@ -4,22 +4,52 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { type ClusterBehavior } from "#behavior/cluster/ClusterBehavior.js";
+import { LocalActorContext } from "#behavior/context/server/LocalActorContext.js";
+import { CommissioningClient } from "#behavior/system/commissioning/CommissioningClient.js";
 import { RemoteDescriptor } from "#behavior/system/commissioning/RemoteDescriptor.js";
 import { CommissioningDiscovery } from "#behavior/system/controller/discovery/CommissioningDiscovery.js";
 import { ContinuousDiscovery } from "#behavior/system/controller/discovery/ContinuousDiscovery.js";
 import { Discovery } from "#behavior/system/controller/discovery/Discovery.js";
 import { InstanceDiscovery } from "#behavior/system/controller/discovery/InstanceDiscovery.js";
+import { BasicInformationClient } from "#behaviors/basic-information";
+import { OperationalCredentialsClient } from "#behaviors/operational-credentials";
+import { Endpoint } from "#endpoint/Endpoint.js";
 import { EndpointContainer } from "#endpoint/properties/EndpointContainer.js";
-import { CancelablePromise, Duration, ImplementationError, Logger, Minutes, Seconds, Time, Timestamp } from "#general";
+import { EndpointType } from "#endpoint/type/EndpointType.js";
+import {
+    CancelablePromise,
+    Diagnostic,
+    Duration,
+    ImplementationError,
+    Logger,
+    Minutes,
+    Mutex,
+    Observable,
+    Seconds,
+    Time,
+    Timestamp,
+    UninitializedDependencyError,
+} from "#general";
 import { ClientGroup } from "#node/ClientGroup.js";
 import { InteractionServer } from "#node/server/InteractionServer.js";
-import { ClientSubscriptionHandler, ClientSubscriptions, FabricManager, PeerAddress } from "#protocol";
+import {
+    ClientSubscriptionHandler,
+    ClientSubscriptions,
+    FabricManager,
+    InteractionQueue,
+    PeerAddress,
+    PeerSet,
+    SessionManager,
+} from "#protocol";
 import { ServerNodeStore } from "#storage/server/ServerNodeStore.js";
+import { FabricIndex } from "@matter/types";
 import { ClientNode } from "../ClientNode.js";
 import type { ServerNode } from "../ServerNode.js";
 import { ClientNodeFactory } from "./ClientNodeFactory.js";
+import { ClientStructureEvents } from "./ClientStructureEvents.js";
 
-const logger = Logger.get("ClientNodes");
+const logger = Logger.get("Peers");
 
 const DEFAULT_TTL = Minutes(15);
 const EXPIRATION_INTERVAL = Minutes.one;
@@ -31,9 +61,10 @@ const EXPIRATION_INTERVAL = Minutes.one;
  */
 export class Peers extends EndpointContainer<ClientNode> {
     #expirationInterval?: CancelablePromise;
-    #expirationWorker?: Promise<void>;
-    #subscriptionHandler?: ClientSubscriptionHandler;
+    #installedSubscriptionHandler?: ClientSubscriptionHandler;
+    #mutex = new Mutex(this);
     #closed = false;
+    #queue: InteractionQueue;
 
     constructor(owner: ServerNode) {
         super(owner);
@@ -44,8 +75,16 @@ export class Peers extends EndpointContainer<ClientNode> {
 
         owner.env.applyTo(InteractionServer, this.#configureInteractionServer.bind(this));
 
+        this.#queue = this.owner.env.get(InteractionQueue); // Queue is Node wide
+
         this.added.on(this.#handlePeerAdded.bind(this));
         this.deleted.on(this.#manageExpiration.bind(this));
+
+        this.clusterInstalled(BasicInformationClient).on(this.#instrumentBasicInformation.bind(this));
+
+        const lifecycle = owner.lifecycle;
+        lifecycle.online.on(this.#nodeOnline.bind(this));
+        lifecycle.offline.on(this.#nodeOffline.bind(this));
     }
 
     /**
@@ -54,7 +93,14 @@ export class Peers extends EndpointContainer<ClientNode> {
     initialize() {
         const factory = this.owner.env.get(ClientNodeFactory);
 
-        const clientStores = this.owner.env.get(ServerNodeStore).clientStores;
+        const clientStores = this.owner.env.maybeGet(ServerNodeStore)?.clientStores;
+        if (clientStores === undefined) {
+            throw new UninitializedDependencyError(
+                "Peers",
+                "are not available because ServerNode initialization is incomplete",
+            );
+        }
+
         // Group nodes have an in-memory only store, so all nodes restored here are ClientNode
         for (const id of clientStores.knownIds) {
             this.add(
@@ -66,17 +112,35 @@ export class Peers extends EndpointContainer<ClientNode> {
         }
     }
 
+    async #nodeOnline() {
+        // TODO start all peers on node startup in a non blocking way respecting queuing for thread and such
+        /*for (const peer of this) {
+            await peer.start();
+        }*/
+        this.#manageExpiration();
+    }
+
+    async #nodeOffline() {
+        this.#cancelExpiration();
+        for (const peer of this) {
+            await peer.cancel();
+        }
+    }
+
     /**
-     * Find a specific commissionable node.
+     * Find a specific commissionable node, or, if no discovery options are provided, returns the first discovered node.
+     * TODO: Allow to provide an array of options for multiple discoveries (e.g. from a Multi QR code).
      */
     locate(options?: Discovery.Options) {
         return new InstanceDiscovery(this.owner, options);
     }
 
     /**
-     * Employ discovery to find a set of commissionable nodes.
+     * Employ discovery to find a set of commissionable nodes, the options can be used to limit the discovered devices
+     * (e.g. just a specific vendor).
+     * TODO: Allow to provide multiple identifiers for multiple discoveries (e.g. from a Multi QR code).
      *
-     * If you do not provide a timeout value, will search until canceled and you need to add a listener to
+     * If you do not provide a timeout value, will search until canceled, and you need to add a listener to
      * {@link Discovery#discovered} or {@link added} to receive discovered nodes.
      */
     discover(options?: Discovery.Options) {
@@ -90,13 +154,36 @@ export class Peers extends EndpointContainer<ClientNode> {
         return new CommissioningDiscovery(this.owner, options);
     }
 
+    /**
+     * Obtain an {@link Observable} that emits when a specific type of endpoint initializes for a peer.
+     *
+     * This is useful for initializing general behavior on any peer endpoint of the specified type.
+     */
+    endpointInstalled<T extends EndpointType>(type: T): Observable<[endpoint: Endpoint<T>]> {
+        return this.owner.env.get(ClientStructureEvents).endpointInstalled(type);
+    }
+
+    /**
+     * Obtain a {@link Observable} that emits when a specific type of cluster initializes for a peer.
+     *
+     * This is useful for initializing general behavior on any peer endpoint with the specified cluster.
+     */
+    clusterInstalled<T extends ClusterBehavior.Type>(type: T) {
+        return this.owner.env.get(ClientStructureEvents).clusterInstalled(type);
+    }
+
+    /**
+     * Emits when fixed attributes
+     */
     override get(id: number | string | PeerAddress) {
         if (typeof id !== "string" && typeof id !== "number") {
             const address = PeerAddress(id);
             for (const node of this) {
-                const nodeAddress = node.state.commissioning.peerAddress;
-                if (nodeAddress && PeerAddress.is(nodeAddress, address)) {
-                    return node;
+                if (node.behaviors.active.some(({ id }) => id === "commissioning")) {
+                    const nodeAddress = node.maybeStateOf("commissioning")?.peerAddress as PeerAddress | undefined;
+                    if (nodeAddress !== undefined && PeerAddress.is(nodeAddress, address)) {
+                        return node;
+                    }
                 }
             }
             return undefined;
@@ -117,6 +204,7 @@ export class Peers extends EndpointContainer<ClientNode> {
 
     /**
      * Get or create a client node for the given peer address.
+     *
      * This is mainly used to communicate to other known nodes on the fabric without having a formal commissioning
      * process.
      */
@@ -145,9 +233,10 @@ export class Peers extends EndpointContainer<ClientNode> {
 
     override async close() {
         this.#closed = true;
-        await this.#subscriptionHandler?.close();
+        this.#queue.close();
+        await this.#installedSubscriptionHandler?.close();
         this.#cancelExpiration();
-        await this.#expirationWorker;
+        await this.#mutex;
         await super.close();
     }
 
@@ -169,18 +258,19 @@ export class Peers extends EndpointContainer<ClientNode> {
      * If required, installs a listener in the environment's {@link InteractionServer} to handle subscription responses.
      */
     #configureInteractionServer() {
-        if (this.#closed || this.size > 0 || !this.owner.env.has(InteractionServer)) {
+        if (
+            this.#closed ||
+            this.#installedSubscriptionHandler !== undefined ||
+            !this.owner.env.has(InteractionServer)
+        ) {
             return;
         }
 
         const subscriptions = this.owner.env.get(ClientSubscriptions);
         const interactionServer = this.owner.env.get(InteractionServer);
 
-        if (!this.#subscriptionHandler) {
-            this.#subscriptionHandler = new ClientSubscriptionHandler(subscriptions);
-        }
-
-        interactionServer.clientHandler = this.#subscriptionHandler;
+        this.#installedSubscriptionHandler = new ClientSubscriptionHandler(subscriptions);
+        interactionServer.clientHandler = this.#installedSubscriptionHandler;
     }
 
     /**
@@ -188,10 +278,6 @@ export class Peers extends EndpointContainer<ClientNode> {
      */
     #manageExpiration() {
         if (this.#closed) {
-            return;
-        }
-
-        if (this.#expirationWorker) {
             return;
         }
 
@@ -212,64 +298,144 @@ export class Peers extends EndpointContainer<ClientNode> {
     }
 
     #onExpirationIntervalElapsed() {
-        this.#expirationInterval = undefined;
-        this.#expirationWorker = this.#cullExpiredNodesAndAddresses()
-            .catch(error => {
-                logger.error("Error culling expired nodes", error);
-            })
-            .finally(() => {
-                this.#expirationWorker = undefined;
-                this.#manageExpiration();
-            });
+        if (this.#closed) {
+            return;
+        }
+        this.#mutex.run(() =>
+            this.#cullExpiredNodesAndAddresses()
+                .catch(error => {
+                    logger.error("Error culling expired nodes", error);
+                })
+                .finally(() => {
+                    this.#manageExpiration();
+                }),
+        );
     }
 
     async #cullExpiredNodesAndAddresses() {
-        const now = Time.nowMs;
+        try {
+            const now = Time.nowMs;
 
-        for (const node of this) {
-            const state = node.state.commissioning;
-            const { addresses } = state;
-            const isCommissioned = state.peerAddress !== undefined;
+            for (const node of this) {
+                if (!node.lifecycle.isReady) {
+                    continue;
+                }
+                const state = node.maybeStateOf(CommissioningClient);
+                if (state === undefined) {
+                    continue;
+                }
+                const { addresses } = state;
+                const isCommissioned = state.peerAddress !== undefined;
 
-            // Shortcut for conditions we know no change is possible
-            if (addresses === undefined || (isCommissioned && addresses.length === 1)) {
+                // Shortcut for conditions we know no change is possible
+                if (addresses === undefined || (isCommissioned && addresses.length === 1)) {
+                    return;
+                }
+
+                // Remove expired addresses
+                let newAddresses = addresses.filter(addr => {
+                    const exp = expirationOf(addr);
+                    if (exp === undefined) {
+                        return true;
+                    }
+
+                    return exp > now;
+                });
+
+                // Cull commissionable nodes that have expired
+                if (!isCommissioned) {
+                    if (!newAddresses?.length || (expirationOf(state) ?? 0) <= now) {
+                        await node.delete();
+                        continue;
+                    }
+                }
+
+                // If the node is commissioned, do not remove the last address.  Instead keep the "least expired" addresses
+                if (isCommissioned && addresses.length && !newAddresses.length) {
+                    if (addresses.length === 1) {
+                        return;
+                    }
+                    const freshestExp = addresses.reduce((freshestExp, addr) => {
+                        return Math.max(freshestExp, expirationOf(addr)!);
+                    }, 0);
+
+                    newAddresses = addresses.filter(addr => expirationOf(addr) === freshestExp);
+                }
+
+                // Apply new addresses if changed
+                if (addresses.length !== newAddresses.length) {
+                    await node.set({ commissioning: { addresses } });
+                }
+            }
+        } finally {
+            this.#expirationInterval = undefined;
+        }
+    }
+
+    #instrumentBasicInformation(node: Endpoint, type: typeof BasicInformationClient) {
+        if (!(node instanceof ClientNode)) {
+            return;
+        }
+
+        setPeerLimits();
+
+        node.eventsOf(type).leave?.on(({ fabricIndex }) => this.#onLeave(node, fabricIndex));
+        node.eventsOf(type).shutDown?.on(() => this.#onShutdown(node));
+        node.eventsOf(type).capabilityMinima$Changed.on(setPeerLimits);
+
+        function setPeerLimits() {
+            if (!node.env.has(PeerSet)) {
+                // Node is not yet online, delay setting limits
+                return;
+            }
+            const peerAddress = node.maybeStateOf(CommissioningClient)?.peerAddress;
+            if (peerAddress) {
+                node.env.get(PeerSet).for(peerAddress).limits = node.stateOf(type).capabilityMinima;
+            }
+        }
+    }
+
+    #onLeave(node: ClientNode, fabricIndex: FabricIndex) {
+        if (!node.lifecycle.isReady) {
+            return;
+        }
+
+        this.#mutex.run(async () => {
+            if (!node.lifecycle.isReady) {
                 return;
             }
 
-            // Remove expired addresses
-            let newAddresses = addresses.filter(addr => {
-                const exp = expirationOf(addr);
-                if (exp === undefined) {
-                    return true;
-                }
-
-                return exp > now;
-            });
-
-            // Cull commissionable nodes that have expired
-            if (!isCommissioned) {
-                if (!newAddresses?.length || (expirationOf(state) ?? 0) <= now) {
-                    await node.delete();
-                    continue;
-                }
+            const { fabrics: peerFabrics } = node.maybeStateOf(OperationalCredentialsClient) ?? {};
+            const peerFabric = peerFabrics?.find(fabric => fabric.fabricIndex === fabricIndex);
+            if (!peerFabric) {
+                return;
             }
 
-            // If the node is commissioned, do not remove the last address.  Instead keep the "least expired" addresses
-            if (isCommissioned && addresses.length && !newAddresses.length) {
-                if (addresses.length === 1) {
-                    return;
-                }
-                const freshestExp = addresses.reduce((freshestExp, addr) => {
-                    return Math.max(freshestExp, expirationOf(addr)!);
-                }, 0);
-
-                newAddresses = addresses.filter(addr => expirationOf(addr) === freshestExp);
+            const peerAddress = node.maybeStateOf(CommissioningClient)?.peerAddress;
+            if (!peerAddress) {
+                return;
             }
 
-            // Apply new addresses if changed
-            if (addresses.length !== newAddresses.length) {
-                await node.set({ commissioning: { addresses } });
+            const localFabrics = this.owner.env.get(FabricManager);
+            const localFabric = localFabrics.forDescriptor(peerFabric);
+            if (!localFabric || localFabric.fabricIndex !== peerAddress.fabricIndex) {
+                return;
             }
+
+            logger.notice("Peer", Diagnostic.strong(node.id), "has left the fabric");
+            node.lifecycle.decommissioned.emit(LocalActorContext.ReadOnly);
+            await node.delete();
+        });
+    }
+
+    async #onShutdown(node: ClientNode) {
+        if (!node.lifecycle.isReady || !node.lifecycle.isOnline) {
+            return;
+        }
+        const peerAddress = node.maybeStateOf(CommissioningClient)?.peerAddress;
+        if (peerAddress !== undefined) {
+            // Shutdown event means the device reboots, handle it like a peer loss and remove all sessions
+            await this.owner.env.get(SessionManager).handlePeerShutdown(peerAddress);
         }
     }
 }

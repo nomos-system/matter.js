@@ -257,13 +257,12 @@ export abstract class Advertisement<T extends ServiceDescription = ServiceDescri
         });
     }
 
-    async #run(context: ActivityContext, event: Advertiser.BroadcastEvent, previous?: ActivityContext) {
-        // If automatic advertisement starts when it is already active, kill the previous version
-        if (previous) {
-            await previous;
-        }
-
-        logger.debug("Begin auto broadcast", this.dict());
+    async #run(context: ActivityContext, event: Advertiser.BroadcastEvent) {
+        // Diagnostics
+        const dict = this.dict();
+        using advertising = this.advertiser.join("advertising");
+        Object.assign(advertising.details, dict);
+        logger.debug("Begin auto broadcast", dict);
 
         // Perform advertisement
         try {

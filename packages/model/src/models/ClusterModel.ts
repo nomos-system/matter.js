@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type { Conformance } from "#aspects/Conformance.js";
 import { camelize, describeList } from "#general";
 import { ModelIndex } from "#logic/ModelIndex.js";
 import { ModelTraversal } from "#logic/ModelTraversal.js";
@@ -21,8 +22,12 @@ import type { FieldModel } from "./FieldModel.js";
 import { Model } from "./Model.js";
 import { ScopeModel } from "./ScopeModel.js";
 
-export class ClusterModel extends ScopeModel<ClusterElement, ClusterModel.Child> implements ClusterElement {
+export class ClusterModel
+    extends ScopeModel<ClusterElement, ClusterModel.Child>
+    implements ClusterElement, Conformance.FeatureContext
+{
     override tag: ClusterElement.Tag = ClusterElement.Tag;
+    classification?: ClusterElement.Classification;
 
     #quality: Quality;
 
@@ -58,16 +63,6 @@ export class ClusterModel extends ScopeModel<ClusterElement, ClusterModel.Child>
 
     get conformant() {
         return new ClusterModel.Conformant(this);
-    }
-
-    get classification(): ClusterElement.Classification | undefined {
-        return this.resource?.classification as ClusterElement.Classification | undefined;
-    }
-
-    set classification(classification: `${ClusterElement.Classification}` | undefined) {
-        if (classification || this.hasLocalResource) {
-            this.localResource.classification = classification;
-        }
     }
 
     get pics() {
@@ -106,7 +101,7 @@ export class ClusterModel extends ScopeModel<ClusterElement, ClusterModel.Child>
         return (this.member(FeatureMap.id, [ElementTag.Attribute]) as AttributeModel) ?? new AttributeModel(FeatureMap);
     }
 
-    get featureNames(): FeatureSet {
+    get definedFeatures(): FeatureSet {
         return new FeatureSet(this.features.map(feature => feature.name));
     }
 
@@ -167,15 +162,16 @@ export class ClusterModel extends ScopeModel<ClusterElement, ClusterModel.Child>
         super(definition, ...children);
 
         this.#quality = Quality.create(definition.quality);
+        this.classification = definition.classification as ClusterElement.Classification;
         if (!(definition instanceof Model)) {
             this.pics = definition.pics;
-            this.classification = definition.classification as ClusterElement.Classification;
         }
     }
 
     override toElement(omitResources = false, extra?: Record<string, unknown>) {
         return super.toElement(omitResources, {
             quality: this.quality.valueOf(),
+            classification: this.classification,
             ...extra,
         });
     }

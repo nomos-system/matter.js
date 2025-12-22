@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Endpoint, EndpointType } from "#endpoint/index.js";
+import { Endpoint } from "#endpoint/Endpoint.js";
+import { EndpointType } from "#endpoint/type/EndpointType.js";
 import type { ClientNode } from "#node/ClientNode.js";
 import { Endpoints } from "./Endpoints.js";
 
@@ -26,7 +27,7 @@ export class ClientNodeEndpoints extends Endpoints {
             id: `ep${endpointId}`,
             number: endpointId,
             type: EndpointType({
-                name: "ClientEndpoint",
+                name: "Unknown",
                 deviceType: EndpointType.UNKNOWN_DEVICE_TYPE,
                 deviceRevision: EndpointType.UNKNOWN_DEVICE_REVISION,
                 ...type,

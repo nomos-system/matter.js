@@ -9,7 +9,7 @@
 import { Resource } from "#models/Resource.js";
 
 Resource.add({
-    tag: "deviceType", name: "HeatPump", classification: "simple", xref: "device§14.5",
+    tag: "deviceType", name: "HeatPump", xref: "device§14.5",
 
     details: "A Heat Pump device is a device that uses electrical energy to heat either spaces or water tanks " +
         "using ground, water or air as the heat source. These typically can heat the air or can pump water " +
@@ -21,6 +21,12 @@ Resource.add({
 
     children: [
         { tag: "requirement", name: "Identify", xref: "device§14.5.7" },
-        { tag: "requirement", name: "Thermostat", xref: "device§14.5.7" }
+        { tag: "requirement", name: "Thermostat", discriminator: "O:clientCluster", xref: "device§14.5.7" },
+        { tag: "requirement", name: "PowerSource", xref: "device§14.5.5" },
+        { tag: "requirement", name: "ElectricalSensor", xref: "device§14.5.5" },
+        { tag: "requirement", name: "DeviceEnergyManagement", xref: "device§14.5.5" },
+        { tag: "requirement", name: "Thermostat", discriminator: "O:deviceType", xref: "device§14.5.5" },
+        { tag: "requirement", name: "WaterHeater", xref: "device§14.5.5" },
+        { tag: "requirement", name: "TemperatureSensor", xref: "device§14.5.5" }
     ]
 });

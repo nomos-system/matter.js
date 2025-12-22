@@ -18,6 +18,7 @@ import {
     Logger,
     MatterFlowError,
     Mutex,
+    MutexClosedError,
     Observable,
 } from "#general";
 import { DatatypeModel, FieldElement } from "#model";
@@ -30,7 +31,6 @@ import {
     DeviceAdvertiser,
     DeviceCommissioner,
     ExposedFabricInformation,
-    FabricAction,
     FabricManager,
     FailsafeContext,
     MdnsAdvertiser,
@@ -98,8 +98,6 @@ export class CommissioningServer extends Behavior {
         this.reactTo((this.endpoint as Node).lifecycle.online, this.#enterOnlineMode);
 
         this.reactTo((this.endpoint as Node).lifecycle.goingOffline, this.#enterOfflineMode);
-
-        this.reactTo(this.env.get(FabricManager).events.added, this.enterOperationalMode);
     }
 
     override async [Symbol.asyncDispose]() {
@@ -110,12 +108,12 @@ export class CommissioningServer extends Behavior {
         await this.internal.mutex;
     }
 
-    handleFabricChange(fabricIndex: FabricIndex, fabricAction: FabricAction) {
+    handleFabricChange(fabricIndex: FabricIndex, fabricAction: CommissioningServer.FabricAction) {
         // Do not consider commissioned so long as there is an active failsafe timer as commissioning may not be
         // complete and could still be rolled back
         if (this.env.has(FailsafeContext)) {
             const failsafe = this.env.get(FailsafeContext);
-            if (fabricAction === FabricAction.Added || fabricAction === FabricAction.Updated) {
+            if (fabricAction === "added" || fabricAction === "updated") {
                 // Added or updated fabric with active Failsafe are temporary and should not be considered until failsafe ends
                 if (failsafe.construction.status !== Lifecycle.Status.Destroyed) {
                     if (failsafe.fabricIndex === fabricIndex) {
@@ -123,14 +121,16 @@ export class CommissioningServer extends Behavior {
                         return;
                     } else {
                         throw new MatterFlowError(
-                            `Failsafe owns a different fabricIndex then ${failsafe.forUpdateNoc ? "updated" : "added"}.`,
+                            `Failsafe owns a different fabricIndex then ${failsafe.forUpdateNoc ? "updated" : "added"}: ${failsafe.fabricIndex} vs. ${fabricIndex}`,
                         );
                     }
                 }
-            } else if (fabricAction === FabricAction.Removed) {
+            } else if (fabricAction === "deleted") {
                 // Removed fabric with active Failsafe are ignored but should match the failsafe one
                 if (failsafe.fabricIndex !== fabricIndex) {
-                    throw new MatterFlowError("Failsafe owns a different fabricIndex then removed.");
+                    throw new MatterFlowError(
+                        `Failsafe owns a different fabricIndex then removed: ${failsafe.fabricIndex} vs. ${fabricIndex}`,
+                    );
                 }
             }
         }
@@ -157,14 +157,14 @@ export class CommissioningServer extends Behavior {
             const sessions = this.agent.get(SessionsBehavior);
             if (Object.keys(sessions.state.sessions).length > 0) {
                 // We have still open sessions, wait for them to close
-                this.reactTo(sessions.events.closed, this.#handleSessionClosed);
+                this.reactTo(sessions.events.closed, this.#resetAfterSessionsClear);
             } else {
                 this.#triggerFactoryReset();
             }
         }
     }
 
-    #handleSessionClosed() {
+    #resetAfterSessionsClear() {
         const sessions = this.agent.get(SessionsBehavior);
         if (Object.keys(sessions.state.sessions).length === 0) {
             this.#triggerFactoryReset();
@@ -172,7 +172,7 @@ export class CommissioningServer extends Behavior {
     }
 
     #triggerFactoryReset() {
-        this.env.runtime.add((this.endpoint as ServerNode).erase());
+        this.env.runtime.add((this.endpoint as ServerNode).erase().catch(e => MutexClosedError.accept(e)));
     }
 
     #monitorFailsafe(failsafe: FailsafeContext) {
@@ -184,10 +184,7 @@ export class CommissioningServer extends Behavior {
         const listener = this.callback(function (this: CommissioningServer, status: Lifecycle.Status) {
             if (status === Lifecycle.Status.Destroyed) {
                 if (failsafe.fabricIndex !== undefined) {
-                    this.handleFabricChange(
-                        failsafe.fabricIndex,
-                        failsafe.forUpdateNoc ? FabricAction.Updated : FabricAction.Added,
-                    );
+                    this.handleFabricChange(failsafe.fabricIndex, failsafe.forUpdateNoc ? "updated" : "added");
                 }
                 this.internal.unregisterFailsafeListener?.();
             }
@@ -204,6 +201,8 @@ export class CommissioningServer extends Behavior {
     }
 
     async #enterOnlineMode() {
+        this.reactTo(this.env.get(FabricManager).events.added, this.enterOperationalMode);
+
         // If already commissioned, trigger operational announcement
         if ((this.endpoint.lifecycle as NodeLifecycle).isCommissioned) {
             // Restore subscriptions if we have some persisted
@@ -404,6 +403,8 @@ export namespace CommissioningServer {
         fabricsChanged = Observable<[fabricIndex: FabricIndex, action: FabricAction]>();
         enabled$Changed = AsyncObservable<[context: ActionContext]>();
     }
+
+    export type FabricAction = "added" | "deleted" | "updated";
 }
 
 /**

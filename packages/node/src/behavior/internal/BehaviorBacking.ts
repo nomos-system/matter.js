@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { isClientBehavior } from "#behavior/cluster/cluster-behavior-utils.js";
 import { OnlineEvent } from "#behavior/Events.js";
 import { Migration } from "#behavior/state/migrations/Migration.js";
 import type { Agent } from "#endpoint/Agent.js";
@@ -18,6 +19,7 @@ import {
     ImplementationError,
     InternalError,
     Lifecycle,
+    Lifetime,
     Logger,
     MaybePromise,
     Observable,
@@ -114,6 +116,10 @@ export abstract class BehaviorBacking {
         }
     }
 
+    get [Lifetime.owner]() {
+        return this.#endpoint.construction;
+    }
+
     initializeDataSource() {
         if (this.#datasource) {
             return;
@@ -129,10 +135,10 @@ export abstract class BehaviorBacking {
     /**
      * Destroy the backing.
      */
-    close(agent: Agent, invokeClose = true) {
+    close(agent?: Agent) {
         const initialized = this.construction.status === Lifecycle.Status.Active;
         if (!initialized) {
-            invokeClose = false;
+            agent = undefined;
         }
 
         return this.construction.close(() => {
@@ -145,7 +151,7 @@ export abstract class BehaviorBacking {
                 },
             );
 
-            if (invokeClose) {
+            if (agent) {
                 result = MaybePromise.then(result, () => this.#invokeClose(agent));
             }
 
@@ -177,6 +183,19 @@ export abstract class BehaviorBacking {
         return this.#type;
     }
 
+    set type(type: Behavior.Type) {
+        if (!type.supports(this.#type)) {
+            // This is unlikely to cause issues because we limit to peer contexts.  In that case we implement elements
+            // fairly expansively regardless of reported support.  So worst case scenario the metadata reported earlier
+            // may be out of sync with the device.  There is a small possibility this causes problems, though, so log a
+            // warning
+            logger.warn(
+                `The cluster for active behavior ${this} may no longer be strictly compatible with local implementation`,
+            );
+        }
+        this.#type = type;
+    }
+
     /**
      * Create an instance of the backed {@link Behavior}.
      *
@@ -184,7 +203,7 @@ export abstract class BehaviorBacking {
      */
     createBehavior(agent: Agent, type: Behavior.Type) {
         const behavior = new this.#type(agent, this);
-        if (behavior instanceof type) {
+        if (behavior instanceof type || isClientBehavior(type)) {
             return behavior;
         }
 
@@ -216,7 +235,7 @@ export abstract class BehaviorBacking {
             location: {
                 path: this.#endpoint.path.at(this.#type.id).at("state"),
                 endpoint: this.#endpoint.number,
-                cluster: this.type.schema?.tag === "cluster" ? (this.type.schema.id as ClusterId) : undefined,
+                cluster: this.type.schema.tag === "cluster" ? (this.type.schema.id as ClusterId) : undefined,
             },
             supervisor: this.type.supervisor,
             type: this.type.State,

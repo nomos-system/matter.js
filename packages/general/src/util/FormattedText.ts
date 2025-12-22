@@ -6,7 +6,7 @@
 
 const INDENT = "  ";
 
-export { camelize, describeList, serialize } from "./String.js";
+export { describeList } from "./String.js";
 
 /**
  * Performs word wrap.  Input is assumed to be a series of paragraphs separated by a newline.  Output is an array of
@@ -227,7 +227,7 @@ function formatBlock(block: Block, width: number) {
 
     function formatLevel(block: Block, parentPrefix: string) {
         for (const entry of block.entries) {
-            if (typeof entry == "string") {
+            if (typeof entry === "string") {
                 let prefix, text;
                 if (block.kind === BlockKind.Simple) {
                     prefix = "";

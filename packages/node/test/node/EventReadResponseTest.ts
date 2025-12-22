@@ -5,16 +5,17 @@
  */
 
 import { MessagesServer } from "#behaviors/messages";
-import { BasicInformationCluster } from "#clusters/basic-information";
+import { BasicInformation, BasicInformationCluster } from "#clusters/basic-information";
 import { Messages } from "#clusters/messages";
 import { OnOffLightDevice } from "#devices/on-off-light";
 import { Endpoint } from "#endpoint/index.js";
-import { Bytes } from "#general";
+import { Bytes, Seconds } from "#general";
 import { ServerNode } from "#index.js";
 import { AccessLevel, Specification } from "#model";
 import { EventReadResponse, Read, ReadResult } from "#protocol";
-import { ClusterId, EndpointNumber, EventId, FabricIndex, StatusCode } from "#types";
+import { ClusterId, EndpointNumber, EventId, EventNumber, FabricIndex, StatusCode } from "#types";
 import { MockServerNode } from "./mock-server-node.js";
+import { MockSite } from "./mock-site.js";
 
 const ROOT_ENDPOINT_FULL_CLUSTER_LIST = {
     40: 2,
@@ -54,7 +55,7 @@ describe("EventReadResponse", () => {
                             },
                             number: 1n,
                             priority: 2,
-                            timestamp: MockTime.epoch.getTime(),
+                            timestamp: -1,
                             tlv: {},
                             value: { softwareVersion: 0 },
                         },
@@ -90,7 +91,7 @@ describe("EventReadResponse", () => {
                             },
                             number: 3n,
                             priority: 1,
-                            timestamp: MockTime.epoch.getTime(),
+                            timestamp: -1,
                             tlv: {},
                             value: { fabricIndex: FabricIndex(4) },
                         },
@@ -123,7 +124,7 @@ describe("EventReadResponse", () => {
                             },
                             number: 3n,
                             priority: 2,
-                            timestamp: MockTime.epoch.getTime(),
+                            timestamp: -1,
                             tlv: {},
                             value: undefined,
                         },
@@ -171,7 +172,7 @@ describe("EventReadResponse", () => {
                                 },
                                 number: 3n,
                                 priority: 1,
-                                timestamp: MockTime.epoch.getTime(),
+                                timestamp: -1,
                                 tlv: {},
                                 value: {
                                     messageId: Bytes.fromHex("0011223344556677889900aabbccddeeff"),
@@ -208,7 +209,7 @@ describe("EventReadResponse", () => {
                     },
                     number: 1n,
                     priority: 2,
-                    timestamp: MockTime.epoch.getTime(),
+                    timestamp: -1,
                     tlv: {},
                     value: { softwareVersion: 0 },
                 },
@@ -341,6 +342,53 @@ describe("EventReadResponse", () => {
         });
     });
 
+    describe("On commissioned node", () => {
+        before(() => {
+            MockTime.init();
+
+            // Required for crypto to succeed
+            MockTime.macrotasks = true;
+        });
+
+        it("Reads startup event via remote read", async () => {
+            await using site = new MockSite();
+            // Device is automatically configured with vendorId 0xfff1 and productId 0x8000
+            const { controller } = await site.addCommissionedPair({
+                device: {
+                    type: ServerNode.RootEndpoint,
+                    groupKeyManagement: {
+                        maxGroupKeysPerFabric: 3,
+                    },
+                },
+            });
+
+            // Get the client view of the device (peer)
+            const peer1 = controller.peers.get("peer1")!;
+            expect(peer1).not.undefined;
+
+            const read = peer1.interaction.read(
+                Read(
+                    {
+                        eventFilters: [{ eventMin: EventNumber(12345) }],
+                    },
+                    Read.Event({
+                        endpoint: EndpointNumber(0),
+                        cluster: BasicInformation.Complete,
+                        events: ["startUp"],
+                    }),
+                ),
+            );
+
+            let asExpected = false;
+            for await (const chunks of read) {
+                expect(chunks).deep.equals([]);
+                expect(asExpected).equals(false);
+                asExpected = true;
+            }
+            expect(asExpected).equals(true);
+        });
+    });
+
     // TODO - more tests and Migrate some from InteractionProtocolTest
 });
 
@@ -376,7 +424,16 @@ export async function readEvRaw(node: MockServerNode, data: Partial<Read.Events>
                     }
                 });
             }
-            responseChunks.push(chunks);
+
+            // Normalize the timestamp.  Should be within 2 seconds depending on VM variance
+            const epoch = MockTime.epoch.getTime();
+            for (const ev of chunks as ReadResult.EventValue[]) {
+                if (typeof ev.timestamp === "number" && ev.timestamp - epoch <= Seconds(2)) {
+                    ev.timestamp = -1;
+                }
+            }
+
+            responseChunks.push(chunks as ReadResult.EventValue[]);
         }
         return { data: [...responseChunks], counts: response.counts };
     });

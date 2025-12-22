@@ -6,6 +6,7 @@
 
 import { Bytes, Crypto, Diagnostic, PublicKey } from "#general";
 import { CaseAuthenticatedTag, FabricId, NodeId } from "#types";
+import { Certificate } from "./Certificate.js";
 import { CertificateError } from "./common.js";
 import { OperationalCertificate } from "./definitions/operational.js";
 import { Icac } from "./Icac.js";
@@ -16,6 +17,12 @@ export class Noc extends OperationalBase<OperationalCertificate.Noc> {
     /** Construct the class from a Tlv version of the certificate */
     static fromTlv(tlv: Bytes) {
         return new Noc(OperationalCertificate.TlvNoc.decode(tlv));
+    }
+
+    /** Construct the class from an ASN.1/DER encoded certificate */
+    static fromAsn1(asn1: Bytes) {
+        const cert = Certificate.parseAsn1Certificate(asn1);
+        return new Noc(cert as OperationalCertificate.Noc);
     }
 
     /** Validates all basic certificate fields on construction. */
@@ -39,7 +46,7 @@ export class Noc extends OperationalBase<OperationalCertificate.Noc> {
      * If the certificate is not signed, it throws a CertificateError.
      */
     asSignedTlv() {
-        return OperationalCertificate.TlvNoc.encode({ ...this.cert, signature: this.signature });
+        return OperationalCertificate.TlvNoc.encode({ ...this.cert, signature: this.signature.bytes });
     }
 
     /**
@@ -87,6 +94,11 @@ export class Noc extends OperationalBase<OperationalCertificate.Noc> {
         // The subject DN SHALL NOT encode any matter-rcac-id attribute.
         if ("rcacId" in subject) {
             throw new CertificateError(`Noc certificate must not contain an rcacId.`);
+        }
+
+        // The subject DN SHALL NOT encode any matter-vvs-id attribute.
+        if ("vvsId" in subject) {
+            throw new CertificateError(`Noc certificate must not contain a vvsId.`);
         }
 
         // The subject DN MAY encode at most three matter-noc-cat attributes.
@@ -148,17 +160,22 @@ export class Noc extends OperationalBase<OperationalCertificate.Noc> {
             throw new CertificateError(`Noc certificate authorityKeyIdentifier must be 160 bit.`);
         }
 
-        // Validate authority key identifier against subject key identifier
-        if (!Bytes.areEqual(authorityKeyIdentifier, (ica?.cert ?? root.cert).extensions.subjectKeyIdentifier)) {
+        let issuer: Rcac | Icac | undefined;
+        if (Bytes.areEqual(authorityKeyIdentifier, root.cert.extensions.subjectKeyIdentifier)) {
+            issuer = root;
+        } else if (
+            ica !== undefined &&
+            Bytes.areEqual(authorityKeyIdentifier, ica.cert.extensions.subjectKeyIdentifier)
+        ) {
+            issuer = ica;
+        }
+
+        if (issuer === undefined) {
             throw new CertificateError(
                 `Noc certificate authorityKeyIdentifier must be equal to Root/Ica subjectKeyIdentifier.`,
             );
         }
 
-        await crypto.verifyEcdsa(
-            PublicKey((ica?.cert ?? root.cert).ellipticCurvePublicKey),
-            this.asUnsignedAsn1(),
-            this.signature,
-        );
+        await crypto.verifyEcdsa(PublicKey(issuer.cert.ellipticCurvePublicKey), this.asUnsignedAsn1(), this.signature);
     }
 }

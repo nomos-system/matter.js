@@ -8,6 +8,7 @@ import { Agent } from "#endpoint/Agent.js";
 import { Abort, asError, Diagnostic, InternalError, Logger } from "#general";
 import { Node } from "#node/Node.js";
 import { ServerNode } from "#node/ServerNode.js";
+import { Mark } from "#protocol";
 import { StatusResponse, StatusResponseError } from "#types";
 import { ApiPath } from "./ApiPath.js";
 import { ApiResource } from "./ApiResource.js";
@@ -63,15 +64,15 @@ export namespace Api {
         if (!logger) {
             loggers.set(facility, (logger = Logger.get(facility)));
         }
-        logger[level](Diagnostic.via(id ?? "(anon)"), message);
+        logger[level](Diagnostic.via(id || "(anon)"), message);
     }
 
     export function logRequest(facility: string, id: string | undefined, method: string, target: string) {
-        log("info", facility, id, "«", Diagnostic.strong(method), target);
+        log("info", facility, id, Mark.INBOUND, Diagnostic.strong(method), target);
     }
 
     export function logResponse(facility: string, response: RemoteResponse) {
-        const message = Array<unknown>("»", RemoteResponse.describe(response));
+        const message = Array<unknown>(Mark.OUTBOUND, RemoteResponse.describe(response));
         let level: "error" | "info";
         switch (response.kind) {
             case "error":

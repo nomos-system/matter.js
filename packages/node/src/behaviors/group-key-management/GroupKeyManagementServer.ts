@@ -6,10 +6,10 @@
 
 import { ActionContext } from "#behavior/context/ActionContext.js";
 import { GroupKeyManagement } from "#clusters/group-key-management";
-import { deepCopy, ImplementationError, Logger, MaybePromise } from "#general";
+import { deepCopy, ImplementationError, Logger } from "#general";
 import { DatatypeModel, FieldElement } from "#model";
 import { NodeLifecycle } from "#node/NodeLifecycle.js";
-import { assertRemoteActor, Fabric, FabricManager, hasRemoteActor } from "#protocol";
+import { assertRemoteActor, Fabric, FabricManager, hasRemoteActor, IPK_DEFAULT_EPOCH_START_TIME } from "#protocol";
 import { EndpointNumber, FabricIndex, GroupId, StatusCode, StatusResponseError } from "#types";
 import { GroupKeyManagementBehavior } from "./GroupKeyManagementBehavior.js";
 
@@ -18,14 +18,14 @@ const logger = Logger.get("GroupKeyManagementServer");
 const MAX_64BIT_TIME = BigInt("0xffffffffffffffff");
 
 // Enhance the schema by a fabric scoped structure for the GroupKeySetStruct to enable persistence
-const groupKeySetStruct = GroupKeyManagementBehavior.schema!.get(DatatypeModel, "GroupKeySetStruct")!;
+const groupKeySetStruct = GroupKeyManagementBehavior.schema.get(DatatypeModel, "GroupKeySetStruct")!;
 const groupKeySetStructFS = groupKeySetStruct.extend(
     {
         name: "GroupKeySetStructFS",
     },
     FieldElement({ name: "FabricIndex", id: 0xfe, type: "FabricIndex", conformance: "M" }),
 );
-const schema = GroupKeyManagementBehavior.schema!.extend(
+const schema = GroupKeyManagementBehavior.schema.extend(
     {},
     groupKeySetStructFS,
     FieldElement(
@@ -47,7 +47,7 @@ export class GroupKeyManagementServer extends GroupKeyManagementBehavior {
     declare state: GroupKeyManagementServer.State;
     static override readonly schema = schema;
 
-    override initialize(): MaybePromise {
+    override initialize() {
         if (this.features.cacheAndSync) {
             throw new ImplementationError("The CacheAndSync feature is provisional. Do not use it.");
         }
@@ -65,8 +65,8 @@ export class GroupKeyManagementServer extends GroupKeyManagementBehavior {
 
     async #online() {
         // Validate the maximum supported group keys and groups per fabric if they are set to minimum values.
-        if (this.state.maxGroupKeysPerFabric === 0 && this.state.maxGroupsPerFabric === 1) {
-            // We assume unchanged defaults
+        if (this.state.maxGroupKeysPerFabric === 1 && this.state.maxGroupsPerFabric === 0) {
+            // We assume these are the specification defaults: maxGroupKeysPerFabric = 1, maxGroupsPerFabric = 0
             let groupsFound = false;
             this.endpoint.visit(endpoint => {
                 if (!groupsFound && "groups" in endpoint.behaviors.supported) {
@@ -86,16 +86,31 @@ export class GroupKeyManagementServer extends GroupKeyManagementBehavior {
         // Added fabric always have no groups, so no need to initialize anything on adding the fabric
 
         // Fabric was updated, so basically newly created, so we need to reinitialize the group key sets
-        this.reactTo(fabrics.events.updated, this.#handleFabricUpdate);
+        this.reactTo(fabrics.events.replaced, this.#handleFabricUpdate);
 
         // When we have group key sets, we need to ensure that they are initialized on the Fabric group manager
         if (this.state.groupKeySets.length) {
             const groupKeysForFabric = new Map<FabricIndex, GroupKeyManagement.GroupKeySet[]>();
-            for (const groupKeySet of this.state.groupKeySets) {
+            const groupKeySets = deepCopy(this.state.groupKeySets);
+            for (let i = 0; i < groupKeySets.length; i++) {
+                const groupKeySet = groupKeySets[i];
                 const fabricIndex = groupKeySet.fabricIndex;
                 const keys = groupKeysForFabric.get(fabricIndex) ?? [];
+                if (keys.length === 0 && !fabrics.has(fabricIndex)) {
+                    // Should normally not happen, but we saw such crashes without details, so handle it gracefully
+                    logger.warn(
+                        `Stored GroupKeySets for FabricIndex ${fabricIndex}, but no such fabric exists anymore. Cleaning up stale entries.`,
+                    );
+                    groupKeySets.splice(i, 1);
+                    i--;
+                    continue;
+                }
                 keys.push(groupKeySet);
                 groupKeysForFabric.set(fabricIndex, keys);
+            }
+            if (groupKeySets.length !== this.state.groupKeySets.length) {
+                // Some entries were removed, so update the persisted state
+                this.state.groupKeySets = groupKeySets;
             }
 
             for (const [fabricIndex, keys] of groupKeysForFabric.entries()) {
@@ -290,7 +305,8 @@ export class GroupKeyManagementServer extends GroupKeyManagementBehavior {
         if (epochKey0 === null || epochStartTime0 === null) {
             throw new StatusResponseError("EpochKey0 and EpochStartTime0 must be set", StatusCode.InvalidCommand);
         }
-        if (epochStartTime0 === 0) {
+        if (epochStartTime0 <= IPK_DEFAULT_EPOCH_START_TIME) {
+            // Formally can never be < IPK_DEFAULT_EPOCH_START_TIME, but let's be sure
             throw new StatusResponseError("EpochStartTime0 must not be 0", StatusCode.InvalidCommand);
         }
 
@@ -341,10 +357,9 @@ export class GroupKeyManagementServer extends GroupKeyManagementBehavior {
             // Update existing group key set
             this.state.groupKeySets[existingIndex] = { ...groupKeySet, fabricIndex };
         } else {
-            // Add new group key set
-            const keySetsOfFabric = this.state.groupKeySets.filter(
-                ({ fabricIndex: entryIndex }) => entryIndex === fabricIndex,
-            ).length;
+            // Add a new group key set
+            const keySetsOfFabric =
+                this.state.groupKeySets.filter(({ fabricIndex: entryIndex }) => entryIndex === fabricIndex).length + 1; // Add 1 because Group Key set 0 for IPK always exists implicitly
             if (keySetsOfFabric >= this.state.maxGroupKeysPerFabric) {
                 throw new StatusResponseError(
                     `Too many group key sets for fabric ${fabricIndex}, maximum is ${this.state.maxGroupKeysPerFabric}`,

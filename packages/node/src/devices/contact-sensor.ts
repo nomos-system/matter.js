@@ -18,7 +18,7 @@ import { Identity } from "#general";
 /**
  * This defines conformance to the Contact Sensor device type.
  *
- * @see {@link MatterSpecification.v141.Device} § 7.1
+ * @see {@link MatterSpecification.v142.Device} § 7.1
  */
 export interface ContactSensorDevice extends Identity<typeof ContactSensorDeviceDefinition> {}
 
@@ -64,4 +64,5 @@ export const ContactSensorDeviceDefinition = MutableEndpoint({
     )
 });
 
+Object.freeze(ContactSensorDeviceDefinition);
 export const ContactSensorDevice: ContactSensorDevice = ContactSensorDeviceDefinition;

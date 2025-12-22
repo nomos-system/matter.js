@@ -5,13 +5,24 @@
  */
 
 import { Message, MessageCodec } from "#codec/MessageCodec.js";
-import { Bytes, Channel, Diagnostic, Duration, Logger, MatterError, MatterFlowError, Millis, Seconds } from "#general";
+import { Mark } from "#common/Mark.js";
+import {
+    Bytes,
+    Channel,
+    Diagnostic,
+    Duration,
+    IpNetworkChannel,
+    Logger,
+    MatterFlowError,
+    MaybePromise,
+    Millis,
+    Seconds,
+} from "#general";
 import type { ExchangeLogContext } from "#protocol/MessageExchange.js";
-import { Session, SessionParameters } from "#session/Session.js";
+import type { Session } from "#session/Session.js";
+import type { SessionParameters } from "#session/SessionParameters.js";
 
 const logger = new Logger("MessageChannel");
-
-export class ChannelNotConnectedError extends MatterError {}
 
 /**
  * Default expected processing time for a messages in milliseconds. The value is derived from kExpectedIMProcessingTime
@@ -51,28 +62,32 @@ export namespace MRP {
 
 export class MessageChannel implements Channel<Message> {
     public closed = false;
-    #closeCallback?: () => Promise<void>;
+    #onClose?: () => MaybePromise<void>;
     // When the session is supporting MRP and the channel is not reliable, use MRP handling
 
     constructor(
         readonly channel: Channel<Bytes>,
         readonly session: Session,
-        closeCallback?: () => Promise<void>,
+        onClose?: () => MaybePromise<void>,
     ) {
-        this.#closeCallback = closeCallback;
+        this.#onClose = onClose;
     }
 
-    set closeCallback(callback: () => Promise<void>) {
-        this.#closeCallback = callback;
-    }
-
-    get usesMrp() {
-        return this.session.supportsMRP && !this.channel.isReliable;
+    set onClose(callback: () => MaybePromise<void>) {
+        this.#onClose = callback;
     }
 
     /** Is the underlying transport reliable? */
     get isReliable() {
         return this.channel.isReliable;
+    }
+
+    /**
+     * Does the underlying transport support large messages?
+     * This is only true for TCP channels currently.
+     */
+    get supportsLargeMessages() {
+        return this.type === "tcp";
     }
 
     get type() {
@@ -88,7 +103,7 @@ export class MessageChannel implements Channel<Message> {
     }
 
     async send(message: Message, logContext?: ExchangeLogContext) {
-        logger.debug("Message »", MessageCodec.messageDiagnostics(message, logContext));
+        logger.debug("Message", Mark.OUTBOUND, Message.diagnosticsOf(this.session, message, logContext));
         const packet = this.session.encode(message);
         const bytes = MessageCodec.encodePacket(packet);
         if (bytes.byteLength > this.maxPayloadSize) {
@@ -101,7 +116,11 @@ export class MessageChannel implements Channel<Message> {
     }
 
     get name() {
-        return Diagnostic.via(`${this.session.name}@${this.channel.name}`);
+        return Diagnostic.via(`${this.session.via}@${this.channel.name}`);
+    }
+
+    get networkAddress() {
+        return (this.channel as IpNetworkChannel<Bytes> | undefined)?.networkAddress;
     }
 
     async close() {
@@ -109,7 +128,7 @@ export class MessageChannel implements Channel<Message> {
         this.closed = true;
         await this.channel.close();
         if (!wasAlreadyClosed) {
-            await this.#closeCallback?.();
+            await this.#onClose?.();
         }
     }
 
@@ -125,7 +144,7 @@ export class MessageChannel implements Channel<Message> {
 
             case "udp":
                 // UDP normally uses MRP, if not we have Group communication, which normally have no responses
-                if (!this.usesMrp) {
+                if (!this.session.usesMrp) {
                     throw new MatterFlowError("No response expected for this message exchange because UDP and no MRP.");
                 }
                 // Calculate the maximum time till the peer got our last retry and worst case for the way back
@@ -159,7 +178,7 @@ export class MessageChannel implements Channel<Message> {
         const { activeInterval, idleInterval } = sessionParameters ?? this.session.parameters;
         // For the first message of a new exchange ... SHALL be set according to the idle state of the peer node.
         // For all subsequent messages of the exchange, ... SHOULD be set according to the active state of the peer node
-        const peerActive = retransmissionCount > 0 && (sessionParameters !== undefined || this.session.isPeerActive());
+        const peerActive = retransmissionCount > 0 && (sessionParameters !== undefined || this.session.isPeerActive);
         const baseInterval = peerActive ? activeInterval : idleInterval;
         return Millis.floor(
             Millis(

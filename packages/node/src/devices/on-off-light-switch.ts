@@ -21,7 +21,7 @@ import { Identity } from "#general";
  * An On/Off Light Switch is a controller device that, when bound to a lighting device such as an On/Off Light, is
  * capable of being used to switch the device on or off.
  *
- * @see {@link MatterSpecification.v141.Device} § 6.1
+ * @see {@link MatterSpecification.v142.Device} § 6.1
  */
 export interface OnOffLightSwitchDevice extends Identity<typeof OnOffLightSwitchDeviceDefinition> {}
 
@@ -83,4 +83,5 @@ export const OnOffLightSwitchDeviceDefinition = MutableEndpoint({
     behaviors: SupportedBehaviors(OnOffLightSwitchRequirements.server.mandatory.Identify)
 });
 
+Object.freeze(OnOffLightSwitchDeviceDefinition);
 export const OnOffLightSwitchDevice: OnOffLightSwitchDevice = OnOffLightSwitchDeviceDefinition;

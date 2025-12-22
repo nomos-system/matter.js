@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { DiagnosticPresentation } from "#general";
 import { FabricIndex, GroupId, NodeId } from "#types";
 
 /**
@@ -51,8 +52,11 @@ export function PeerAddress<T extends undefined | PeerAddress>(address: T): T {
             [interned]: true,
 
             toString() {
-                const nodeStr = this.nodeId > 0xffff ? `0x${this.nodeId.toString(16)}` : this.nodeId;
-                return `peer@${this.fabricIndex}:${nodeStr}`;
+                return `@${this.fabricIndex.toString(16)}:${this.nodeId.toString(16)}`;
+            },
+
+            get [DiagnosticPresentation.value]() {
+                return this.toString();
             },
         } as PeerAddress),
     );

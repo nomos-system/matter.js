@@ -9,11 +9,11 @@ import { OnOffLightDevice } from "#devices/on-off-light";
 import { Agent } from "#endpoint/Agent.js";
 import { Endpoint } from "#endpoint/Endpoint.js";
 import {
-    AsyncObservable,
     Crypto,
     DataReadQueue,
     Entropy,
     Environment,
+    hex,
     MaybePromise,
     MockCrypto,
     Network,
@@ -24,7 +24,7 @@ import {
 import { AccessLevel } from "#model";
 import { Node } from "#node/Node.js";
 import { ServerNode } from "#node/ServerNode.js";
-import { ExchangeManager, FabricManager, MessageExchange, SessionManager, TestFabric } from "#protocol";
+import { ExchangeManager, FabricManager, ProtocolMocks, SessionManager, TestFabric } from "#protocol";
 import { FabricIndex, NodeId } from "#types";
 import { MockExchange } from "./mock-exchange.js";
 
@@ -68,7 +68,7 @@ export class MockServerNode<T extends ServerNode.RootEndpoint = ServerNode.RootE
         config.environment = environment;
 
         if (config.index) {
-            config.id = `node${networkIndex.toString(16).padStart(2, "0")}`;
+            config.id = `node${hex.byte(networkIndex)}`;
         }
         super(config);
 
@@ -135,9 +135,11 @@ export class MockServerNode<T extends ServerNode.RootEndpoint = ServerNode.RootE
         await node.start();
 
         node.env.get(ExchangeManager).initiateExchange = address => {
-            const exchange = new MockExchange(address, { session: node.env.get(SessionManager).getSession(1) });
+            const exchange = new MockExchange(address, {
+                session: node.env.get(SessionManager).maybeSessionFor(address),
+            });
 
-            node.#newExchanges.push(exchange);
+            node.#newExchanges.write(exchange);
 
             return exchange;
         };
@@ -153,31 +155,17 @@ export class MockServerNode<T extends ServerNode.RootEndpoint = ServerNode.RootE
         return await this.#newExchanges.read();
     }
 
-    async createSession(options?: Partial<Parameters<SessionManager["createSecureSession"]>[0]>) {
-        return await this.env.get(SessionManager).createSecureSession({
-            sessionId: 1,
+    async createExchange(options?: Partial<Parameters<SessionManager["createSecureSession"]>[0]>) {
+        const session = await ProtocolMocks.NodeSession.create({
+            manager: this.env.get(SessionManager),
             fabric: undefined,
-            peerNodeId: NodeId(0),
-            peerSessionId: 1,
-            sharedSecret: new Uint8Array(),
-            salt: new Uint8Array(),
-            isInitiator: false,
-            isResumption: false,
             ...options,
         });
-    }
 
-    async createExchange(options?: Partial<Parameters<SessionManager["createSecureSession"]>[0]>) {
-        return {
-            channel: { name: "test" },
-            clearTimedInteraction: () => {},
-            hasTimedInteraction: () => false,
-            hasActiveTimedInteraction: () => false,
-            hasExpiredTimedInteraction: () => false,
-            session: await this.createSession(options),
+        return new ProtocolMocks.Exchange({
+            context: { session },
             maxPayloadSize: 1000,
-            closing: AsyncObservable<[void]>(),
-        } as unknown as MessageExchange;
+        });
     }
 
     override async cancel() {

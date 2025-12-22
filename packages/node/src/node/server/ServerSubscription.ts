@@ -7,8 +7,13 @@
 import { NodeActivity } from "#behavior/context/NodeActivity.js";
 import { RemoteActorContext } from "#behavior/context/server/RemoteActorContext.js";
 import {
+    AsyncObservable,
+    Diagnostic,
     Duration,
+    hex,
     Hours,
+    InternalError,
+    Lifetime,
     Logger,
     MatterError,
     Millis,
@@ -23,19 +28,18 @@ import {
 } from "#general";
 import { Specification } from "#model";
 import type { ServerNode } from "#node/ServerNode.js";
-import type { DirtyState, Message, MessageExchange, NodeSession } from "#protocol";
+import type { DirtyState, MessageExchange, NodeSession, Session, SubscriptionId } from "#protocol";
 import {
     AttributeReadResponse,
     AttributeSubscriptionResponse,
     EventReadResponse,
     InteractionServerMessenger,
-    NoChannelError,
     NumberedOccurrence,
     PeerAddress,
     Read,
     ReadResult,
+    SessionClosedError,
     Subscription,
-    SubscriptionCriteria,
 } from "#protocol";
 import {
     AttributeId,
@@ -45,6 +49,7 @@ import {
     INTERACTION_PROTOCOL_ID,
     StatusCode,
     StatusResponseError,
+    SubscribeRequest,
 } from "#types";
 
 const logger = Logger.get("ServerSubscription");
@@ -108,22 +113,29 @@ export namespace ServerSubscriptionConfig {
  * Interface between {@link ServerSubscription} and the local Matter environment.
  */
 export interface ServerSubscriptionContext {
+    // TODO - remove this.  Subscriptions are associated with a peer, not a session
     session: NodeSession;
     node: ServerNode;
-    initiateExchange(address: PeerAddress, protocolId: number): MessageExchange;
+    initiateExchange(addressOrSession: PeerAddress | Session, protocolId: number): MessageExchange;
 }
 
 /**
  * Implements the server side of a single subscription.
  */
-export class ServerSubscription extends Subscription {
+export class ServerSubscription implements Subscription {
+    #lifetime?: Lifetime;
     readonly #context: ServerSubscriptionContext;
+
+    #id: SubscriptionId;
+    #isClosed = false;
+    #isCanceledByPeer = false;
+    #request: Omit<SubscribeRequest, "interactionModelRevision" | "keepSubscriptions">;
+    #cancelled = AsyncObservable<[subscription: Subscription]>();
+    #maxInterval?: Duration;
 
     #lastUpdateTime = Timestamp.zero;
     #updateTimer: Timer;
-    readonly #sendDelayTimer: Timer = Time.getTimer(`Subscription ${this.id} delay`, Millis(50), () =>
-        this.#triggerSendUpdate(),
-    );
+    readonly #sendDelayTimer: Timer;
     #outstandingAttributeUpdates?: DirtyState.ForNode;
     #outstandingEventsMinNumber?: EventNumber;
     readonly #changeHandlers = new ObserverGroup();
@@ -132,8 +144,6 @@ export class ServerSubscription extends Subscription {
     #seededClusterDetails? = new Map<string, number>();
     #latestSeededEventNumber? = EventNumber(0);
     readonly #sendInterval: Duration;
-    readonly #minIntervalFloor: Duration;
-    readonly #maxIntervalCeiling: Duration;
     readonly #peerAddress: PeerAddress;
 
     #sendNextUpdateImmediately = false;
@@ -143,30 +153,19 @@ export class ServerSubscription extends Subscription {
     constructor(options: {
         id: number;
         context: ServerSubscriptionContext;
-        criteria: SubscriptionCriteria;
-        minIntervalFloor: Duration;
-        maxIntervalCeiling: Duration;
+        request: Omit<SubscribeRequest, "interactionModelRevision" | "keepSubscriptions">;
         subscriptionOptions: ServerSubscriptionConfig;
         useAsMaxInterval?: Duration;
         useAsSendInterval?: Duration;
     }) {
-        const {
-            id,
-            context,
-            criteria,
-            minIntervalFloor,
-            maxIntervalCeiling,
-            subscriptionOptions,
-            useAsMaxInterval,
-            useAsSendInterval,
-        } = options;
+        const { id, context, request, subscriptionOptions, useAsMaxInterval, useAsSendInterval } = options;
 
-        super(context.session, id, criteria);
+        this.#id = id;
+        this.#request = request;
+
         this.#context = context;
 
         this.#peerAddress = this.session.peerAddress;
-        this.#minIntervalFloor = minIntervalFloor;
-        this.#maxIntervalCeiling = maxIntervalCeiling;
 
         let maxInterval: Duration;
         let sendInterval: Duration;
@@ -183,9 +182,68 @@ export class ServerSubscription extends Subscription {
         this.maxInterval = maxInterval;
         this.#sendInterval = sendInterval;
 
-        this.#updateTimer = Time.getTimer(`Subscription ${this.id} update`, this.#sendInterval, () =>
+        // These start later as needed
+        this.#sendDelayTimer = Time.getTimer(`Subscription ${this.idStr} delay`, Millis(50), () =>
+            this.#triggerSendUpdate(),
+        );
+        this.#updateTimer = Time.getTimer(`Subscription ${this.idStr} update`, this.#sendInterval, () =>
             this.#prepareDataUpdate(),
-        ); // will be started later
+        );
+    }
+
+    get subscriptionId() {
+        return this.#id;
+    }
+
+    get idStr() {
+        return hex.fixed(this.#id, 8);
+    }
+
+    get session() {
+        return this.#context.session;
+    }
+
+    get isCanceledByPeer() {
+        return this.#isCanceledByPeer;
+    }
+
+    get request() {
+        return this.#request;
+    }
+
+    get cancelled() {
+        return this.#cancelled;
+    }
+
+    get maxInterval() {
+        if (this.#maxInterval === undefined) {
+            throw new InternalError("Subscription maxInterval accessed before it was set");
+        }
+        return this.#maxInterval;
+    }
+
+    get sendInterval() {
+        return this.#sendInterval;
+    }
+
+    get minIntervalFloor() {
+        return Seconds(this.request.minIntervalFloorSeconds);
+    }
+
+    get maxIntervalCeiling() {
+        return Seconds(this.request.maxIntervalCeilingSeconds);
+    }
+
+    set maxInterval(value: Duration) {
+        if (this.#maxInterval !== undefined) {
+            throw new InternalError("Subscription maxInterval set twice");
+        }
+        this.#maxInterval = value;
+    }
+
+    async handlePeerCancel() {
+        this.#isCanceledByPeer = true;
+        await this.close();
     }
 
     #determineSendingIntervals(
@@ -204,8 +262,8 @@ export class ServerSubscription extends Subscription {
                     Duration.max(
                         subscriptionMinInterval,
                         Duration.max(
-                            this.#minIntervalFloor,
-                            Duration.min(subscriptionMaxInterval, this.#maxIntervalCeiling),
+                            this.minIntervalFloor,
+                            Duration.min(subscriptionMaxInterval, this.maxIntervalCeiling),
                         ),
                     ) +
                         subscriptionRandomizationWindow * Math.random(),
@@ -218,7 +276,7 @@ export class ServerSubscription extends Subscription {
             // But if we have no chance of at least one full resubmission process we do like chip-tool.
             // One full resubmission process takes 33-45 seconds. So 60s means we reach at least first 2 retries of a
             // second subscription report after first failed.
-            sendInterval = Duration.max(this.#minIntervalFloor, Millis.floor(Millis(maxInterval * 0.8)));
+            sendInterval = Duration.max(this.minIntervalFloor, Millis.floor(Millis(maxInterval * 0.8)));
         }
         if (sendInterval < subscriptionMinInterval) {
             // But not faster than once every 2s
@@ -249,7 +307,7 @@ export class ServerSubscription extends Subscription {
         changedAttrs: AttributeId[],
         version: number,
     ) {
-        if (this.isClosed || !changedAttrs.length) {
+        if (this.#isClosed || !changedAttrs.length) {
             return;
         }
 
@@ -268,7 +326,7 @@ export class ServerSubscription extends Subscription {
     }
 
     #handleAddedEvents(occurrence: NumberedOccurrence) {
-        if (this.isClosed) {
+        if (this.#isClosed) {
             return;
         }
 
@@ -284,7 +342,7 @@ export class ServerSubscription extends Subscription {
     }
 
     #sendEventUrgently({ endpointId, clusterId, eventId }: ReadResult.ConcreteEventPath): boolean {
-        return (this.criteria.eventRequests ?? []).some(
+        return (this.request.eventRequests ?? []).some(
             ({ endpointId: reqEndpointId, clusterId: reqClusterId, eventId: reqEventId, isUrgent }) =>
                 isUrgent &&
                 (reqEndpointId === undefined || reqEndpointId === endpointId) &&
@@ -293,24 +351,14 @@ export class ServerSubscription extends Subscription {
         );
     }
 
-    get sendInterval() {
-        return this.#sendInterval;
-    }
-
-    get minIntervalFloor() {
-        return this.#minIntervalFloor;
-    }
-
-    get maxIntervalCeiling() {
-        return this.#maxIntervalCeiling;
-    }
-
-    override activate() {
-        super.activate();
+    activate() {
+        this.session.subscriptions.add(this);
+        logger.debug(this.session.via, "New subscription", Diagnostic.strong(this.idStr));
+        this.#lifetime = this.#context.session.join("subscription", Diagnostic.strong(this.#id));
 
         // We do not need these data anymore, so we can free some memory
-        if (this.criteria.eventFilters !== undefined) this.criteria.eventFilters.length = 0;
-        if (this.criteria.dataVersionFilters !== undefined) this.criteria.dataVersionFilters.length = 0;
+        if (this.request.eventFilters !== undefined) this.request.eventFilters.length = 0;
+        if (this.request.dataVersionFilters !== undefined) this.request.dataVersionFilters.length = 0;
 
         this.#sendUpdatesActivated = true;
 
@@ -338,7 +386,7 @@ export class ServerSubscription extends Subscription {
      * sending by 50ms in any case to make sure to catch all updates.
      */
     #prepareDataUpdate() {
-        if (this.#sendDelayTimer.isRunning || this.isClosed) {
+        if (this.#sendDelayTimer.isRunning || this.#isClosed) {
             // sending data is already scheduled, data updates go in there ... or we close down already
             return;
         }
@@ -350,106 +398,115 @@ export class ServerSubscription extends Subscription {
         this.#updateTimer.stop();
         const now = Time.nowMs;
         const timeSinceLastUpdate = Millis(now - this.#lastUpdateTime);
-        if (timeSinceLastUpdate < this.#minIntervalFloor) {
+        if (timeSinceLastUpdate < this.minIntervalFloor) {
             // Respect minimum delay time between updates
             this.#updateTimer = Time.getTimer(
                 "Subscription update",
-                Millis(this.#minIntervalFloor - timeSinceLastUpdate),
+                Millis(this.minIntervalFloor - timeSinceLastUpdate),
                 () => this.#prepareDataUpdate(),
             ).start();
             return;
         }
 
         this.#sendDelayTimer.start();
-        this.#updateTimer = Time.getTimer(`Subscription update ${this.id}`, this.#sendInterval, () =>
+        this.#updateTimer = Time.getTimer(`Subscription update ${this.idStr}`, this.#sendInterval, () =>
             this.#prepareDataUpdate(),
         ).start();
     }
 
-    #triggerSendUpdate(onlyWithData: boolean = false) {
+    #triggerSendUpdate(onlyWithData: boolean = false, session?: Session) {
         if (this.#currentUpdatePromise !== undefined) {
             logger.debug("Sending update already in progress, delaying update ...");
             this.#sendNextUpdateImmediately = true;
             return;
         }
-        this.#currentUpdatePromise = this.#sendUpdate(onlyWithData)
+        this.#currentUpdatePromise = this.#sendUpdate(onlyWithData, session)
             .catch(error => logger.warn("Sending subscription update failed:", error))
             .finally(() => (this.#currentUpdatePromise = undefined));
     }
 
     /**
      * Determine all attributes that have changed since the last update and send them out to the subscriber.
-     * Important: This method MUST NOT be called directly. Use triggerSendUpdate() instead!
      */
-    async #sendUpdate(onlyWithData = false) {
-        // Get all outstanding updates, make sure the order is correct per endpoint and cluster
-        const attributeFilter = this.#outstandingAttributeUpdates;
-        this.#outstandingAttributeUpdates = undefined;
+    async #sendUpdate(onlyWithData = false, session?: Session) {
+        using updating = this.#lifetime?.join("updating");
 
-        const eventsMinNumber = this.#outstandingEventsMinNumber;
-        this.#outstandingEventsMinNumber = undefined;
+        while (true) {
+            // Get all outstanding updates, make sure the order is correct per endpoint and cluster
+            const attributeFilter = this.#outstandingAttributeUpdates;
+            this.#outstandingAttributeUpdates = undefined;
 
-        if (onlyWithData && attributeFilter === undefined && eventsMinNumber === undefined) {
-            return;
-        }
+            const eventsMinNumber = this.#outstandingEventsMinNumber;
+            this.#outstandingEventsMinNumber = undefined;
 
-        this.#lastUpdateTime = Time.nowMs;
-
-        try {
-            if (await this.#sendUpdateMessage(attributeFilter, eventsMinNumber, onlyWithData)) {
-                this.#sendUpdateErrorCounter = 0;
-            }
-        } catch (error) {
-            if (this.isClosed) {
-                // No need to care about resubmissions when the server is closing
-                return;
+            if (onlyWithData && attributeFilter === undefined && eventsMinNumber === undefined) {
+                break;
             }
 
-            this.#sendUpdateErrorCounter++;
-            logger.info(
-                `Error sending subscription update message (error count=${this.#sendUpdateErrorCounter}):`,
-                (error instanceof MatterError && error.message) || error,
-            );
-            if (this.#sendUpdateErrorCounter <= 2) {
-                // fill the data back in the queue to resend with next try
-                if (attributeFilter !== undefined) {
-                    for (const [endpointId, clusters] of Object.entries(attributeFilter)) {
-                        for (const [clusterId, attributes] of Object.entries(clusters)) {
-                            this.#addOutstandingAttributes(
-                                EndpointNumber(parseInt(endpointId)),
-                                ClusterId(parseInt(clusterId)),
-                                Array.from(attributes),
-                            );
+            this.#lastUpdateTime = Time.nowMs; // TODO Count time from here or from "receive of the ack"?
+
+            try {
+                using sending = updating?.join("sending");
+                if (await this.#sendUpdateMessage(sending, attributeFilter, eventsMinNumber, onlyWithData, session)) {
+                    this.#sendUpdateErrorCounter = 0;
+                }
+            } catch (error) {
+                if (this.#isClosed) {
+                    // No need to care about resubmissions when the server is closing
+                    // TODO - implement proper abort so we don't need to ignore errors
+                    return;
+                }
+
+                this.#sendUpdateErrorCounter++;
+                logger.info(
+                    `Error sending subscription update message (error count=${this.#sendUpdateErrorCounter}):`,
+                    (error instanceof MatterError && error.message) || error,
+                );
+                if (this.#sendUpdateErrorCounter <= 2) {
+                    // fill the data back in the queue to resend with next try
+                    if (attributeFilter !== undefined) {
+                        for (const [endpointId, clusters] of Object.entries(attributeFilter)) {
+                            for (const [clusterId, attributes] of Object.entries(clusters)) {
+                                this.#addOutstandingAttributes(
+                                    EndpointNumber(parseInt(endpointId)),
+                                    ClusterId(parseInt(clusterId)),
+                                    Array.from(attributes),
+                                );
+                            }
                         }
                     }
-                }
-                if (eventsMinNumber !== undefined) {
-                    this.#outstandingEventsMinNumber = eventsMinNumber; // newer number are always higher, so we can just set it
-                }
-            } else {
-                logger.info(
-                    `Sending update failed 3 times in a row, canceling subscription ${this.id} and let controller subscribe again.`,
-                );
-                this.#sendNextUpdateImmediately = false;
-                if (
-                    error instanceof NoResponseTimeoutError ||
-                    error instanceof NetworkError ||
-                    error instanceof NoChannelError
-                ) {
-                    // Let's consider this subscription as dead and wait for a reconnect
-                    this.isCanceledByPeer = true; // We handle this case like  if the controller canceled the subscription
-                    await this.destroy();
-                    return;
+                    if (eventsMinNumber !== undefined) {
+                        this.#outstandingEventsMinNumber = eventsMinNumber; // newer number are always higher, so we can just set it
+                    }
                 } else {
-                    throw error;
+                    logger.info(
+                        `Sending update failed 3 times in a row, canceling subscription ${this.idStr} and let controller subscribe again.`,
+                    );
+                    this.#sendNextUpdateImmediately = false;
+                    if (
+                        error instanceof NoResponseTimeoutError ||
+                        error instanceof NetworkError ||
+                        error instanceof SessionClosedError
+                    ) {
+                        // Let's consider this subscription as dead and wait for a reconnect.  We handle as if the
+                        // controller cancelled
+                        using _messaging = updating?.join("canceling");
+                        this.#isCanceledByPeer = true;
+                        await this.#cancel();
+                        break;
+                    } else {
+                        throw error;
+                    }
                 }
             }
-        }
 
-        if (this.#sendNextUpdateImmediately) {
-            logger.debug("Sending delayed update immediately after last one was sent.");
+            if (!this.#sendNextUpdateImmediately) {
+                break;
+            }
+
+            logger.debug("Sending delayed update immediately after last one was sent");
             this.#sendNextUpdateImmediately = false;
-            await this.#sendUpdate(true); // Send but only if non-empty
+            onlyWithData = true; // In subsequent iterations only send if non-empty
         }
     }
 
@@ -458,7 +515,7 @@ export class ServerSubscription extends Subscription {
      */
     async *#processAttributesAndEventsReport(context: RemoteActorContext.Options, suppressStatusReports = false) {
         const request = {
-            ...this.criteria,
+            ...this.request,
             interactionModelRevision: Specification.INTERACTION_MODEL_REVISION, // irrelevant here, set to our version
         };
 
@@ -559,65 +616,75 @@ export class ServerSubscription extends Subscription {
         this.#updateTimer.stop();
 
         // Register change handlers, so that we get changes directly
-        if (this.criteria.attributeRequests?.length) {
+        if (this.request.attributeRequests?.length) {
             this.#changeHandlers.on(
                 this.#context.node.protocol.attrsChanged,
                 this.#handleClusterStateChanges.bind(this),
             );
         }
-        if (this.criteria.eventRequests?.length) {
+        if (this.request.eventRequests?.length) {
             this.#changeHandlers.on(this.#context.node.protocol.eventHandler.added, this.#handleAddedEvents.bind(this));
         }
 
         await messenger.sendDataReport({
             baseDataReport: {
                 suppressResponse: false, // we always need proper response for initial report
-                subscriptionId: this.id,
+                subscriptionId: this.subscriptionId,
                 interactionModelRevision: Specification.INTERACTION_MODEL_REVISION,
             },
-            forFabricFilteredRead: this.criteria.isFabricFiltered,
+            forFabricFilteredRead: this.request.isFabricFiltered,
             payload: this.#processAttributesAndEventsReport(readContext, suppressStatusReports),
         });
     }
 
-    async #flush() {
+    async #flush(flushViaSession?: Session) {
         this.#sendDelayTimer.stop();
         if (this.#outstandingAttributeUpdates !== undefined || this.#outstandingEventsMinNumber !== undefined) {
-            logger.debug(`Flushing subscription ${this.id}${this.isClosed ? " (for closing)" : ""}`);
-            this.#triggerSendUpdate(true);
+            logger.debug(`Flushing subscription ${this.idStr}${this.#isClosed ? " (for closing)" : ""}`);
+            this.#triggerSendUpdate(true, flushViaSession);
             if (this.#currentUpdatePromise) {
+                using _waiting = this.#lifetime?.join("waiting on flush");
                 await this.#currentUpdatePromise;
             }
         }
     }
 
-    protected override async destroy() {
+    /**
+     * Closes the subscription and flushes all outstanding data updates if requested.
+     */
+    async close(flushViaSession?: Session) {
+        if (this.#isClosed) {
+            return;
+        }
+        this.#isClosed = true;
+
+        await this.#cancel(flushViaSession);
+
+        if (this.#currentUpdatePromise) {
+            using _waiting = this.#lifetime?.closing()?.join("waiting on update");
+            await this.#currentUpdatePromise;
+        }
+    }
+
+    async #cancel(flushViaSession?: Session) {
+        const closing = this.#lifetime?.closing();
+
         this.#sendUpdatesActivated = false;
 
         this.#changeHandlers.close();
 
+        if (flushViaSession !== undefined) {
+            using _flushing = closing?.join("flushing");
+            await this.#flush(flushViaSession);
+        }
+
         this.#updateTimer.stop();
         this.#sendDelayTimer.stop();
-        await super.destroy();
-    }
 
-    /**
-     * Closes the subscription and flushes all outstanding data updates if requested.
-     */
-    override async close(graceful = false, cancelledByPeer = false) {
-        if (this.isClosed) {
-            return;
-        }
-        if (cancelledByPeer) {
-            this.isCanceledByPeer = true;
-        }
-        await this.destroy();
-        if (graceful) {
-            await this.#flush();
-        }
-        if (this.#currentUpdatePromise) {
-            await this.#currentUpdatePromise;
-        }
+        this.session.subscriptions.delete(this);
+        logger.debug(this.session.via, "Deleted subscription", hex.fixed(this.subscriptionId, 8));
+
+        this.cancelled.emit(this);
     }
 
     /**
@@ -631,14 +698,13 @@ export class ServerSubscription extends Subscription {
         eventsMinNumber: EventNumber | undefined,
     ) {
         const request = {
-            ...this.criteria,
+            ...this.request,
             interactionModelRevision: Specification.INTERACTION_MODEL_REVISION, // irrelevant here, set to our version
         };
 
         const session = RemoteActorContext({
             activity: (exchange as NodeActivity.WithActivity)[NodeActivity.activityKey],
             fabricFiltered: request.isFabricFiltered,
-            message: {} as Message,
             exchange,
             node: this.#context.node,
         }).beginReadOnly();
@@ -678,53 +744,59 @@ export class ServerSubscription extends Subscription {
     }
 
     async #sendUpdateMessage(
+        lifetime: Lifetime | undefined,
         attributeFilter: DirtyState.ForCluster | undefined,
         eventsMinNumber: EventNumber | undefined,
         onlyWithData: boolean,
+        session?: Session,
     ) {
-        const exchange = this.#context.initiateExchange(this.#peerAddress, INTERACTION_PROTOCOL_ID);
+        const exchange = this.#context.initiateExchange(session ?? this.#peerAddress, INTERACTION_PROTOCOL_ID);
         if (exchange === undefined) return false;
 
         const messenger = new InteractionServerMessenger(exchange);
 
         try {
             if (attributeFilter === undefined && eventsMinNumber === undefined) {
+                using _sending = lifetime?.join("sending keepalive");
                 await messenger.sendDataReport({
                     baseDataReport: {
                         suppressResponse: true, // suppressResponse true for empty DataReports
-                        subscriptionId: this.id,
+                        subscriptionId: this.subscriptionId,
                         interactionModelRevision: Specification.INTERACTION_MODEL_REVISION,
                     },
-                    forFabricFilteredRead: this.criteria.isFabricFiltered,
-                    waitForAck: !this.isClosed, // Do not wait for ack when closed
+                    forFabricFilteredRead: this.request.isFabricFiltered,
+                    waitForAck: !this.#isClosed, // Do not wait for ack when closed
                 });
             } else {
+                using _sending = lifetime?.join("sending data");
                 // TODO: Add correct handling for reports that would have data but in the end not send any because of
                 //  filtered out. Correct handling needs refactoring to create messenger and exchange on the fly
                 //  when data are there.
                 await messenger.sendDataReport({
                     baseDataReport: {
                         suppressResponse: false, // Non-empty data reports always need to send response
-                        subscriptionId: this.id,
+                        subscriptionId: this.subscriptionId,
                         interactionModelRevision: Specification.INTERACTION_MODEL_REVISION,
                     },
-                    forFabricFilteredRead: this.criteria.isFabricFiltered,
+                    forFabricFilteredRead: this.request.isFabricFiltered,
                     payload: this.#iterateDataUpdate(exchange, attributeFilter, eventsMinNumber),
-                    waitForAck: !this.isClosed, // Do not wait for ack when closed
+                    waitForAck: !this.#isClosed, // Do not wait for ack when closed
                     suppressEmptyReport: onlyWithData,
                 });
             }
         } catch (error) {
             if (StatusResponseError.is(error, StatusCode.InvalidSubscription, StatusCode.Failure)) {
-                logger.info(`Subscription ${this.id} cancelled by peer.`);
-                this.isCanceledByPeer = true;
-                await this.close(false);
+                logger.info(`Subscription ${this.idStr} cancelled by peer`);
+                this.#isCanceledByPeer = true;
             } else {
                 StatusResponseError.accept(error);
-                logger.info(`Subscription ${this.id} update failed:`, error);
-                await this.close(false);
+                logger.info(`Subscription ${this.idStr} update failed:`, error);
             }
+
+            using _canceling = lifetime?.join("canceling");
+            await this.#cancel();
         } finally {
+            using _closing = lifetime?.join("closing messenger");
             await messenger.close();
         }
         return true;
