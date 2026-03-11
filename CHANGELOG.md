@@ -34,6 +34,7 @@ The main work (all changes without a GitHub username in brackets in the below li
     - Fix: Ensure the incoming order of attribute changes is preserved when processing them even though no one should rely on any order
     - Fix: Better handle errors when the BLE connection is disconnected during a write action
     - Fix: Do not announce devices as commissionable before the factory reset when the last fabric is removed
+    - Fix: Fix expiry logic for Commissionable devices that potentially never expired cached records
     - Fix: For BDX cases also give the device the defined timeout of 5 minutes to ack/request the next packet
 
 - @matter/react-native
