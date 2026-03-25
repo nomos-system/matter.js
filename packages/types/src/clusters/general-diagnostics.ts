@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -12,14 +12,14 @@ import { TlvField, TlvObject } from "../tlv/TlvObject.js";
 import { TlvByteString, TlvString } from "../tlv/TlvString.js";
 import { TlvUInt8, TlvUInt16, TlvEnum, TlvUInt64, TlvUInt32, TlvSysTimeMS, TlvPosixMs } from "../tlv/TlvNumber.js";
 import { TypeFromSchema } from "../tlv/TlvSchema.js";
-import { AccessLevel } from "#model";
+import { AccessLevel } from "@matter/model";
 import { BitFlag } from "../schema/BitmapSchema.js";
 import { TlvArray } from "../tlv/TlvArray.js";
 import { TlvBoolean } from "../tlv/TlvBoolean.js";
 import { TlvNullable } from "../tlv/TlvNullable.js";
 import { TlvNoArguments } from "../tlv/TlvNoArguments.js";
 import { Priority } from "../globals/Priority.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace GeneralDiagnostics {
@@ -70,19 +70,20 @@ export namespace GeneralDiagnostics {
          *
          * This command shall respond with a response status of CONSTRAINT_ERROR if either:
          *
-         *   • The EnableKey field does not match the a-priori value configured on the device.
+         *   - The EnableKey field does not match the a-priori value configured on the device.
          *
-         *   • The TestEventTriggersEnabled field is currently false. Otherwise, the server shall respond with a
-         *     PayloadTestResponse command with a Payload field value containing Count instances of the Value byte. If
-         *     the response is too large to send, the server shall fail the command and respond with a response status
-         *     of RESOURCE_EXHAUSTED.
+         *   - The TestEventTriggersEnabled field is currently false.
+         *
+         * Otherwise, the server shall respond with a PayloadTestResponse command with a Payload field value containing
+         * Count instances of the Value byte. If the response is too large to send, the server shall fail the command
+         * and respond with a response status of RESOURCE_EXHAUSTED.
          *
          * For example:
          *
-         *   • If Value is 0x55 and the Count is zero, then the PayloadTestResponse would have the Payload field set to
+         *   - If Value is 0x55 and the Count is zero, then the PayloadTestResponse would have the Payload field set to
          *     an empty octet string.
          *
-         *   • If Value is 0xA5 and the Count is 10, the PayloadTestResponse would have the Payload field set to a
+         *   - If Value is 0xA5 and the Count is 10, the PayloadTestResponse would have the Payload field set to a
          *     content whose hexadecimal representation would be A5A5A5A5A5A5A5A5A5A5, and base64 representation would
          *     be paWlpaWlpaWlpQ==.
          *
@@ -204,7 +205,7 @@ export namespace GeneralDiagnostics {
          *
          * @see {@link MatterSpecification.v142.Core} § 11.12.5.6.6
          */
-        iPv4Addresses: TlvField(5, TlvArray(TlvByteString, { maxLength: 4 })),
+        iPv4Addresses: TlvField(5, TlvArray(TlvByteString.bound({ length: 4 }), { maxLength: 4 })),
 
         /**
          * This field shall provide a list of the unicast IPv6 addresses that are currently assigned to the network
@@ -213,7 +214,7 @@ export namespace GeneralDiagnostics {
          *
          * @see {@link MatterSpecification.v142.Core} § 11.12.5.6.7
          */
-        iPv6Addresses: TlvField(6, TlvArray(TlvByteString, { maxLength: 8 })),
+        iPv6Addresses: TlvField(6, TlvArray(TlvByteString.bound({ length: 16 }), { maxLength: 8 })),
 
         /**
          * This field shall indicate the type of the interface using the InterfaceTypeEnum.
@@ -351,7 +352,7 @@ export namespace GeneralDiagnostics {
         CellularFault = 2,
 
         /**
-         * The Node has encountered a fault with its802.15.4 radio.
+         * The Node has encountered a fault with its 802.15.4 radio.
          */
         ThreadFault = 3,
 
@@ -483,9 +484,9 @@ export namespace GeneralDiagnostics {
          * that could populate the Timestamp field of events. This value shall only be null when any the following are
          * true:
          *
-         *   • The node doesn’t support the Time Synchronization cluster.
+         *   - The node doesn’t support the Time Synchronization cluster.
          *
-         *   • The node’s Time Synchronization cluster instance’s UTCTime attribute is null.
+         *   - The node’s Time Synchronization cluster instance’s UTCTime attribute is null.
          *
          * @see {@link MatterSpecification.v142.Core} § 11.12.7.3.2
          */

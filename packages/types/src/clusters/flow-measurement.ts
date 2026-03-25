@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -10,7 +10,7 @@ import { MutableCluster } from "../cluster/mutation/MutableCluster.js";
 import { Attribute, OptionalAttribute } from "../cluster/Cluster.js";
 import { TlvUInt16 } from "../tlv/TlvNumber.js";
 import { TlvNullable } from "../tlv/TlvNullable.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace FlowMeasurement {
@@ -24,7 +24,7 @@ export namespace FlowMeasurement {
 
         attributes: {
             /**
-             * Indicates the flow in m/h as follows:
+             * Indicates the flow in m^3/h as follows:
              *
              * MeasuredValue = 10 x Flow
              *

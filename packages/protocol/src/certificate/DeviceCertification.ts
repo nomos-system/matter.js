@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { CertificationDeclaration } from "#certificate/kinds/CertificationDeclaration.js";
-import { Bytes, Construction, Crypto, ImplementationError, InternalError, PrivateKey } from "#general";
 import { NodeSession } from "#session/NodeSession.js";
-import { ProductDescription } from "#types";
+import { Bytes, Construction, Crypto, ImplementationError, InternalError, PrivateKey } from "@matter/general";
+import { ProductDescription } from "@matter/types";
 import { AttestationCertificateManager } from "./AttestationCertificateManager.js";
 
 /**

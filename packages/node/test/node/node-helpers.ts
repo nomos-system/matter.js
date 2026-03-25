@@ -1,41 +1,44 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { BasicInformationBehavior } from "#behaviors/basic-information";
-import { GeneralCommissioning } from "#clusters/general-commissioning";
-import { Crypto, InternalError } from "#general";
-import { CommissioningServer, InteractionServer } from "#index.js";
-import { Specification } from "#model";
+import { CommissioningServer, InteractionServer, NetworkClient, ServerNode } from "#index.js";
+import { Bytes, Crypto, InternalError } from "@matter/general";
+import { Specification } from "@matter/model";
 import {
     Certificate,
     Fabric,
     FabricManager,
     InteractionServerMessenger,
+    InvokeResponseForSend,
     Message,
     MessageType,
     SessionType,
+    SustainedSubscription,
     TestFabric,
     TlvCertSigningRequest,
-} from "#protocol";
+    WriteResponse,
+} from "@matter/protocol";
 import {
     AttributeReport,
     EventReport,
     FabricId,
     FabricIndex,
     NodeId,
+    Status,
     TlvDataReport,
     TlvInvokeRequest,
     TlvInvokeResponseData,
-    TlvInvokeResponseForSend,
     TlvReadRequest,
     TlvSubscribeRequest,
     TlvWriteRequest,
     TypeFromSchema,
     VendorId,
-} from "#types";
+} from "@matter/types";
+import { GeneralCommissioning } from "@matter/types/clusters/general-commissioning";
 import { MockServerNode } from "./mock-server-node.js";
 
 export const FAILSAFE_LENGTH_S = 60;
@@ -57,7 +60,7 @@ export async function testFactoryReset(
     node.lifecycle.offline.on(() => void changes.push("offline"));
 
     if (mode === "offline-after-commission") {
-        await node.cancel();
+        await node.stop();
     }
     if (mode !== "offline") {
         expectedChanges.push("offline");
@@ -74,7 +77,7 @@ export async function testFactoryReset(
     if (mode === "offline-during-reset") {
         // Wait a tick to ensure erase has started
         await MockTime.yield();
-        offlinePromise = node.cancel();
+        offlinePromise = node.stop();
         expect(node.lifecycle.shouldBeOffline).equals(true);
     } else if (mode !== "offline-after-commission" && mode !== "offline") {
         expectedChanges.push("online");
@@ -234,11 +237,36 @@ export function CommissioningHelper() {
 
 export namespace interaction {
     const BarelyMockedMessenger = {
-        sendStatus: _code => {},
-        sendDataReport: async _options => {},
-        send: async (_type, _message) => {},
+        sendStatus: (_code: Status) => {},
+        sendDataReport: async (_options: unknown) => {},
+        send: async (_type: number, _message: Bytes) => {},
         close: async () => {},
-    } as InteractionServerMessenger;
+        sendWriteResponse: async (_response: WriteResponse) => {},
+        readNextWriteRequest: async () => {
+            throw new Error("No more chunks expected");
+        },
+        sendInvokeResponseChunk: async (_response: InvokeResponseForSend) => true,
+        sendInvokeResponse: async (_response: InvokeResponseForSend) => {},
+    } as unknown as InteractionServerMessenger;
+
+    /**
+     * Creates a mock messenger that captures the invoke response.
+     */
+    export function createInvokeMessenger(): {
+        messenger: InteractionServerMessenger;
+        getResponse: () => InvokeResponseForSend | undefined;
+    } {
+        let capturedResponse: InvokeResponseForSend | undefined;
+        return {
+            messenger: {
+                ...BarelyMockedMessenger,
+                sendInvokeResponse: async (response: InvokeResponseForSend) => {
+                    capturedResponse = response;
+                },
+            } as unknown as InteractionServerMessenger,
+            getResponse: () => capturedResponse,
+        };
+    }
 
     export const BarelyMockedMessage = {
         packetHeader: { sessionType: SessionType.Unicast, messageId: 123 },
@@ -263,16 +291,13 @@ export namespace interaction {
     ) {
         const { exchange, interactionServer } = await connect(node, fabric);
 
-        await interactionServer.handleWriteRequest(
-            exchange,
-            {
-                suppressResponse: true,
-                interactionModelRevision: Specification.INTERACTION_MODEL_REVISION,
-                timedRequest: false,
-                writeRequests: [request],
-            },
-            BarelyMockedMessage,
-        );
+        const writeRequest = {
+            suppressResponse: true,
+            interactionModelRevision: Specification.INTERACTION_MODEL_REVISION,
+            timedRequest: false,
+            writeRequests: [request],
+        };
+        await interactionServer.handleWriteRequest(exchange, writeRequest, BarelyMockedMessenger, BarelyMockedMessage);
     }
 
     export async function read(
@@ -307,6 +332,7 @@ export namespace interaction {
     ) {
         const { exchange, interactionServer } = await connect(node, fabric);
 
+        const { messenger, getResponse } = createInvokeMessenger();
         await interactionServer.handleInvokeRequest(
             exchange,
             {
@@ -315,15 +341,16 @@ export namespace interaction {
                 suppressResponse: false,
                 timedRequest: false,
             },
-            {
-                ...BarelyMockedMessenger,
-                send: async (_type, message) => {
-                    const response = TlvInvokeResponseForSend.decode(message).invokeResponses[0];
-                    responder(TlvInvokeResponseData.decodeTlv(response));
-                },
-            } as InteractionServerMessenger,
+            messenger,
             BarelyMockedMessage,
         );
+
+        // Process the response
+        const result = getResponse();
+        if (result?.invokeResponses?.length) {
+            const response = result.invokeResponses[0];
+            responder(TlvInvokeResponseData.decodeTlv(response));
+        }
     }
 
     export async function subscribe(
@@ -367,4 +394,16 @@ export namespace interaction {
 
         return { attributes, events };
     }
+}
+
+export async function subscribedPeer(controller: ServerNode, id: string) {
+    const peer = controller.peers.get(id);
+    expect(peer).not.undefined;
+
+    const subscription = peer!.behaviors.internalsOf(NetworkClient).activeSubscription as SustainedSubscription;
+    expect(subscription).not.undefined;
+
+    await MockTime.resolve(subscription.active);
+
+    return peer!;
 }

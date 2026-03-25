@@ -1,15 +1,15 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { AccessControl } from "#clusters/access-control";
+import { AccessControl } from "@matter/types/clusters/access-control";
 import { ClusterBehavior } from "../../behavior/cluster/ClusterBehavior.js";
 import { AccessControlInterface } from "./AccessControlInterface.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 
 /**
  * AccessControlBehavior is the base class for objects that support interaction with {@link AccessControl.Cluster}.

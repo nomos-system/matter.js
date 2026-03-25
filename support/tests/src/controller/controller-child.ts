@@ -1,12 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Environment } from "@matter/main";
 import { CommissioningController } from "@project-chip/matter.js";
 import { boot, nodeIdFor } from "../common/process-child.js";
+import "../common/test-environment.js";
 
 boot({
     async commission(message) {

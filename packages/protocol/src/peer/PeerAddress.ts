@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { DiagnosticPresentation } from "#general";
-import { FabricIndex, GroupId, NodeId } from "#types";
+import { DiagnosticPresentation } from "@matter/general";
+import { FabricIndex, GroupId, NodeId } from "@matter/types";
 
 /**
  * This is the "logical" address of a peer node consisting of a fabric and node ID.
@@ -44,24 +44,40 @@ export function PeerAddress<T extends undefined | PeerAddress>(address: T): T {
         return internedAddress as T;
     }
 
-    internedFabric.set(
-        address.nodeId,
-        (internedAddress = {
-            ...address,
+    internedAddress = InternedAddress(address);
 
-            [interned]: true,
-
-            toString() {
-                return `@${this.fabricIndex.toString(16)}:${this.nodeId.toString(16)}`;
-            },
-
-            get [DiagnosticPresentation.value]() {
-                return this.toString();
-            },
-        } as PeerAddress),
-    );
+    internedFabric.set(address.nodeId, internedAddress);
 
     return internedAddress as T;
+}
+
+const InternedAddressPrototoype = {};
+
+Object.defineProperties(InternedAddressPrototoype, {
+    [interned]: { value: true },
+
+    toString: {
+        value() {
+            return `@${this.fabricIndex.toString(16)}:${this.nodeId.toString(16)}`;
+        },
+    },
+
+    [DiagnosticPresentation.value]: {
+        get() {
+            return this.toString();
+        },
+    },
+});
+
+function InternedAddress(address: PeerAddress): PeerAddress {
+    const interned = Object.create(InternedAddressPrototoype, {
+        fabricIndex: { value: address.fabricIndex, enumerable: true },
+        nodeId: { value: address.nodeId, enumerable: true },
+    });
+
+    Object.freeze(interned);
+
+    return interned;
 }
 
 export namespace PeerAddress {

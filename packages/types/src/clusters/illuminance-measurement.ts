@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -10,7 +10,7 @@ import { MutableCluster } from "../cluster/mutation/MutableCluster.js";
 import { Attribute, OptionalAttribute } from "../cluster/Cluster.js";
 import { TlvUInt16, TlvUInt8 } from "../tlv/TlvNumber.js";
 import { TlvNullable } from "../tlv/TlvNullable.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace IlluminanceMeasurement {
@@ -41,16 +41,17 @@ export namespace IlluminanceMeasurement {
             /**
              * Indicates the illuminance in Lux (symbol lx) as follows:
              *
-             *   • MeasuredValue = 10,000 x log10(illuminance) + 1,
+             *   - MeasuredValue = 10,000 x log10(illuminance) + 1,
              *
-             * where 1 lx <= illuminance <= 3.576 Mlx, corresponding to a MeasuredValue in the range 1 to 0xFFFE. The
-             * MeasuredValue attribute can take the following values:
+             * where 1 lx <= illuminance <= 3.576 Mlx, corresponding to a MeasuredValue in the range 1 to 0xFFFE.
              *
-             *   • 0 indicates a value of illuminance that is too low to be measured,
+             * The MeasuredValue attribute can take the following values:
              *
-             *   • MinMeasuredValue <= MeasuredValue <= MaxMeasuredValue under normal circumstances,
+             *   - 0 indicates a value of illuminance that is too low to be measured,
              *
-             *   • null indicates that the illuminance measurement is invalid.
+             *   - MinMeasuredValue <= MeasuredValue <= MaxMeasuredValue under normal circumstances,
+             *
+             *   - null indicates that the illuminance measurement is invalid.
              *
              * The MeasuredValue attribute is updated continuously as new measurements are made.
              *

@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -10,7 +10,7 @@ import { MutableCluster } from "../cluster/mutation/MutableCluster.js";
 import { Attribute, OptionalAttribute } from "../cluster/Cluster.js";
 import { TlvInt16, TlvUInt16 } from "../tlv/TlvNumber.js";
 import { TlvNullable } from "../tlv/TlvNullable.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace TemperatureMeasurement {
@@ -24,7 +24,9 @@ export namespace TemperatureMeasurement {
 
         attributes: {
             /**
-             * Indicates the measured temperature. The null value indicates that the temperature is unknown.
+             * Indicates the measured temperature.
+             *
+             * The null value indicates that the temperature is unknown.
              *
              * @see {@link MatterSpecification.v142.Cluster} § 2.3.4.1
              */

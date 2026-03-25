@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -11,7 +11,7 @@ import { Command, TlvNoResponse, Attribute } from "../cluster/Cluster.js";
 import { TlvField, TlvObject } from "../tlv/TlvObject.js";
 import { TlvUInt16, TlvEnum, TlvUInt32 } from "../tlv/TlvNumber.js";
 import { TypeFromSchema } from "../tlv/TlvSchema.js";
-import { AccessLevel } from "#model";
+import { AccessLevel } from "@matter/model";
 import { BitFlag } from "../schema/BitmapSchema.js";
 import { TlvFabricIndex } from "../datatype/FabricIndex.js";
 import { TlvNullable } from "../tlv/TlvNullable.js";
@@ -20,7 +20,7 @@ import { TlvByteString } from "../tlv/TlvString.js";
 import { TlvNoArguments } from "../tlv/TlvNoArguments.js";
 import { StatusResponseError } from "../common/StatusResponseError.js";
 import { Status } from "../globals/Status.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace AdministratorCommissioning {
@@ -53,9 +53,9 @@ export namespace AdministratorCommissioning {
          * CommissioningTimeout. When the command is received by a ICD, it shall enter into active mode. The ICD shall
          * remain in Active Mode as long as one of these conditions is met:
          *
-         *   • A commissioning window is open.
+         *   - A commissioning window is open.
          *
-         *   • There is an armed fail-safe timer.
+         *   - There is an armed fail-safe timer.
          *
          * @see {@link MatterSpecification.v142.Core} § 11.19.8.2.1
          */
@@ -152,9 +152,9 @@ export namespace AdministratorCommissioning {
          * When the command is received by a ICD, it shall enter into active mode. The ICD shall remain in Active Mode
          * as long as one of these conditions is met:
          *
-         *   • A commissioning window is open.
+         *   - A commissioning window is open.
          *
-         *   • There is an armed fail-safe timer.
+         *   - There is an armed fail-safe timer.
          *
          * @see {@link MatterSpecification.v142.Core} § 11.19.8.1.5
          */
@@ -423,16 +423,16 @@ export namespace AdministratorCommissioning {
      * If the Administrator Commissioning Cluster server instance is present on an endpoint with the Root Node device
      * type in the Descriptor cluster DeviceTypeList, then:
      *
-     *   • The Commissioning Window shall be opened or closed on the node that the Root Node endpoint is on.
+     *   - The Commissioning Window shall be opened or closed on the node that the Root Node endpoint is on.
      *
-     *   • The attributes shall indicate the state of the node that the Root Node endpoint is on.
+     *   - The attributes shall indicate the state of the node that the Root Node endpoint is on.
      *
      * If the Administrator Commissioning Cluster server instance is present on an endpoint with the Bridged Node device
      * type in the Descriptor cluster DeviceTypeList, then:
      *
-     *   • The Commissioning Window shall be opened or closed on the node represented by the Bridged Node.
+     *   - The Commissioning Window shall be opened or closed on the node represented by the Bridged Node.
      *
-     *   • The attributes shall indicate the state of the node that is represented by the Bridged Node.
+     *   - The attributes shall indicate the state of the node that is represented by the Bridged Node.
      *
      * AdministratorCommissioningCluster supports optional features that you can enable with the
      * AdministratorCommissioningCluster.with() factory method.

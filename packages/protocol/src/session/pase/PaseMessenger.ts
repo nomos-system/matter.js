@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Bytes, Duration, UnexpectedDataError } from "#general";
-import { SecureMessageType, TlvSchema } from "#types";
+import { Bytes, UnexpectedDataError } from "@matter/general";
+import { SecureMessageType, TlvSchema } from "@matter/types";
 import { ExchangeSendOptions } from "../../protocol/MessageExchange.js";
 import { DEFAULT_NORMAL_PROCESSING_TIME, SecureChannelMessenger } from "../../securechannel/SecureChannelMessenger.js";
 import {
@@ -28,7 +28,10 @@ export class PaseServerMessenger extends SecureChannelMessenger {
     #closed = false;
 
     async readPbkdfParamRequest() {
-        const { payload } = await this.nextMessage(SecureMessageType.PbkdfParamRequest, DEFAULT_NORMAL_PROCESSING_TIME);
+        const { payload } = await this.nextMessage({
+            type: SecureMessageType.PbkdfParamRequest,
+            expectedProcessingTime: DEFAULT_NORMAL_PROCESSING_TIME,
+        });
         return { requestPayload: payload, request: TlvPbkdfParamRequest.decode(payload) as PbkdfParamRequest };
     }
 
@@ -39,7 +42,7 @@ export class PaseServerMessenger extends SecureChannelMessenger {
     }
 
     readPasePake1() {
-        return this.nextMessageDecoded(SecureMessageType.PasePake1, TlvPasePake1);
+        return this.nextMessageDecoded(TlvPasePake1, { type: SecureMessageType.PasePake1 });
     }
 
     sendPasePake2(pasePake2: PasePake2) {
@@ -47,7 +50,7 @@ export class PaseServerMessenger extends SecureChannelMessenger {
     }
 
     readPasePake3() {
-        return this.nextMessageDecoded(SecureMessageType.PasePake3, TlvPasePake3);
+        return this.nextMessageDecoded(TlvPasePake3, { type: SecureMessageType.PasePake3 });
     }
 
     override close() {
@@ -62,15 +65,11 @@ export class PaseServerMessenger extends SecureChannelMessenger {
         return super.send(message, type, schema, options);
     }
 
-    override async nextMessage(
-        expectedMessageType: number,
-        expectedProcessingTimeMs?: Duration,
-        expectedMessageInfo?: string,
-    ) {
+    override async nextMessage(options: SecureChannelMessenger.ReadOptions) {
         if (this.#closed) {
             throw new UnexpectedDataError("Cannot read message, messenger is closed");
         }
-        const result = await super.nextMessage(expectedMessageType, expectedProcessingTimeMs, expectedMessageInfo);
+        const result = await super.nextMessage(options);
         if (this.#closed) {
             throw new UnexpectedDataError("Cannot read message, messenger is closed");
         }
@@ -79,31 +78,33 @@ export class PaseServerMessenger extends SecureChannelMessenger {
 }
 
 export class PaseClientMessenger extends SecureChannelMessenger {
-    sendPbkdfParamRequest(request: PbkdfParamRequest) {
+    sendPbkdfParamRequest(request: PbkdfParamRequest, options?: ExchangeSendOptions) {
         return this.send(request, SecureMessageType.PbkdfParamRequest, TlvPbkdfParamRequest, {
             expectedProcessingTime: DEFAULT_NORMAL_PROCESSING_TIME,
+            ...options,
         });
     }
 
-    async readPbkdfParamResponse() {
-        const { payload } = await this.nextMessage(
-            SecureMessageType.PbkdfParamResponse,
-            DEFAULT_NORMAL_PROCESSING_TIME,
-        );
+    async readPbkdfParamResponse(options?: SecureChannelMessenger.ReadOptions) {
+        const { payload } = await this.nextMessage({
+            type: SecureMessageType.PbkdfParamResponse,
+            expectedProcessingTime: DEFAULT_NORMAL_PROCESSING_TIME,
+            abort: options?.abort,
+        });
 
         // TODO Add support for BUSY response and resend the message after waiting time
         return { responsePayload: payload, response: TlvPbkdfParamResponse.decode(payload) as PbkdfParamResponse };
     }
 
-    sendPasePake1(pasePake1: PasePake1) {
-        return this.send(pasePake1, SecureMessageType.PasePake1, TlvPasePake1);
+    sendPasePake1(pasePake1: PasePake1, options?: ExchangeSendOptions) {
+        return this.send(pasePake1, SecureMessageType.PasePake1, TlvPasePake1, options);
     }
 
-    readPasePake2() {
-        return this.nextMessageDecoded(SecureMessageType.PasePake2, TlvPasePake2);
+    readPasePake2(options?: SecureChannelMessenger.ReadOptions) {
+        return this.nextMessageDecoded(TlvPasePake2, { type: SecureMessageType.PasePake2, ...options });
     }
 
-    sendPasePake3(pasePake3: PasePake3) {
-        return this.send(pasePake3, SecureMessageType.PasePake3, TlvPasePake3);
+    sendPasePake3(pasePake3: PasePake3, options?: ExchangeSendOptions) {
+        return this.send(pasePake3, SecureMessageType.PasePake3, TlvPasePake3, options);
     }
 }

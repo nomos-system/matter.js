@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -27,7 +27,7 @@ export const UnitLocalization = Cluster(
 
     Attribute(
         {
-            name: "SupportedTemperatureUnits", id: 0x1, type: "list", access: "R V", conformance: "P, TEMP",
+            name: "SupportedTemperatureUnits", id: 0x1, type: "list", access: "R V", conformance: "TEMP",
             constraint: "2 to 3", quality: "F"
         },
         Field({ name: "entry", type: "TempUnitEnum" })

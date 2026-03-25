@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { FormattedText } from "#general";
 import { bin, DomainCommand } from "#globals.js";
+import { FormattedText } from "@matter/general";
 import { parse } from "acorn";
 import colors from "ansi-colors";
 import { generate } from "escodegen";

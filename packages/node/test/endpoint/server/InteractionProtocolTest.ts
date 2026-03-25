@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -9,13 +9,9 @@
 import { AdministratorCommissioningServer } from "#behaviors/administrator-commissioning";
 import { OnOffServer } from "#behaviors/on-off";
 import { WiFiNetworkDiagnosticsServer } from "#behaviors/wi-fi-network-diagnostics";
-import { AdministratorCommissioning } from "#clusters/administrator-commissioning";
-import { BasicInformation } from "#clusters/basic-information";
-import { GeneralDiagnostics } from "#clusters/general-diagnostics";
-import { Observable } from "#general";
-import { Specification } from "#model";
 import { InteractionServer } from "#node/server/InteractionServer.js";
-import { ServerNode } from "#node/ServerNode.js";
+import { Observable } from "@matter/general";
+import { Specification } from "@matter/model";
 import {
     BaseDataReport,
     DataReportPayload,
@@ -23,12 +19,13 @@ import {
     InteractionServerMessenger,
     InvokeRequest,
     InvokeResponse,
+    InvokeResponseForSend,
     MessageType,
     ReadRequest,
     SubscribeRequest,
     WriteRequest,
     WriteResponse,
-} from "#protocol";
+} from "@matter/protocol";
 import {
     AttributeId,
     ClusterId,
@@ -43,7 +40,7 @@ import {
     TlvClusterId,
     TlvFabricIndex,
     TlvField,
-    TlvInvokeResponse,
+    TlvInvokeResponseData,
     TlvNoArguments,
     TlvNullable,
     TlvObject,
@@ -53,15 +50,87 @@ import {
     TlvUInt16,
     TlvUInt8,
     TlvVendorId,
-    TypeFromBitmapSchema,
     TypeFromPartialBitSchema,
     VendorId,
     WildcardPathFlagsBitmap,
-} from "#types";
+} from "@matter/types";
+import { AdministratorCommissioning } from "@matter/types/clusters/administrator-commissioning";
+import { BasicInformation } from "@matter/types/clusters/basic-information";
+import { GeneralDiagnostics } from "@matter/types/clusters/general-diagnostics";
 import { MockServerNode } from "../../node/mock-server-node.js";
 import { interaction } from "../../node/node-helpers.js";
 import { createDummyMessageExchange } from "./InteractionTestUtils.js";
 import TlvOpenBasicCommissioningWindowRequest = AdministratorCommissioning.TlvOpenBasicCommissioningWindowRequest;
+
+/**
+ * Helper to decode pre-encoded InvokeResponseForSend back to InvokeResponse for test comparison.
+ */
+function decodeInvokeResponse(response: InvokeResponseForSend): InvokeResponse {
+    return {
+        ...response,
+        invokeResponses: response.invokeResponses.map(encoded => TlvInvokeResponseData.decodeTlv(encoded)),
+    };
+}
+
+/**
+ * Creates a mock messenger that captures the invoke response for testing.
+ */
+function createMockInvokeMessenger(): {
+    messenger: InteractionServerMessenger;
+    getResponse: () => InvokeResponseForSend | undefined;
+    getChunks: () => InvokeResponseForSend[];
+} {
+    let capturedResponse: InvokeResponseForSend | undefined;
+    const chunks: InvokeResponseForSend[] = [];
+    return {
+        messenger: {
+            sendStatus: () => {},
+            sendDataReport: async () => {},
+            send: async () => {},
+            close: async () => {},
+            sendWriteResponse: async () => {},
+            readNextWriteRequest: async () => {
+                throw new Error("No more chunks expected");
+            },
+            sendInvokeResponseChunk: async (response: InvokeResponseForSend) => {
+                chunks.push(response);
+                return true;
+            },
+            sendInvokeResponse: async (response: InvokeResponseForSend) => {
+                capturedResponse = response;
+            },
+        } as unknown as InteractionServerMessenger,
+        getResponse: () => capturedResponse,
+        getChunks: () => chunks,
+    };
+}
+
+/**
+ * Creates a mock messenger for write testing.
+ */
+function createMockWriteMessenger(): {
+    messenger: InteractionServerMessenger;
+    getResponse: () => WriteResponse | undefined;
+} {
+    let capturedResponse: WriteResponse | undefined;
+    return {
+        messenger: {
+            sendStatus: () => {},
+            sendDataReport: async () => {},
+            send: async () => {},
+            close: async () => {},
+            sendWriteResponse: async (response: WriteResponse) => {
+                capturedResponse = response;
+            },
+            readNextWriteRequest: async () => {
+                throw new Error("No more chunks expected");
+            },
+            sendInvokeResponseChunk: async () => true,
+            sendInvokeResponse: async () => {},
+        } as unknown as InteractionServerMessenger,
+        getResponse: () => capturedResponse,
+    };
+}
 
 const READ_REQUEST: ReadRequest = {
     interactionModelRevision: Specification.INTERACTION_MODEL_REVISION,
@@ -1016,7 +1085,7 @@ describe("InteractionProtocol", () => {
 
     async function createNode(maxPathsPerInvoke = 100) {
         node = await MockServerNode.createOnline({
-            type: ServerNode.RootEndpoint.with(AdministratorCommissioningServer.with("Basic")),
+            type: MockServerNode.RootEndpoint.with(AdministratorCommissioningServer.with("Basic")),
             basicInformation: {
                 dataModelRevision: 1,
                 vendorName: "vendor",
@@ -1175,13 +1244,15 @@ describe("InteractionProtocol", () => {
 
     describe("handleWriteRequest", () => {
         it("write values and return errors on invalid values", async () => {
-            const result = await interactionProtocol.handleWriteRequest(
+            const { messenger, getResponse } = createMockWriteMessenger();
+            await interactionProtocol.handleWriteRequest(
                 await createDummyMessageExchange(node),
                 WRITE_REQUEST,
+                messenger,
                 interaction.BarelyMockedMessage,
             );
 
-            expect(result).deep.equals(WRITE_RESPONSE);
+            expect(getResponse()).deep.equals(WRITE_RESPONSE);
             expect(node.state.basicInformation.nodeLabel).equals("test");
         });
 
@@ -1195,13 +1266,15 @@ describe("InteractionProtocol", () => {
                 },
             });
 
-            const result = await interactionProtocol.handleWriteRequest(
+            const { messenger, getResponse } = createMockWriteMessenger();
+            await interactionProtocol.handleWriteRequest(
                 await createDummyMessageExchange(node, { fabric }),
                 CHUNKED_ARRAY_WRITE_REQUEST,
+                messenger,
                 interaction.BarelyMockedMessage,
             );
 
-            expect(result).deep.equals(CHUNKED_ARRAY_WRITE_RESPONSE);
+            expect(getResponse()).deep.equals(CHUNKED_ARRAY_WRITE_RESPONSE);
             expect(node.state.accessControl.acl).deep.equals([
                 {
                     privilege: 1,
@@ -1220,24 +1293,150 @@ describe("InteractionProtocol", () => {
             ]);
         });
 
+        it("write chunked array values across multiple messages", async () => {
+            // Test that REPLACE_ALL in first message followed by ADD in second message works
+            const fabric = await node.addFabric();
+            await node.set({
+                accessControl: {
+                    subjectsPerAccessControlEntry: 4,
+                    targetsPerAccessControlEntry: 4,
+                    accessControlEntriesPerFabric: 4,
+                },
+            });
+
+            // First message: REPLACE_ALL (empty array) with moreChunkedMessages=true
+            const firstChunkRequest: WriteRequest = {
+                interactionModelRevision: Specification.INTERACTION_MODEL_REVISION,
+                suppressResponse: false,
+                timedRequest: false,
+                moreChunkedMessages: true,
+                writeRequests: [
+                    {
+                        path: {
+                            endpointId: EndpointNumber(0),
+                            clusterId: ClusterId(0x1f),
+                            attributeId: AttributeId(0),
+                        },
+                        data: TlvArray(TlvAclTestSchema).encodeTlv([]),
+                    },
+                ],
+            };
+
+            // Second message: ADD entries with moreChunkedMessages=false
+            const secondChunkRequest: WriteRequest = {
+                interactionModelRevision: Specification.INTERACTION_MODEL_REVISION,
+                suppressResponse: false,
+                timedRequest: false,
+                moreChunkedMessages: false,
+                writeRequests: [
+                    {
+                        path: {
+                            endpointId: EndpointNumber(0),
+                            clusterId: ClusterId(0x1f),
+                            attributeId: AttributeId(0),
+                            listIndex: null,
+                        },
+                        data: TlvAclTestSchema.encodeTlv({
+                            privilege: 1,
+                            authMode: 2,
+                            subjects: null,
+                            targets: null,
+                        }),
+                    },
+                    {
+                        path: {
+                            endpointId: EndpointNumber(0),
+                            clusterId: ClusterId(0x1f),
+                            attributeId: AttributeId(0),
+                            listIndex: null,
+                        },
+                        data: TlvAclTestSchema.encodeTlv({
+                            privilege: 1,
+                            authMode: 3,
+                            subjects: null,
+                            targets: null,
+                        }),
+                    },
+                ],
+            };
+
+            // Create a messenger that returns the second chunk
+            const responses: WriteResponse[] = [];
+            const messenger = {
+                sendStatus: () => {},
+                sendDataReport: async () => {},
+                send: async () => {},
+                close: async () => {},
+                sendWriteResponse: async (response: WriteResponse) => {
+                    responses.push(response);
+                },
+                readNextWriteRequest: async () => ({
+                    writeRequest: secondChunkRequest,
+                }),
+                sendInvokeResponseChunk: async () => true,
+                sendInvokeResponse: async () => {},
+            } as unknown as InteractionServerMessenger;
+
+            await interactionProtocol.handleWriteRequest(
+                await createDummyMessageExchange(node, { fabric }),
+                firstChunkRequest,
+                messenger,
+                interaction.BarelyMockedMessage,
+            );
+
+            // Should have received two responses (one per chunk)
+            expect(responses.length).equals(2);
+
+            // First chunk response - REPLACE_ALL success
+            expect(responses[0].writeResponses.length).equals(1);
+            expect(responses[0].writeResponses[0].status.status).equals(StatusCode.Success);
+
+            // Second chunk response - both ADD operations success
+            expect(responses[1].writeResponses.length).equals(2);
+            expect(responses[1].writeResponses[0].status.status).equals(StatusCode.Success);
+            expect(responses[1].writeResponses[1].status.status).equals(StatusCode.Success);
+
+            // Verify the final ACL list has both entries
+            expect(node.state.accessControl.acl).deep.equals([
+                {
+                    privilege: 1,
+                    authMode: 2,
+                    subjects: null,
+                    targets: null,
+                    fabricIndex: FabricIndex(fabric.fabricIndex),
+                },
+                {
+                    privilege: 1,
+                    authMode: 3,
+                    subjects: null,
+                    targets: null,
+                    fabricIndex: FabricIndex(fabric.fabricIndex),
+                },
+            ]);
+        });
+
         it("rejects mass write with wildcard attribute", async () => {
+            const { messenger } = createMockWriteMessenger();
             await expect(
                 interactionProtocol.handleWriteRequest(
                     await createDummyMessageExchange(node),
                     ILLEGAL_MASS_WRITE_REQUEST,
+                    messenger,
                     interaction.BarelyMockedMessage,
                 ),
             ).rejectedWith("Wildcard path write must specify a clusterId and attributeId");
         });
 
         it("performs mass write with wildcard endpoint", async () => {
-            const result = await interactionProtocol.handleWriteRequest(
+            const { messenger, getResponse } = createMockWriteMessenger();
+            await interactionProtocol.handleWriteRequest(
                 await createDummyMessageExchange(node),
                 MASS_WRITE_REQUEST,
+                messenger,
                 interaction.BarelyMockedMessage,
             );
 
-            expect(result).deep.equals(MASS_WRITE_RESPONSE);
+            expect(getResponse()).deep.equals(MASS_WRITE_RESPONSE);
             expect(node.state.basicInformation.location).equals("US");
             expect(node.state.basicInformation.nodeLabel).equals("test");
         });
@@ -1247,10 +1446,13 @@ describe("InteractionProtocol", () => {
             const messageExchange = await createDummyMessageExchange(node, undefined, false, false, undefined, () => {
                 timedInteractionCleared = true;
             });
+            const timedWriteRequest = { ...WRITE_REQUEST, timedRequest: true };
+            const { messenger } = createMockWriteMessenger();
             await expect(
                 interactionProtocol.handleWriteRequest(
                     messageExchange,
-                    { ...WRITE_REQUEST, timedRequest: true },
+                    timedWriteRequest,
+                    messenger,
                     interaction.BarelyMockedMessage,
                 ),
             ).rejectedWith(
@@ -1266,8 +1468,14 @@ describe("InteractionProtocol", () => {
             const messageExchange = await createDummyMessageExchange(node, undefined, true, false, undefined, () => {
                 timedInteractionCleared = true;
             });
+            const { messenger } = createMockWriteMessenger();
             await expect(
-                interactionProtocol.handleWriteRequest(messageExchange, WRITE_REQUEST, interaction.BarelyMockedMessage),
+                interactionProtocol.handleWriteRequest(
+                    messageExchange,
+                    WRITE_REQUEST,
+                    messenger,
+                    interaction.BarelyMockedMessage,
+                ),
             ).rejectedWith(
                 "timedRequest flag of write interaction (false) mismatch with expected timed interaction (true).",
             );
@@ -1284,13 +1492,15 @@ describe("InteractionProtocol", () => {
             const messageExchange = await createDummyMessageExchange(node, undefined, false, false, undefined, () => {
                 timedInteractionCleared = true;
             });
-            const result = await interactionProtocol.handleWriteRequest(
+            const { messenger, getResponse } = createMockWriteMessenger();
+            await interactionProtocol.handleWriteRequest(
                 messageExchange,
                 WRITE_REQUEST_TIMED_REQUIRED,
                 interaction.BarelyMockedMessage,
+                messenger,
             );
 
-            expect(result).deep.equals(WRITE_RESPONSE_TIMED_ERROR);
+            expect(getResponse()).deep.equals(WRITE_RESPONSE_TIMED_ERROR);
             expect(timedInteractionCleared).equals(false);
             expect(node.state.basicInformation.nodeLabel).equals("");
         });*/
@@ -1301,13 +1511,16 @@ describe("InteractionProtocol", () => {
             const messageExchange = await createDummyMessageExchange(node, undefined, true, false, undefined, () => {
                 timedInteractionCleared = true;
             });
-            const result = await interactionProtocol.handleWriteRequest(
+            const timedWriteRequest = { ...WRITE_REQUEST_TIMED_REQUIRED, timedRequest: true };
+            const { messenger, getResponse } = createMockWriteMessenger();
+            await interactionProtocol.handleWriteRequest(
                 messageExchange,
-                { ...WRITE_REQUEST_TIMED_REQUIRED, timedRequest: true },
+                timedWriteRequest,
+                messenger,
                 interaction.BarelyMockedMessage,
             );
 
-            expect(result).deep.equals(WRITE_RESPONSE_TIMED_REQUIRED);
+            expect(getResponse()).deep.equals(WRITE_RESPONSE_TIMED_REQUIRED);
             expect(timedInteractionCleared).equals(true);
             expect(node.state.basicInformation.nodeLabel).equals("test");
         });
@@ -1317,10 +1530,13 @@ describe("InteractionProtocol", () => {
             const messageExchange = await createDummyMessageExchange(node, undefined, true, true, undefined, () => {
                 timedInteractionCleared = true;
             });
+            const timedWriteRequest = { ...WRITE_REQUEST, timedRequest: true };
+            const { messenger } = createMockWriteMessenger();
             await expect(
                 interactionProtocol.handleWriteRequest(
                     messageExchange,
-                    { ...WRITE_REQUEST, timedRequest: true },
+                    timedWriteRequest,
+                    messenger,
                     interaction.BarelyMockedMessage,
                 ),
             ).rejectedWith("Timed request window expired. Decline write request.");
@@ -1334,10 +1550,13 @@ describe("InteractionProtocol", () => {
             const messageExchange = await createDummyMessageExchange(node, undefined, true, false, undefined, () => {
                 timedInteractionCleared = true;
             });
+            const timedWriteRequest = { ...WRITE_REQUEST, timedRequest: true };
+            const { messenger } = createMockWriteMessenger();
             await expect(
                 interactionProtocol.handleWriteRequest(
                     messageExchange,
-                    { ...WRITE_REQUEST, timedRequest: true },
+                    timedWriteRequest,
+                    messenger,
                     interaction.BarelyMockedGroupMessage,
                 ),
             ).rejectedWith("Write requests are only allowed on unicast sessions when a timed interaction is running.");
@@ -1351,14 +1570,17 @@ describe("InteractionProtocol", () => {
             const messageExchange = await createDummyMessageExchange(node, undefined, true, false, undefined, () => {
                 timedInteractionCleared = true;
             });
-            const result = await interactionProtocol.handleWriteRequest(
+            const timedWriteRequest = { ...WRITE_REQUEST, timedRequest: true };
+            const { messenger, getResponse } = createMockWriteMessenger();
+            await interactionProtocol.handleWriteRequest(
                 messageExchange,
-                { ...WRITE_REQUEST, timedRequest: true },
+                timedWriteRequest,
+                messenger,
                 interaction.BarelyMockedMessage,
             );
 
             expect(timedInteractionCleared).equals(true);
-            expect(result).deep.equals(WRITE_RESPONSE);
+            expect(getResponse()).deep.equals(WRITE_RESPONSE);
             expect(node.state.basicInformation.nodeLabel).equals("test");
         });
     });
@@ -1388,91 +1610,58 @@ describe("InteractionProtocol", () => {
         });
 
         it("invoke command with empty args", async () => {
-            let result;
-            const exchange = await createDummyMessageExchange(
-                node,
-                undefined,
-                false,
-                false,
-                (_messageType, payload) => {
-                    result = TlvInvokeResponse.decode(payload);
-                },
-            );
+            const exchange = await createDummyMessageExchange(node);
+            const { messenger, getResponse } = createMockInvokeMessenger();
             await interactionProtocol.handleInvokeRequest(
                 exchange,
                 INVOKE_COMMAND_REQUEST_WITH_EMPTY_ARGS,
-                new InteractionServerMessenger(exchange),
+                messenger,
                 interaction.BarelyMockedMessage,
             );
 
-            expect(result).deep.equals(INVOKE_COMMAND_RESPONSE);
+            expect(decodeInvokeResponse(getResponse()!)).deep.equals(INVOKE_COMMAND_RESPONSE);
             expect(onOffState).equals(true);
         });
 
         it("invoke command with no args", async () => {
-            let result;
-            const exchange = await createDummyMessageExchange(
-                node,
-                undefined,
-                false,
-                false,
-                (_messageType, payload) => {
-                    result = TlvInvokeResponse.decode(payload);
-                },
-            );
+            const exchange = await createDummyMessageExchange(node);
+            const { messenger, getResponse } = createMockInvokeMessenger();
             await interactionProtocol.handleInvokeRequest(
                 exchange,
                 INVOKE_COMMAND_REQUEST_WITH_NO_ARGS,
-                new InteractionServerMessenger(exchange),
+                messenger,
                 interaction.BarelyMockedMessage,
             );
 
-            expect(result).deep.equals(INVOKE_COMMAND_RESPONSE);
+            expect(decodeInvokeResponse(getResponse()!)).deep.equals(INVOKE_COMMAND_RESPONSE);
             expect(onOffState).equals(true);
         });
 
         it("invalid invoke command", async () => {
-            let result;
-            const exchange = await createDummyMessageExchange(
-                node,
-                undefined,
-                false,
-                false,
-                (_messageType, payload) => {
-                    result = TlvInvokeResponse.decode(payload);
-                },
-            );
+            const exchange = await createDummyMessageExchange(node);
+            const { messenger, getResponse } = createMockInvokeMessenger();
             await interactionProtocol.handleInvokeRequest(
                 exchange,
                 INVOKE_COMMAND_REQUEST_INVALID,
-                new InteractionServerMessenger(exchange),
+                messenger,
                 interaction.BarelyMockedMessage,
             );
 
-            expect(result).deep.equals(INVOKE_COMMAND_RESPONSE_INVALID);
+            expect(decodeInvokeResponse(getResponse()!)).deep.equals(INVOKE_COMMAND_RESPONSE_INVALID);
             expect(onOffState).equals(false);
         });
 
         it("throws on multi invoke commands with wildcards", async () => {
-            const exchange = await createDummyMessageExchange(
-                node,
-                undefined,
-                false,
-                false,
-                (_messageType, payload) => {
-                    result = TlvInvokeResponse.decode(payload);
-                },
-            );
-            let result = undefined;
+            const exchange = await createDummyMessageExchange(node);
+            const { messenger } = createMockInvokeMessenger();
             await expect(
                 interactionProtocol.handleInvokeRequest(
                     exchange,
                     INVOKE_COMMAND_REQUEST_MULTI_WILDCARD,
-                    new InteractionServerMessenger(exchange),
+                    messenger,
                     interaction.BarelyMockedMessage,
                 ),
             ).rejectedWith("Wildcard path must not be used with multiple invokes");
-            expect(result).equals(undefined);
         });
 
         it("throws on multi invoke commands with one 1 allowed", async () => {
@@ -1480,25 +1669,17 @@ describe("InteractionProtocol", () => {
             triggeredOn = false;
             triggeredOff = false;
 
-            const exchange = await createDummyMessageExchange(
-                node,
-                undefined,
-                false,
-                false,
-                (_messageType, payload) => {
-                    result = TlvInvokeResponse.decode(payload);
-                },
-            );
-            let result = undefined;
+            const exchange = await createDummyMessageExchange(node);
 
             await createNode(1);
             initilizeOnOff();
 
+            const { messenger } = createMockInvokeMessenger();
             await expect(
                 interactionProtocol.handleInvokeRequest(
                     exchange,
                     INVOKE_COMMAND_REQUEST_MULTI,
-                    new InteractionServerMessenger(exchange),
+                    messenger,
                     interaction.BarelyMockedMessage,
                 ),
             ).rejectedWith("Only 1 invoke requests are supported in one message. This message contains 4");
@@ -1507,7 +1688,6 @@ describe("InteractionProtocol", () => {
             expect(triggeredOn).equals(false);
             expect(triggeredOff).equals(false);
             expect(onOffState).equals(false);
-            expect(result).equals(undefined);
         });
 
         it("multi invoke commands are ok", async () => {
@@ -1515,25 +1695,17 @@ describe("InteractionProtocol", () => {
             triggeredOn = false;
             triggeredOff = false;
 
-            let result = undefined;
-            const exchange = await createDummyMessageExchange(
-                node,
-                undefined,
-                false,
-                false,
-                (_messageType, payload) => {
-                    result = TlvInvokeResponse.decode(payload);
-                },
-            );
+            const exchange = await createDummyMessageExchange(node);
 
+            const { messenger, getResponse } = createMockInvokeMessenger();
             await interactionProtocol.handleInvokeRequest(
                 exchange,
                 INVOKE_COMMAND_REQUEST_MULTI,
-                new InteractionServerMessenger(exchange),
+                messenger,
                 interaction.BarelyMockedMessage,
             );
 
-            expect(result).deep.equals(INVOKE_COMMAND_RESPONSE_MULTI); // TODO Add again later when we support it officially
+            expect(decodeInvokeResponse(getResponse()!)).deep.equals(INVOKE_COMMAND_RESPONSE_MULTI); // TODO Add again later when we support it officially
             expect(triggeredOn).equals(true);
             expect(triggeredOff).equals(true);
             expect(onOffState).equals(false);
@@ -1544,16 +1716,7 @@ describe("InteractionProtocol", () => {
             triggeredOn = false;
             triggeredOff = false;
 
-            const result = Array<TypeFromBitmapSchema<typeof TlvInvokeResponse>>();
-            const exchange = await createDummyMessageExchange(
-                node,
-                undefined,
-                false,
-                false,
-                (_messageType, payload) => {
-                    result.push(TlvInvokeResponse.decode(payload));
-                },
-            );
+            const exchange = await createDummyMessageExchange(node);
 
             await createNode(200);
             initilizeOnOff();
@@ -1574,46 +1737,41 @@ describe("InteractionProtocol", () => {
                 });
             }
 
+            // Create a mock messenger that captures intermediate chunks
+            const { messenger, getResponse, getChunks } = createMockInvokeMessenger();
+
             await interactionProtocol.handleInvokeRequest(
                 exchange,
                 request,
-                new InteractionServerMessenger(exchange),
+                messenger,
                 interaction.BarelyMockedMessage,
             );
 
-            expect(result.length).equals(3);
+            // Combine intermediate chunks with final result
+            const allResults = [...getChunks(), getResponse()!];
+            expect(allResults.length).equals(3);
             expect(
-                result[0].invokeResponses.length + result[1].invokeResponses.length + result[2].invokeResponses.length,
+                allResults[0].invokeResponses.length +
+                    allResults[1].invokeResponses.length +
+                    allResults[2].invokeResponses.length,
             ).equals(103);
-            expect(result[0].moreChunkedMessages).equals(true);
-            expect(result[1].moreChunkedMessages).equals(true);
-            expect(result[2].moreChunkedMessages).equals(undefined);
+            // Note: moreChunkedMessages is set by the messenger, not the handler
             expect(triggeredOn).equals(true);
             expect(triggeredOff).equals(true);
             expect(onOffState).equals(false);
         });
 
         it("throws on multi invoke commands with one same commands", async () => {
-            const exchange = await createDummyMessageExchange(
-                node,
-                undefined,
-                false,
-                false,
-                (_messageType, payload) => {
-                    result = TlvInvokeResponse.decode(payload);
-                },
-            );
-            let result = undefined;
+            const exchange = await createDummyMessageExchange(node);
+            const { messenger } = createMockInvokeMessenger();
             await expect(
                 interactionProtocol.handleInvokeRequest(
                     exchange,
                     INVOKE_COMMAND_REQUEST_MULTI_SAME,
-                    new InteractionServerMessenger(exchange),
+                    messenger,
                     interaction.BarelyMockedMessage,
                 ),
             ).rejectedWith("Duplicate concrete command path RootNode:0x0.OnOff:0x6.on:0x1 on batch invoke");
-
-            expect(result).equals(undefined);
         });
 
         it("handles StatusResponseError gracefully", async () => {
@@ -1621,46 +1779,29 @@ describe("InteractionProtocol", () => {
                 throw new StatusResponseError("Sorry so swamped", StatusCode.Busy);
             });
 
-            let result;
-            const exchange = await createDummyMessageExchange(
-                node,
-                undefined,
-                false,
-                false,
-                (_messageType, payload) => {
-                    result = TlvInvokeResponse.decode(payload);
-                },
-            );
+            const exchange = await createDummyMessageExchange(node);
+            const { messenger, getResponse } = createMockInvokeMessenger();
             await interactionProtocol.handleInvokeRequest(
                 exchange,
                 { ...INVOKE_COMMAND_REQUEST_WITH_EMPTY_ARGS },
-                new InteractionServerMessenger(exchange),
+                messenger,
                 interaction.BarelyMockedMessage,
             );
 
-            expect(result).deep.equals(INVOKE_COMMAND_RESPONSE_BUSY);
+            expect(decodeInvokeResponse(getResponse()!)).deep.equals(INVOKE_COMMAND_RESPONSE_BUSY);
         });
 
         it("invoke command with timed interaction mismatch request", async () => {
             let timedInteractionCleared = false;
-            const exchange = await createDummyMessageExchange(
-                node,
-                undefined,
-                false,
-                false,
-                (_messageType, payload) => {
-                    result = TlvInvokeResponse.decode(payload);
-                },
-                () => {
-                    timedInteractionCleared = true;
-                },
-            );
-            let result = undefined;
+            const exchange = await createDummyMessageExchange(node, undefined, false, false, undefined, () => {
+                timedInteractionCleared = true;
+            });
+            const { messenger } = createMockInvokeMessenger();
             await expect(
                 interactionProtocol.handleInvokeRequest(
                     exchange,
                     { ...INVOKE_COMMAND_REQUEST_WITH_EMPTY_ARGS, timedRequest: true },
-                    new InteractionServerMessenger(exchange),
+                    messenger,
                     interaction.BarelyMockedMessage,
                 ),
             ).rejectedWith(
@@ -1669,30 +1810,19 @@ describe("InteractionProtocol", () => {
 
             expect(timedInteractionCleared).equals(false);
             expect(onOffState).equals(false);
-            expect(result).equals(undefined);
         });
 
         it("invoke command with timed interaction mismatch timed expected", async () => {
             let timedInteractionCleared = false;
-            const exchange = await createDummyMessageExchange(
-                node,
-                undefined,
-                true,
-                false,
-                (messageType, payload) => {
-                    expect(messageType).equals(MessageType.StatusResponse);
-                    result = TlvStatusResponse.decode(payload);
-                },
-                () => {
-                    timedInteractionCleared = true;
-                },
-            );
-            let result = undefined;
+            const exchange = await createDummyMessageExchange(node, undefined, true, false, undefined, () => {
+                timedInteractionCleared = true;
+            });
+            const { messenger } = createMockInvokeMessenger();
             await expect(
                 interactionProtocol.handleInvokeRequest(
                     exchange,
                     INVOKE_COMMAND_REQUEST_WITH_EMPTY_ARGS,
-                    new InteractionServerMessenger(exchange),
+                    messenger,
                     interaction.BarelyMockedMessage,
                 ),
             ).rejectedWith(
@@ -1701,90 +1831,60 @@ describe("InteractionProtocol", () => {
 
             expect(timedInteractionCleared).equals(false);
             expect(onOffState).equals(false);
-            expect(result).equals(undefined);
         });
 
         it("invoke command with timed interaction expired", async () => {
             let timedInteractionCleared = false;
-            let result = undefined;
-            const exchange = await createDummyMessageExchange(
-                node,
-                undefined,
-                true,
-                true,
-                (_messageType, payload) => {
-                    result = TlvInvokeResponse.decode(payload);
-                },
-                () => {
-                    timedInteractionCleared = true;
-                },
-            );
+            const exchange = await createDummyMessageExchange(node, undefined, true, true, undefined, () => {
+                timedInteractionCleared = true;
+            });
+            const { messenger } = createMockInvokeMessenger();
             await expect(
                 interactionProtocol.handleInvokeRequest(
                     exchange,
                     { ...INVOKE_COMMAND_REQUEST_WITH_EMPTY_ARGS, timedRequest: true },
-                    new InteractionServerMessenger(exchange),
+                    messenger,
                     interaction.BarelyMockedMessage,
                 ),
             ).rejectedWith("Timed request window expired. Decline invoke request.");
 
             expect(timedInteractionCleared).equals(true);
             expect(onOffState).equals(false);
-            expect(result).equals(undefined);
         });
 
         it("invoke command with timed interaction as group message", async () => {
             let timedInteractionCleared = false;
-            const exchange = await createDummyMessageExchange(
-                node,
-                undefined,
-                true,
-                false,
-                (_messageType, payload) => {
-                    result = TlvInvokeResponse.decode(payload);
-                },
-                () => {
-                    timedInteractionCleared = true;
-                },
-            );
-            let result = undefined;
+            const exchange = await createDummyMessageExchange(node, undefined, true, false, undefined, () => {
+                timedInteractionCleared = true;
+            });
+            const { messenger } = createMockInvokeMessenger();
             await expect(
                 interactionProtocol.handleInvokeRequest(
                     exchange,
                     { ...INVOKE_COMMAND_REQUEST_WITH_EMPTY_ARGS, timedRequest: true },
-                    new InteractionServerMessenger(exchange),
+                    messenger,
                     interaction.BarelyMockedGroupMessage,
                 ),
             ).rejectedWith("Invoke requests are only allowed on unicast sessions when a timed interaction is running.");
 
             expect(timedInteractionCleared).equals(true);
             expect(onOffState).equals(false);
-            expect(result).equals(undefined);
         });
 
         it("invoke command with with timed interaction success", async () => {
             let timedInteractionCleared = false;
-            const exchange = await createDummyMessageExchange(
-                node,
-                undefined,
-                true,
-                false,
-                (_messageType, payload) => {
-                    result = TlvInvokeResponse.decode(payload);
-                },
-                () => {
-                    timedInteractionCleared = true;
-                },
-            );
-            let result;
+            const exchange = await createDummyMessageExchange(node, undefined, true, false, undefined, () => {
+                timedInteractionCleared = true;
+            });
+            const { messenger, getResponse } = createMockInvokeMessenger();
             await interactionProtocol.handleInvokeRequest(
                 exchange,
                 { ...INVOKE_COMMAND_REQUEST_WITH_EMPTY_ARGS, timedRequest: true },
-                new InteractionServerMessenger(exchange),
+                messenger,
                 interaction.BarelyMockedMessage,
             );
 
-            expect(result).deep.equals(INVOKE_COMMAND_RESPONSE);
+            expect(decodeInvokeResponse(getResponse()!)).deep.equals(INVOKE_COMMAND_RESPONSE);
             expect(onOffState).equals(true);
             expect(timedInteractionCleared).equals(true);
         });
@@ -1793,27 +1893,18 @@ describe("InteractionProtocol", () => {
             const fabric = await node.addFabric();
 
             let timedInteractionCleared = false;
-            const exchange = await createDummyMessageExchange(
-                node,
-                { fabric },
-                false,
-                false,
-                (_messageType, payload) => {
-                    result = TlvInvokeResponse.decode(payload);
-                },
-                () => {
-                    timedInteractionCleared = true;
-                },
-            );
-            let result;
+            const exchange = await createDummyMessageExchange(node, { fabric }, false, false, undefined, () => {
+                timedInteractionCleared = true;
+            });
+            const { messenger, getResponse } = createMockInvokeMessenger();
             await interactionProtocol.handleInvokeRequest(
                 exchange,
                 INVOKE_COMMAND_REQUEST_TIMED_REQUIRED,
-                new InteractionServerMessenger(exchange),
+                messenger,
                 interaction.BarelyMockedMessage,
             );
 
-            expect(result).deep.equals(INVOKE_COMMAND_RESPONSE_TIMED_REQUIRED);
+            expect(decodeInvokeResponse(getResponse()!)).deep.equals(INVOKE_COMMAND_RESPONSE_TIMED_REQUIRED);
             expect(timedInteractionCleared).equals(false);
         });
 
@@ -1821,28 +1912,18 @@ describe("InteractionProtocol", () => {
             const fabric = await node.addFabric();
 
             let timedInteractionCleared = false;
-            let result;
-            const exchange = await createDummyMessageExchange(
-                node,
-                { fabric },
-                true,
-                false,
-                (_messageType, payload) => {
-                    result = TlvInvokeResponse.decode(payload);
-                },
-
-                () => {
-                    timedInteractionCleared = true;
-                },
-            );
+            const exchange = await createDummyMessageExchange(node, { fabric }, true, false, undefined, () => {
+                timedInteractionCleared = true;
+            });
+            const { messenger, getResponse } = createMockInvokeMessenger();
             await interactionProtocol.handleInvokeRequest(
                 exchange,
                 { ...INVOKE_COMMAND_REQUEST_TIMED_REQUIRED, timedRequest: true },
-                new InteractionServerMessenger(exchange),
+                messenger,
                 interaction.BarelyMockedMessage,
             );
 
-            expect(result).deep.equals(INVOKE_COMMAND_RESPONSE_TIMED_REQUIRED_SUCCESS);
+            expect(decodeInvokeResponse(getResponse()!)).deep.equals(INVOKE_COMMAND_RESPONSE_TIMED_REQUIRED_SUCCESS);
             expect(timedInteractionCleared).equals(true);
         });
     });

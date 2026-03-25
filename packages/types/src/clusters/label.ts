@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -21,7 +21,9 @@ export namespace Label {
      */
     export const TlvLabelStruct = TlvObject({
         /**
-         * The Label or Value semantic is not defined here. Label examples: "room", "zone", "group", "direction".
+         * The Label or Value semantic is not defined here.
+         *
+         * Label examples: "room", "zone", "group", "direction".
          *
          * @see {@link MatterSpecification.v142.Core} § 9.7.4.1.1
          */

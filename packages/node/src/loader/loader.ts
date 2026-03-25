@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Behavior } from "#behavior/Behavior.js";
 import { EndpointType } from "#endpoint/type/EndpointType.js";
-import { camelize, decamelize, ImportError, MaybePromise } from "#general";
+import { camelize, decamelize, ImportError, MaybePromise } from "@matter/general";
 
 // Must load from public export so node selects the correct format
 import { load } from "@matter/node/load";

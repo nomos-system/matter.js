@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -9,9 +9,9 @@ import { Advertiser } from "#advertisement/Advertiser.js";
 import { ServiceDescription } from "#advertisement/ServiceDescription.js";
 import { Fabric } from "#fabric/Fabric.js";
 import { FabricManager } from "#fabric/FabricManager.js";
-import { Environment, Environmental, Logger, MatterAggregateError, ObserverGroup } from "#general";
 import { SecureSession } from "#session/SecureSession.js";
 import { SessionManager } from "#session/SessionManager.js";
+import { Environment, Environmental, Logger, MatterAggregateError, ObserverGroup } from "@matter/general";
 
 const logger = Logger.get("DeviceAdvertiser");
 
@@ -117,6 +117,14 @@ export class DeviceAdvertiser {
                     }
                 }
 
+                return;
+            }
+
+            // Only PASE sessions (commissioning sessions) should resume commissioning advertisement.
+            // CASE sessions on fabrics being deleted (decommissioning teardown) must NOT trigger
+            // commissionable re-advertisement.  The factory reset following decommissioning of the
+            // last fabric will advertise at the appropriate time.
+            if (!session.isPase) {
                 return;
             }
 

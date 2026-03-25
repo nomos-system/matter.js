@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -19,7 +19,7 @@ import {
 } from "../cluster/Cluster.js";
 import { BitFlag, BitsFromPartial, BitField } from "../schema/BitmapSchema.js";
 import { TlvUInt8, TlvBitmap, TlvInt16, TlvInt8, TlvEnum, TlvUInt16, TlvEpochS, TlvUInt32 } from "../tlv/TlvNumber.js";
-import { AccessLevel } from "#model";
+import { AccessLevel } from "@matter/model";
 import { TlvField, TlvObject, TlvOptionalField } from "../tlv/TlvObject.js";
 import { TlvArray } from "../tlv/TlvArray.js";
 import { TlvNullable } from "../tlv/TlvNullable.js";
@@ -29,7 +29,7 @@ import { TlvByteString, TlvString } from "../tlv/TlvString.js";
 import { TlvBoolean } from "../tlv/TlvBoolean.js";
 import { TlvAttributeId } from "../datatype/AttributeId.js";
 import { Status } from "../globals/Status.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace Thermostat {
@@ -574,8 +574,6 @@ export namespace Thermostat {
     export interface SetActivePresetRequest extends TypeFromSchema<typeof TlvSetActivePresetRequest> {}
 
     /**
-     * Table 9. Interpretation of Heat, Cool and Auto SystemModeEnum Values
-     *
      * @see {@link MatterSpecification.v142.Cluster} § 4.3.8.24
      */
     export enum SystemMode {
@@ -720,35 +718,38 @@ export namespace Thermostat {
      *
      * If a CoolingSetpoint was used to determine the cooling setpoint:
      *
-     *   • If the server supports the OCC feature, and the Occupied bit is not set on the Occupancy attribute, then the
+     *   - If the server supports the OCC feature, and the Occupied bit is not set on the Occupancy attribute, then the
      *     UnoccupiedCoolingSetpoint attribute shall be set to the CoolingSetpoint
      *
-     *   • Otherwise, the OccupiedCoolingSetpoint attribute shall be set to the CoolingSetpoint If a HeatingSetpoint was
-     *     used to determine the heating setpoint:
+     *   - Otherwise, the OccupiedCoolingSetpoint attribute shall be set to the CoolingSetpoint
      *
-     *   • If the server supports the OCC feature, and the Occupied bit is not set on the Occupancy attribute, then the
+     * If a HeatingSetpoint was used to determine the heating setpoint:
+     *
+     *   - If the server supports the OCC feature, and the Occupied bit is not set on the Occupancy attribute, then the
      *     UnoccupiedHeatingSetpoint attribute shall be set to the HeatingSetpoint
      *
-     *   • Otherwise, the OccupiedHeatingSetpoint attribute shall be set to the HeatingSetpoint The
-     *     ScheduleTransitionStruct shall be invalid if all the following are true:
+     *   - Otherwise, the OccupiedHeatingSetpoint attribute shall be set to the HeatingSetpoint
      *
-     *   • The HeatingSetpoint field is not provided
+     * The ScheduleTransitionStruct shall be invalid if all the following are true:
      *
-     *   • The PresetHandle field is not provided
+     *   - The HeatingSetpoint field is not provided
      *
-     *   • The PresetHandle field on the encompassing ScheduleStruct is not provided
+     *   - The PresetHandle field is not provided
      *
-     *   • The SystemMode field is provided and has the value Heat or Auto, or the SystemMode field on the parent
-     *     ScheduleStruct has the value Heat or Auto The ScheduleTransitionStruct shall be invalid if all the following
-     *     are true:
+     *   - The PresetHandle field on the encompassing ScheduleStruct is not provided
      *
-     *   • The CoolingSetpoint field is not provided
+     *   - The SystemMode field is provided and has the value Heat or Auto, or the SystemMode field on the parent
+     *     ScheduleStruct has the value Heat or Auto
      *
-     *   • The PresetHandle field is not provided
+     * The ScheduleTransitionStruct shall be invalid if all the following are true:
      *
-     *   • The PresetHandle field on the encompassing ScheduleStruct is not provided
+     *   - The CoolingSetpoint field is not provided
      *
-     *   • The SystemMode field is provided and has the value Cool or Auto, or the SystemMode field on the parent
+     *   - The PresetHandle field is not provided
+     *
+     *   - The PresetHandle field on the encompassing ScheduleStruct is not provided
+     *
+     *   - The SystemMode field is provided and has the value Cool or Auto, or the SystemMode field on the parent
      *     ScheduleStruct has the value Cool or Auto
      *
      * @see {@link MatterSpecification.v142.Cluster} § 4.3.8.31
@@ -832,35 +833,38 @@ export namespace Thermostat {
      *
      * If a CoolingSetpoint was used to determine the cooling setpoint:
      *
-     *   • If the server supports the OCC feature, and the Occupied bit is not set on the Occupancy attribute, then the
+     *   - If the server supports the OCC feature, and the Occupied bit is not set on the Occupancy attribute, then the
      *     UnoccupiedCoolingSetpoint attribute shall be set to the CoolingSetpoint
      *
-     *   • Otherwise, the OccupiedCoolingSetpoint attribute shall be set to the CoolingSetpoint If a HeatingSetpoint was
-     *     used to determine the heating setpoint:
+     *   - Otherwise, the OccupiedCoolingSetpoint attribute shall be set to the CoolingSetpoint
      *
-     *   • If the server supports the OCC feature, and the Occupied bit is not set on the Occupancy attribute, then the
+     * If a HeatingSetpoint was used to determine the heating setpoint:
+     *
+     *   - If the server supports the OCC feature, and the Occupied bit is not set on the Occupancy attribute, then the
      *     UnoccupiedHeatingSetpoint attribute shall be set to the HeatingSetpoint
      *
-     *   • Otherwise, the OccupiedHeatingSetpoint attribute shall be set to the HeatingSetpoint The
-     *     ScheduleTransitionStruct shall be invalid if all the following are true:
+     *   - Otherwise, the OccupiedHeatingSetpoint attribute shall be set to the HeatingSetpoint
      *
-     *   • The HeatingSetpoint field is not provided
+     * The ScheduleTransitionStruct shall be invalid if all the following are true:
      *
-     *   • The PresetHandle field is not provided
+     *   - The HeatingSetpoint field is not provided
      *
-     *   • The PresetHandle field on the encompassing ScheduleStruct is not provided
+     *   - The PresetHandle field is not provided
      *
-     *   • The SystemMode field is provided and has the value Heat or Auto, or the SystemMode field on the parent
-     *     ScheduleStruct has the value Heat or Auto The ScheduleTransitionStruct shall be invalid if all the following
-     *     are true:
+     *   - The PresetHandle field on the encompassing ScheduleStruct is not provided
      *
-     *   • The CoolingSetpoint field is not provided
+     *   - The SystemMode field is provided and has the value Heat or Auto, or the SystemMode field on the parent
+     *     ScheduleStruct has the value Heat or Auto
      *
-     *   • The PresetHandle field is not provided
+     * The ScheduleTransitionStruct shall be invalid if all the following are true:
      *
-     *   • The PresetHandle field on the encompassing ScheduleStruct is not provided
+     *   - The CoolingSetpoint field is not provided
      *
-     *   • The SystemMode field is provided and has the value Cool or Auto, or the SystemMode field on the parent
+     *   - The PresetHandle field is not provided
+     *
+     *   - The PresetHandle field on the encompassing ScheduleStruct is not provided
+     *
+     *   - The SystemMode field is provided and has the value Cool or Auto, or the SystemMode field on the parent
      *     ScheduleStruct has the value Cool or Auto
      *
      * @see {@link MatterSpecification.v142.Cluster} § 4.3.8.31
@@ -972,6 +976,49 @@ export namespace Thermostat {
     export interface SetActiveScheduleRequest extends TypeFromSchema<typeof TlvSetActiveScheduleRequest> {}
 
     /**
+     * The value of Thermostat.requestType
+     */
+    export enum RequestType {
+        BeginWrite = 0,
+        CommitWrite = 1,
+        RollbackWrite = 2
+    }
+
+    /**
+     * Input to the Thermostat atomicRequest command
+     */
+    export const TlvAtomicRequest = TlvObject({
+        requestType: TlvField(0, TlvEnum<RequestType>()),
+        attributeRequests: TlvField(1, TlvArray(TlvAttributeId)),
+        timeout: TlvOptionalField(2, TlvUInt16)
+    });
+
+    /**
+     * Input to the Thermostat atomicRequest command
+     */
+    export interface AtomicRequest extends TypeFromSchema<typeof TlvAtomicRequest> {}
+
+    /**
+     * The value of Thermostat.entry
+     */
+    export const TlvEntry = TlvObject({
+        attributeId: TlvField(0, TlvAttributeId),
+        statusCode: TlvField(1, TlvEnum<Status>())
+    });
+
+    /**
+     * The value of Thermostat.entry
+     */
+    export interface Entry extends TypeFromSchema<typeof TlvEntry> {}
+
+    export const TlvAtomicResponse = TlvObject({
+        statusCode: TlvField(0, TlvEnum<Status>()),
+        attributeStatus: TlvField(1, TlvArray(TlvEntry)),
+        timeout: TlvOptionalField(2, TlvUInt16)
+    });
+    export interface AtomicResponse extends TypeFromSchema<typeof TlvAtomicResponse> {}
+
+    /**
      * @see {@link MatterSpecification.v142.Cluster} § 4.3.8.5
      */
     export const HvacSystemType = {
@@ -980,13 +1027,13 @@ export namespace Thermostat {
          *
          * These bits shall indicate what stage of cooling the HVAC system is using.
          *
-         *   • 00 = Cool Stage 1
+         *   - 00 = Cool Stage 1
          *
-         *   • 01 = Cool Stage 2
+         *   - 01 = Cool Stage 2
          *
-         *   • 10 = Cool Stage 3
+         *   - 10 = Cool Stage 3
          *
-         *   • 11 = Reserved
+         *   - 11 = Reserved
          *
          * @see {@link MatterSpecification.v142.Cluster} § 4.3.8.5.1
          */
@@ -997,13 +1044,13 @@ export namespace Thermostat {
          *
          * These bits shall indicate what stage of heating the HVAC system is using.
          *
-         *   • 00 = Heat Stage 1
+         *   - 00 = Heat Stage 1
          *
-         *   • 01 = Heat Stage 2
+         *   - 01 = Heat Stage 2
          *
-         *   • 10 = Heat Stage 3
+         *   - 10 = Heat Stage 3
          *
-         *   • 11 = Reserved
+         *   - 11 = Reserved
          *
          * @see {@link MatterSpecification.v142.Cluster} § 4.3.8.5.2
          */
@@ -1014,9 +1061,9 @@ export namespace Thermostat {
          *
          * This bit shall indicate whether the HVAC system is conventional or a heat pump.
          *
-         *   • 0 = Conventional
+         *   - 0 = Conventional
          *
-         *   • 1 = Heat Pump
+         *   - 1 = Heat Pump
          *
          * @see {@link MatterSpecification.v142.Cluster} § 4.3.8.5.3
          */
@@ -1027,9 +1074,9 @@ export namespace Thermostat {
          *
          * This bit shall indicate whether the HVAC system uses fuel.
          *
-         *   • 0 = Does not use fuel
+         *   - 0 = Does not use fuel
          *
-         *   • 1 = Uses fuel
+         *   - 1 = Uses fuel
          *
          * @see {@link MatterSpecification.v142.Cluster} § 4.3.8.5.4
          */
@@ -1059,13 +1106,13 @@ export namespace Thermostat {
     /**
      * > [!NOTE]
      *
-     * > CoolingAndHeating
+     * > A thermostat indicating it supports CoolingAndHeating (or CoolingAndHeatingWithReheat) SHOULD be able to
+     *   request heating or cooling on demand and will usually support the Auto SystemMode.
      *
-     * A thermostat indicating it supports CoolingAndHeating (or CoolingAndHeatingWithReheat) SHOULD be able to request
-     * heating or cooling on demand and will usually support the Auto SystemMode.
+     * > [!NOTE]
      *
-     * Systems which support cooling or heating, requiring external intervention to change modes or where the whole
-     * building must be in the same mode, SHOULD report CoolingOnly or HeatingOnly based on the current capability.
+     * > Systems which support cooling or heating, requiring external intervention to change modes or where the whole
+     *   building must be in the same mode, SHOULD report CoolingOnly or HeatingOnly based on the current capability.
      *
      * @see {@link MatterSpecification.v142.Cluster} § 4.3.8.20
      */
@@ -1396,49 +1443,6 @@ export namespace Thermostat {
     export interface SetpointRaiseLowerRequest extends TypeFromSchema<typeof TlvSetpointRaiseLowerRequest> {}
 
     /**
-     * The value of Thermostat.requestType
-     */
-    export enum RequestType {
-        BeginWrite = 0,
-        CommitWrite = 1,
-        RollbackWrite = 2
-    }
-
-    /**
-     * Input to the Thermostat atomicRequest command
-     */
-    export const TlvAtomicRequest = TlvObject({
-        requestType: TlvField(0, TlvEnum<RequestType>()),
-        attributeRequests: TlvField(1, TlvArray(TlvAttributeId)),
-        timeout: TlvOptionalField(2, TlvUInt16)
-    });
-
-    /**
-     * Input to the Thermostat atomicRequest command
-     */
-    export interface AtomicRequest extends TypeFromSchema<typeof TlvAtomicRequest> {}
-
-    /**
-     * The value of Thermostat.entry
-     */
-    export const TlvEntry = TlvObject({
-        attributeId: TlvField(0, TlvAttributeId),
-        statusCode: TlvField(1, TlvEnum<Status>())
-    });
-
-    /**
-     * The value of Thermostat.entry
-     */
-    export interface Entry extends TypeFromSchema<typeof TlvEntry> {}
-
-    export const TlvAtomicResponse = TlvObject({
-        statusCode: TlvField(0, TlvEnum<Status>()),
-        attributeStatus: TlvField(1, TlvArray(TlvEntry)),
-        timeout: TlvOptionalField(2, TlvUInt16)
-    });
-    export interface AtomicResponse extends TypeFromSchema<typeof TlvAtomicResponse> {}
-
-    /**
      * A ThermostatCluster supports these elements if it supports feature Occupancy.
      */
     export const OccupancyComponent = MutableCluster.Component({
@@ -1466,7 +1470,7 @@ export namespace Thermostat {
              * Indicates the absolute minimum level that the heating setpoint may be set to. This is a limitation
              * imposed by the manufacturer.
              *
-             * ### Refer to Setpoint Limits for constraints
+             * Refer to Setpoint Limits for constraints
              *
              * @see {@link MatterSpecification.v142.Cluster} § 4.3.9.5
              */
@@ -1488,7 +1492,9 @@ export namespace Thermostat {
             piHeatingDemand: OptionalAttribute(0x8, TlvUInt8.bound({ max: 100 })),
 
             /**
-             * Indicates the heating mode setpoint when the room is occupied. Refer to Setpoint Limits for constraints.
+             * Indicates the heating mode setpoint when the room is occupied.
+             *
+             * Refer to Setpoint Limits for constraints.
              *
              * If an attempt is made to set this attribute to a value greater than MaxHeatSetpointLimit or less than
              * MinHeatSetpointLimit, a response with the status code CONSTRAINT_ERROR shall be returned.
@@ -1562,7 +1568,7 @@ export namespace Thermostat {
              * Indicates the absolute maximum level that the cooling setpoint may be set to. This is a limitation
              * imposed by the manufacturer.
              *
-             * ### Refer to Setpoint Limits for constraints
+             * Refer to Setpoint Limits for constraints
              *
              * @see {@link MatterSpecification.v142.Cluster} § 4.3.9.8
              */
@@ -1579,7 +1585,9 @@ export namespace Thermostat {
             piCoolingDemand: OptionalAttribute(0x7, TlvUInt8.bound({ max: 100 })),
 
             /**
-             * Indicates the cooling mode setpoint when the room is occupied. Refer to Setpoint Limits for constraints.
+             * Indicates the cooling mode setpoint when the room is occupied.
+             *
+             * Refer to Setpoint Limits for constraints.
              *
              * If an attempt is made to set this attribute to a value greater than MaxCoolSetpointLimit or less than
              * MinCoolSetpointLimit, a response with the status code CONSTRAINT_ERROR shall be returned.
@@ -1673,8 +1681,9 @@ export namespace Thermostat {
     export const CoolingAndOccupancyComponent = MutableCluster.Component({
         attributes: {
             /**
-             * Indicates the cooling mode setpoint when the room is unoccupied. Refer to Setpoint Limits for
-             * constraints.
+             * Indicates the cooling mode setpoint when the room is unoccupied.
+             *
+             * Refer to Setpoint Limits for constraints.
              *
              * If an attempt is made to set this attribute to a value greater than MaxCoolSetpointLimit or less than
              * MinCoolSetpointLimit, a response with the status code CONSTRAINT_ERROR shall be returned.
@@ -1701,16 +1710,16 @@ export namespace Thermostat {
     export const HeatingAndOccupancyComponent = MutableCluster.Component({
         attributes: {
             /**
-             * Indicates the heating mode setpoint when the room is unoccupied. Refer to Setpoint Limits for
-             * constraints.
+             * Indicates the heating mode setpoint when the room is unoccupied.
+             *
+             * Refer to Setpoint Limits for constraints.
              *
              * If an attempt is made to set this attribute to a value greater than MaxHeatSetpointLimit or less than
              * MinHeatSetpointLimit, a response with the status code CONSTRAINT_ERROR shall be returned.
              *
              * If this attribute is set to a value that is greater than (UnoccupiedCoolingSetpoint -
              * MinSetpointDeadBand), the value of UnoccupiedCoolingSetpoint shall be adjusted to
-             *
-             * + MinSetpointDeadBand).
+             * (UnoccupiedHeatingSetpoint + MinSetpointDeadBand).
              *
              * If the occupancy status of the room is unknown, this attribute shall NOT be used.
              *
@@ -1740,8 +1749,10 @@ export namespace Thermostat {
              * > Prior to revision 8 of this cluster specification the value of this attribute was constrained to a
              *   range of 0°C to 2.5°C.
              *
-             * For backwards compatibility, this attribute is optionally writeable. However any writes to this attribute
-             * shall be silently ignored.
+             * > [!NOTE]
+             *
+             * > For backwards compatibility, this attribute is optionally writeable. However any writes to this
+             *   attribute shall be silently ignored.
              *
              * @see {@link MatterSpecification.v142.Cluster} § 4.3.9.21
              */
@@ -1980,7 +1991,9 @@ export namespace Thermostat {
             ),
 
             /**
-             * This attribute shall contain the current list of configured presets. On receipt of a write request:
+             * This attribute shall contain the current list of configured presets.
+             *
+             * On receipt of a write request:
              *
              *   1. If the PresetHandle field is null, the PresetStruct shall be treated as an added preset, and the
              *      device shall create a new unique value for the PresetHandle field.
@@ -2114,7 +2127,9 @@ export namespace Thermostat {
             ),
 
             /**
-             * This attribute shall contain a list of ScheduleStructs. On receipt of a write request:
+             * This attribute shall contain a list of ScheduleStructs.
+             *
+             * On receipt of a write request:
              *
              *   1. For all schedules in the write request:
              *
@@ -2239,6 +2254,13 @@ export namespace Thermostat {
     });
 
     /**
+     * A ThermostatCluster supports these elements if it supports features Presets or MatterScheduleConfiguration.
+     */
+    export const PresetsOrMatterScheduleConfigurationComponent = MutableCluster.Component({
+        commands: { atomicRequest: Command(0xfe, TlvAtomicRequest, 0xfd, TlvAtomicResponse) }
+    });
+
+    /**
      * These elements and properties are present in all Thermostat clusters.
      */
     export const Base = MutableCluster.Component({
@@ -2304,14 +2326,14 @@ export namespace Thermostat {
             /**
              * Indicates the current Calculated Local Temperature, when available.
              *
-             *   • If the LTNE feature is not supported:
+             *   - If the LTNE feature is not supported:
              *
-             *     ◦ If the LocalTemperatureCalibration is invalid or currently unavailable, the attribute shall report
+             *     - If the LocalTemperatureCalibration is invalid or currently unavailable, the attribute shall report
              *       null.
              *
-             *     ◦ If the LocalTemperatureCalibration is valid, the attribute shall report that value.
+             *     - If the LocalTemperatureCalibration is valid, the attribute shall report that value.
              *
-             *   • Otherwise, if the LTNE feature is supported, there is no feedback externally available for the
+             *   - Otherwise, if the LTNE feature is supported, there is no feedback externally available for the
              *     LocalTemperatureCalibration. In that case, the LocalTemperature attribute shall always report null.
              *
              * @see {@link MatterSpecification.v142.Cluster} § 4.3.9.2
@@ -2459,8 +2481,9 @@ export namespace Thermostat {
             ),
 
             /**
-             * Indicates the current relay state of the heat, cool, and fan relays. Unimplemented outputs shall be
-             * treated as if they were Off.
+             * Indicates the current relay state of the heat, cool, and fan relays.
+             *
+             * Unimplemented outputs shall be treated as if they were Off.
              *
              * @see {@link MatterSpecification.v142.Cluster} § 4.3.9.32
              */
@@ -2511,11 +2534,11 @@ export namespace Thermostat {
              * the SystemMode attribute value that provides the highest stage of heating (e.g., emergency heat) and
              * continue operating in that running state until the OccupiedHeatingSetpoint value is reached. For example:
              *
-             *   • Calculated Local Temperature = 10.0°C
+             *   - Calculated Local Temperature = 10.0°C
              *
-             *   • OccupiedHeatingSetpoint = 16.0°C
+             *   - OccupiedHeatingSetpoint = 16.0°C
              *
-             *   • EmergencyHeatDelta = 2.0°C
+             *   - EmergencyHeatDelta = 2.0°C
              *
              * ⇒ OccupiedHeatingSetpoint - Calculated Local Temperature ≥? EmergencyHeatDelta
              *
@@ -2645,9 +2668,7 @@ export namespace Thermostat {
             /**
              * @see {@link MatterSpecification.v142.Cluster} § 4.3.10.1
              */
-            setpointRaiseLower: Command(0x0, TlvSetpointRaiseLowerRequest, 0x0, TlvNoResponse),
-
-            atomicRequest: Command(0xfe, TlvAtomicRequest, 0xfd, TlvAtomicResponse)
+            setpointRaiseLower: Command(0x0, TlvSetpointRaiseLowerRequest, 0x0, TlvNoResponse)
         },
 
         /**
@@ -2667,6 +2688,8 @@ export namespace Thermostat {
             { flags: { setback: true, occupancy: true }, component: SetbackAndOccupancyComponent },
             { flags: { presets: true }, component: PresetsComponent },
             { flags: { matterScheduleConfiguration: true }, component: MatterScheduleConfigurationComponent },
+            { flags: { presets: true }, component: PresetsOrMatterScheduleConfigurationComponent },
+            { flags: { matterScheduleConfiguration: true }, component: PresetsOrMatterScheduleConfigurationComponent },
             { flags: { autoMode: true, heating: false }, component: false },
             { flags: { autoMode: true, cooling: false }, component: false },
             { flags: { heating: false, cooling: false }, component: false }
@@ -2874,6 +2897,10 @@ export namespace Thermostat {
             setActivePresetRequest: MutableCluster.AsConditional(
                 PresetsComponent.commands.setActivePresetRequest,
                 { mandatoryIf: [PRES] }
+            ),
+            atomicRequest: MutableCluster.AsConditional(
+                PresetsOrMatterScheduleConfigurationComponent.commands.atomicRequest,
+                { mandatoryIf: [PRES, MSCH] }
             )
         }
     });

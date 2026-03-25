@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 import { InteractionSession } from "#action/Interactable.js";
 import { NodeProtocol } from "#action/protocols.js";
 import { AccessControl } from "#action/server/AccessControl.js";
-import { AccessLevel } from "#model";
-import { BitmapSchema, NodeId, WildcardPathFlagsBitmap } from "#types";
+import { AccessLevel } from "@matter/model";
+import { BitmapSchema, NodeId, WildcardPathFlagsBitmap } from "@matter/types";
 
 export const WildcardPathFlagsCodec = BitmapSchema(WildcardPathFlagsBitmap);
 export const FallbackLimits: AccessControl.Limits = {
@@ -40,6 +40,14 @@ export abstract class DataResponse<SessionT extends InteractionSession = Interac
 
     protected get session() {
         return this.#session;
+    }
+
+    /**
+     * Update the session for processing subsequent chunks.
+     * This allows reusing the same response instance while maintaining state across chunks.
+     */
+    protected updateSession(session: SessionT) {
+        this.#session = session;
     }
 
     /**

@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { camelize } from "#general";
-import { ClusterModel, FieldModel } from "../../models/index.js";
+import { camelize } from "@matter/general";
+import { ClusterModel } from "../../models/index.js";
 
 export type FeatureFlags = string[];
 export type FeatureBitmap = { [name: string]: boolean };
@@ -29,7 +29,7 @@ export function FeatureBitmap(bitmap: FeatureBitmap | FeatureFlags = {}): Featur
 export function translateBitmap(bitmap: FeatureBitmap, cluster: ClusterModel) {
     return Object.fromEntries(
         Object.entries(bitmap).map(([k, v]) => {
-            const feature = cluster.featureMap.get(FieldModel, k);
+            const feature = cluster.featureMap.fields(k);
             return [camelize(feature?.title ?? k), v];
         }),
     );

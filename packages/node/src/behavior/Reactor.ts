@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import type { Endpoint } from "#endpoint/Endpoint.js";
-import type { Observable, Observer, Transaction } from "#general";
-import { MaybePromise } from "#general";
+import type { Observable, Observer, Transaction } from "@matter/general";
+import { MaybePromise } from "@matter/general";
 import type { Behavior } from "./Behavior.js";
 
 /**

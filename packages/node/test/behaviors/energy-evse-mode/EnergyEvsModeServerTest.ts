@@ -1,14 +1,14 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { EnergyEvseModeServer } from "#behaviors/energy-evse-mode";
-import { EnergyEvseMode } from "#clusters/energy-evse-mode";
-import { ModeBase } from "#clusters/mode-base";
 import { OnOffPlugInUnitDevice } from "#devices/on-off-plug-in-unit";
 import { Endpoint } from "#endpoint/Endpoint.js";
+import { EnergyEvseMode } from "@matter/types/clusters/energy-evse-mode";
+import { ModeBase } from "@matter/types/clusters/mode-base";
 import { MockServerNode } from "../../node/mock-server-node.js";
 
 const DeviceType = OnOffPlugInUnitDevice.with(EnergyEvseModeServer);

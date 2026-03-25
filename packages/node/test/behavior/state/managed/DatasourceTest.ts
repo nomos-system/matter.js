@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -11,10 +11,10 @@ import { StateType } from "#behavior/state/StateType.js";
 import { BehaviorSupervisor } from "#behavior/supervision/BehaviorSupervisor.js";
 import { RootSupervisor } from "#behavior/supervision/RootSupervisor.js";
 import { ValueSupervisor } from "#behavior/supervision/ValueSupervisor.js";
-import { AsyncObservable, MaybePromise, MockCrypto, Observable, UnsettledStateError } from "#general";
-import { DataModelPath, DatatypeModel, FieldElement, FieldModel } from "#model";
-import { Val } from "#protocol";
-import { EndpointNumber } from "#types";
+import { AsyncObservable, MaybePromise, MockCrypto, Observable, UnsettledStateError } from "@matter/general";
+import { DataModelPath, DatatypeModel, FieldElement, FieldModel } from "@matter/model";
+import { Val } from "@matter/protocol";
+import { EndpointNumber } from "@matter/types";
 
 class MyState {
     foo = "bar";
@@ -54,7 +54,7 @@ function createDatasource<const T extends StateType = typeof MyState>(
         entropy: MockCrypto(),
         location: {
             endpoint: EndpointNumber(1),
-            path: DataModelPath("TestDatasource"),
+            path: new DataModelPath("TestDatasource"),
         },
         type: (options.type ?? MyState) as T,
         supervisor,

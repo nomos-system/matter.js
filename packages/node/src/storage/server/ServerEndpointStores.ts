@@ -1,14 +1,14 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import type { Endpoint } from "#endpoint/Endpoint.js";
-import type { StorageContext } from "#general";
-import { ImplementationError, InternalError, Logger } from "#general";
 import { type ServerNode } from "#node/ServerNode.js";
 import { IdentityConflictError } from "#node/server/IdentityService.js";
+import type { StorageContext } from "@matter/general";
+import { ImplementationError, InternalError, Logger } from "@matter/general";
 import { ServerEndpointStore } from "./ServerEndpointStore.js";
 
 const NEXT_NUMBER_KEY = "__nextNumber__";

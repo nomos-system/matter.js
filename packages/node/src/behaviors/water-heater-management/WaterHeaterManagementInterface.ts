@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { MaybePromise } from "#general";
-import { WaterHeaterManagement } from "#clusters/water-heater-management";
+import { MaybePromise } from "@matter/general";
+import { WaterHeaterManagement } from "@matter/types/clusters/water-heater-management";
 
 export namespace WaterHeaterManagementInterface {
     export interface Base {
@@ -19,7 +19,9 @@ export namespace WaterHeaterManagementInterface {
         boost(request: WaterHeaterManagement.BoostRequest): MaybePromise;
 
         /**
-         * Allows a client to cancel an ongoing Boost operation. This command has no payload.
+         * Allows a client to cancel an ongoing Boost operation.
+         *
+         * This command has no payload.
          *
          * @see {@link MatterSpecification.v142.Cluster} § 9.5.8.2
          */

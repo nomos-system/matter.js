@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -12,11 +12,11 @@ import { TlvField, TlvObject } from "../tlv/TlvObject.js";
 import { TlvUInt8, TlvEnum } from "../tlv/TlvNumber.js";
 import { TlvString } from "../tlv/TlvString.js";
 import { TypeFromSchema } from "../tlv/TlvSchema.js";
-import { AccessLevel } from "#model";
+import { AccessLevel } from "@matter/model";
 import { BitFlag } from "../schema/BitmapSchema.js";
 import { TlvArray } from "../tlv/TlvArray.js";
 import { TlvNoArguments } from "../tlv/TlvNoArguments.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace MediaInput {
@@ -84,7 +84,7 @@ export namespace MediaInput {
         index: TlvField(0, TlvUInt8),
 
         /**
-         * ### This field shall indicate the type of input
+         * This field shall indicate the type of input
          *
          * @see {@link MatterSpecification.v142.Cluster} § 6.9.5.2.2
          */
@@ -142,8 +142,9 @@ export namespace MediaInput {
     export const NameUpdatesComponent = MutableCluster.Component({
         commands: {
             /**
-             * Upon receipt, this command shall rename the input at a specific index in the Input List. Updates to the
-             * input name shall appear in the device’s settings menus.
+             * Upon receipt, this command shall rename the input at a specific index in the Input List.
+             *
+             * Updates to the input name shall appear in the device’s settings menus.
              *
              * @see {@link MatterSpecification.v142.Cluster} § 6.9.7.4
              */

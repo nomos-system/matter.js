@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -14,7 +14,7 @@ import { Endpoint } from "#endpoint/Endpoint.js";
 import { MutableEndpoint } from "#endpoint/type/MutableEndpoint.js";
 import { AggregatorEndpoint } from "#endpoints/aggregator";
 import type { Node } from "#node/Node.js";
-import { ClusterId, DeviceTypeId, EndpointNumber } from "#types";
+import { ClusterId, DeviceTypeId, EndpointNumber } from "@matter/types";
 import { MockEndpointType } from "../../behavior/mock-behavior.js";
 import { MockEndpoint } from "../../endpoint/mock-endpoint.js";
 import { MockServerNode } from "../../node/mock-server-node.js";

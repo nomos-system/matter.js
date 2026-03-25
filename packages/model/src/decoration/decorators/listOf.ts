@@ -1,14 +1,14 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Semantics } from "#decoration/semantics/Semantics.js";
-import { Decorator } from "#general";
 import { FieldModel } from "#models/FieldModel.js";
 import type { Model } from "#models/Model.js";
 import { Schema } from "#models/Schema.js";
+import { Decorator } from "@matter/general";
 
 /**
  * Decorate a property as an array.

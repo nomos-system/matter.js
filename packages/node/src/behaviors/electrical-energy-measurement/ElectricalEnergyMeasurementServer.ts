@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { ElectricalEnergyMeasurement } from "#clusters/electrical-energy-measurement";
-import { ClusterType } from "#types";
+import { ClusterType } from "@matter/types";
+import { ElectricalEnergyMeasurement } from "@matter/types/clusters/electrical-energy-measurement";
 import { ElectricalEnergyMeasurementBehavior } from "./ElectricalEnergyMeasurementBehavior.js";
 
 const ElectricalEnergyMeasurementBase = ElectricalEnergyMeasurementBehavior.for(

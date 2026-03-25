@@ -27,8 +27,7 @@
         "build": "matter-build",
         "build-clean": "matter-build --clean",
         "test": "matter-test -w",
-        "coverage": "c8 matter-test esm",
-        "embed-examples": "embedme **/README.md"
+        "coverage": "c8 matter-test esm"
     },
     "dependencies": {
         "@matter/general": "*"
@@ -57,7 +56,6 @@
                 "default": "./dist/cjs/index.js"
             }
         },
-
         "./resources": {
             "import": {
                 "types": "./dist/esm/standard/resources/index.d.ts",
@@ -70,8 +68,6 @@
         }
     },
     "imports": {
-        "#general": "@matter/general",
-        "#model": "@matter/model",
         "#*": "./src/*"
     },
     "types": "dist/esm/index.d.ts",

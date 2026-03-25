@@ -1,16 +1,16 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { Thermostat } from "#clusters/thermostat";
+import { Thermostat } from "@matter/types/clusters/thermostat";
 import { ClusterBehavior } from "../../behavior/cluster/ClusterBehavior.js";
 import { ThermostatInterface } from "./ThermostatInterface.js";
-import { ClusterType } from "#types";
-import { Identity } from "#general";
+import { ClusterType } from "@matter/types";
+import { Identity } from "@matter/general";
 
 /**
  * ThermostatBehavior is the base class for objects that support interaction with {@link Thermostat.Cluster}.

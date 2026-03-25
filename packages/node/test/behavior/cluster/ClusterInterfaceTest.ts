@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { ClusterInterface } from "#behavior/cluster/ClusterInterface.js";
 import { ActionContext } from "#behavior/context/ActionContext.js";
-import { MaybePromise } from "#general";
-import { BitFlag, ClusterType } from "#types";
+import { MaybePromise } from "@matter/general";
+import { BitFlag, ClusterType } from "@matter/types";
 import { MyCluster } from "./cluster-behavior-test-util.js";
 
 const FeaturedCluster = ClusterType({

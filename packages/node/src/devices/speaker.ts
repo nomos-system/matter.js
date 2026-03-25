@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -10,10 +10,12 @@ import { OnOffServer as BaseOnOffServer } from "../behaviors/on-off/OnOffServer.
 import { LevelControlServer as BaseLevelControlServer } from "../behaviors/level-control/LevelControlServer.js";
 import { MutableEndpoint } from "../endpoint/type/MutableEndpoint.js";
 import { SupportedBehaviors } from "../endpoint/properties/SupportedBehaviors.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 
 /**
- * This defines conformance to the Speaker device type. This feature controls the speaker volume of the device.
+ * This defines conformance to the Speaker device type.
+ *
+ * This feature controls the speaker volume of the device.
  *
  * To control unmute/mute, the On/Off cluster shall be used. A value of TRUE for the OnOff attribute shall represent the
  * volume on (not muted) state, while a value of FALSE shall represent the volume off (muted) state. For volume level

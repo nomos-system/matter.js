@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { camelize, isObject } from "#general";
 import { Lexer } from "#parser/Lexer.js";
 import { BasicToken } from "#parser/Token.js";
 import { TokenStream } from "#parser/TokenStream.js";
+import { camelize, isObject } from "@matter/general";
 import { FieldValue } from "../common/index.js";
 import { Aspect } from "./Aspect.js";
 
@@ -31,6 +31,12 @@ function isFunction(name: string): name is keyof typeof Functions {
  * A "constraint" limits possible data values.
  */
 export class Constraint extends Aspect<Constraint.Definition> implements Constraint.Ast {
+    /**
+     * Indicates that the constraint is explicitly unconstrained.  This prevents inheritance of constraints from
+     * shadow/base models via {@link extend}.
+     */
+    none?: boolean;
+
     desc?: boolean;
     value?: Constraint.Expression;
     min?: Constraint.Expression;
@@ -80,6 +86,7 @@ export class Constraint extends Aspect<Constraint.Definition> implements Constra
             return;
         }
 
+        this.none = ast.none;
         this.desc = ast.desc;
         this.value = ast.value;
         this.min = ast.min;
@@ -90,6 +97,7 @@ export class Constraint extends Aspect<Constraint.Definition> implements Constra
         this.parts = ast.parts?.length ? ast.parts.map(p => new Constraint(p)) : undefined;
 
         this.isEmpty =
+            this.none === undefined &&
             this.desc === undefined &&
             this.value === undefined &&
             this.min === undefined &&
@@ -105,6 +113,10 @@ export class Constraint extends Aspect<Constraint.Definition> implements Constra
     override extend(other: Constraint) {
         if (other.isEmpty) {
             return this;
+        }
+
+        if (other.none) {
+            return other;
         }
 
         if (this.isEmpty) {
@@ -144,20 +156,64 @@ export class Constraint extends Aspect<Constraint.Definition> implements Constra
                         }
                         break;
 
-                    case "+": {
+                    case "+":
+                    case "-": {
                         const lhs = valueOf(value.lhs);
                         const rhs = valueOf(value.rhs);
+
+                        // Propagate BigInt if either operand is one (e.g., from exponentiation).
+                        // The inner type check guards against non-numeric types (e.g. undefined
+                        // from unresolved references) that would not convert to BigInt.
+                        if (typeof lhs === "bigint" || typeof rhs === "bigint") {
+                            const l = typeof lhs === "number" && Number.isInteger(lhs) ? BigInt(lhs) : lhs;
+                            const r = typeof rhs === "number" && Number.isInteger(rhs) ? BigInt(rhs) : rhs;
+                            if (typeof l === "bigint" && typeof r === "bigint") {
+                                return type === "+" ? l + r : l - r;
+                            }
+                            return undefined;
+                        }
+
                         if (typeof lhs === "number" && typeof rhs === "number") {
-                            return lhs + rhs;
+                            return type === "+" ? lhs + rhs : lhs - rhs;
                         }
                         return undefined;
                     }
 
-                    case "-": {
+                    case "*": {
                         const lhs = valueOf(value.lhs);
                         const rhs = valueOf(value.rhs);
                         if (typeof lhs === "number" && typeof rhs === "number") {
-                            return lhs - rhs;
+                            return lhs * rhs;
+                        }
+                        return undefined;
+                    }
+
+                    case "/": {
+                        const lhs = valueOf(value.lhs);
+                        const rhs = valueOf(value.rhs);
+                        if (typeof lhs === "number" && typeof rhs === "number") {
+                            return lhs / rhs;
+                        }
+                        return undefined;
+                    }
+
+                    case "^": {
+                        const lhs = valueOf(value.lhs);
+                        const rhs = valueOf(value.rhs);
+                        if (typeof lhs === "number" && typeof rhs === "number") {
+                            // Standard mathematical convention: -a^b means -(a^b), not (-a)^b.
+                            // The parser encodes unary minus in the base, so we need to ensure
+                            // negative bases are treated as -(|base|^exp)
+                            const absLhs = Math.abs(lhs);
+                            const result = absLhs ** rhs;
+
+                            // Use BigInt when a result exceeds the JS safe integer range for precision
+                            if (result > Number.MAX_SAFE_INTEGER) {
+                                const bigResult = BigInt(absLhs) ** BigInt(rhs);
+                                return lhs < 0 ? -bigResult : bigResult;
+                            }
+
+                            return lhs < 0 ? -result : result;
                         }
                         return undefined;
                     }
@@ -210,6 +266,18 @@ export class Constraint extends Aspect<Constraint.Definition> implements Constra
             return true;
         }
 
+        // Support bigint/number cross-type matching (e.g., valueOf returns bigint
+        // for large exponents, but the tested value may be a number, or vice versa)
+        if (
+            (typeof v === "bigint" && typeof value === "number") ||
+            (typeof v === "number" && typeof value === "bigint")
+        ) {
+            // oxlint-disable-next-line eqeqeq -- cross-type bigint/number comparison
+            if (v == value) {
+                return true;
+            }
+        }
+
         if (v !== undefined || value === null) {
             return false;
         }
@@ -253,7 +321,7 @@ export class Constraint extends Aspect<Constraint.Definition> implements Constra
 export namespace Constraint {
     export type NumberOrIdentifier = number | string;
 
-    export const KEYWORDS = ["in", "min", "max", "to", "all", "desc", "true", "false"] as const;
+    export const KEYWORDS = ["in", "min", "max", "to", "all", "none", "desc", "true", "false"] as const;
 
     export const keywords = new Set<string>(KEYWORDS);
 
@@ -261,6 +329,12 @@ export namespace Constraint {
      * Parsed constraint.
      */
     export type Ast = {
+        /**
+         * Indicates the element is explicitly unconstrained.  Prevents inheritance of constraints from shadow/base
+         * models.
+         */
+        none?: boolean;
+
         /**
          * Indicates constraint is defined in prose and cannot be enforced automatically.
          */
@@ -306,7 +380,7 @@ export namespace Constraint {
      * Parsed binary operator.
      */
     export interface BinaryOperator {
-        type: "+" | "-" | ".";
+        type: "+" | "-" | "*" | "/" | "." | "^";
 
         lhs: Expression;
 
@@ -355,8 +429,11 @@ namespace Serializer {
         switch (value.type) {
             case "+":
             case "-":
+            case "*":
+            case "/":
             case ".":
-                const sep = value.type === "." ? "" : " ";
+            case "^":
+                const sep = value.type === "." || value.type === "^" ? "" : " ";
                 const sum = `${serializeValue(value.lhs, true)}${sep}${value.type}${sep}${serializeValue(value.rhs, true)}`;
                 if (inExpr) {
                     // Ideally only add parenthesis if precedence requires.  But nested expressions are not used
@@ -375,6 +452,10 @@ namespace Serializer {
     }
 
     function serializeAtom(ast: Constraint.Ast) {
+        if (ast.none) {
+            return "none";
+        }
+
         if (ast.desc) {
             return "desc";
         }
@@ -521,6 +602,10 @@ namespace Parser {
                     tokens.next();
                     return { desc: true };
 
+                case "none":
+                    tokens.next();
+                    return { none: true };
+
                 case "all":
                     tokens.next();
                     return {};
@@ -570,69 +655,107 @@ namespace Parser {
             return { [kind]: bound };
         }
 
+        // Precedence-climbing expression parser: ^ and . (highest) > * / > + -
         function parseExpression(): Constraint.Expression | undefined {
-            const value = parseValueExpression();
+            return parseAdditive();
+        }
 
+        function parseAdditive(): Constraint.Expression | undefined {
+            let value = parseMultiplicative();
             if (value === undefined) {
                 return value;
             }
+            while (tokens.token?.type === "+" || tokens.token?.type === "-") {
+                const type = tokens.token.type;
+                tokens.next();
+                const rhs = parseMultiplicative();
+                if (rhs === undefined) {
+                    constraint.error("MISSING_RIGHT_OPERAND", `Missing operand after "${type}"`);
+                    return;
+                }
+                value = { type, lhs: value, rhs };
+            }
+            return value;
+        }
 
-            switch (tokens.token?.type) {
-                case "+":
-                case "-":
-                case ".":
-                    const type = tokens.token.type;
-                    tokens.next();
-                    const rhs = parseValueExpression();
-                    if (rhs === undefined) {
-                        constraint.error("MISSING_RIGHT_OPERAND", `Missing operand after "${type}"`);
+        function parseMultiplicative(): Constraint.Expression | undefined {
+            let value = parsePower();
+            if (value === undefined) {
+                return value;
+            }
+            while (tokens.token?.type === "*" || tokens.token?.type === "/") {
+                const type = tokens.token.type;
+                tokens.next();
+                const rhs = parsePower();
+                if (rhs === undefined) {
+                    constraint.error("MISSING_RIGHT_OPERAND", `Missing operand after "${type}"`);
+                    return;
+                }
+                value = { type, lhs: value, rhs };
+            }
+            return value;
+        }
+
+        function parsePower(): Constraint.Expression | undefined {
+            let value = parsePrimary();
+            if (value === undefined) {
+                return value;
+            }
+            while (tokens.token?.type === "^" || tokens.token?.type === ".") {
+                const type = tokens.token.type;
+                tokens.next();
+                const rhs = parsePrimary();
+                if (rhs === undefined) {
+                    constraint.error("MISSING_RIGHT_OPERAND", `Missing operand after "${type}"`);
+                    return;
+                }
+                value = { type, lhs: value, rhs };
+            }
+            return value;
+        }
+
+        function parsePrimary(): Constraint.Expression | undefined {
+            const value = parseValueExpression();
+
+            // Handle function calls like maxOf(...)
+            if (value !== undefined && tokens.token?.type === "(") {
+                const functionName = FieldValue.referenced(value);
+                if (functionName === undefined) {
+                    unexpected();
+                    return;
+                }
+
+                tokens.next();
+                if (!isFunction(functionName)) {
+                    constraint.error("UNKNOWN_FUNCTION", `Unknown function "${functionName}"`);
+                    return;
+                }
+
+                const args = Array<Constraint.Expression>();
+                while ((tokens.token?.type as BasicToken.Operator) !== ")") {
+                    const expr = parseExpression();
+                    if (expr === undefined) {
                         return;
                     }
+                    args.push(expr);
+                    switch (tokens.token?.type as BasicToken.Operator) {
+                        case ",":
+                            tokens.next();
+                            break;
 
-                    return {
-                        type,
-                        lhs: value,
-                        rhs,
-                    };
+                        case ")":
+                            break;
 
-                case "(":
-                    const functionName = FieldValue.referenced(value);
-                    if (functionName === undefined) {
-                        unexpected();
-                        return;
-                    }
-
-                    tokens.next();
-                    if (!isFunction(functionName)) {
-                        constraint.error("UNKNOWN_FUNCTION", `Unknown function "${functionName}"`);
-                        return;
-                    }
-
-                    const args = Array<Constraint.Expression>();
-                    while ((tokens.token?.type as BasicToken.Operator) !== ")") {
-                        const expr = parseValueExpression();
-                        if (expr === undefined) {
+                        default:
+                            unexpected();
                             return;
-                        }
-                        args.push(expr);
-                        switch (tokens.token?.type as BasicToken.Operator) {
-                            case ",":
-                                tokens.next();
-                                break;
-
-                            case ")":
-                                break;
-
-                            default:
-                                unexpected();
-                                return;
-                        }
                     }
-                    tokens.next();
-                    return {
-                        type: functionName,
-                        args,
-                    };
+                }
+                tokens.next();
+                return {
+                    type: functionName,
+                    args,
+                };
             }
 
             return value;

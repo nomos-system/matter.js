@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { MaybePromise } from "#general";
-import { ColorControl } from "#clusters/color-control";
+import { MaybePromise } from "@matter/general";
+import { ColorControl } from "@matter/types/clusters/color-control";
 
 export namespace ColorControlInterface {
     export interface HueSaturation {
@@ -131,9 +131,13 @@ export namespace ColorControlInterface {
         /**
          * This command is provided to allow MoveTo and Step commands to be stopped.
          *
-         * NOTE This automatically provides symmetry to the Level Control cluster.
+         * > [!NOTE]
          *
-         * NOTE The StopMoveStep command has no effect on an active color loop.
+         * > This automatically provides symmetry to the Level Control cluster.
+         *
+         * > [!NOTE]
+         *
+         * > The StopMoveStep command has no effect on an active color loop.
          *
          * @see {@link MatterSpecification.v142.Cluster} § 3.2.8.20
          */

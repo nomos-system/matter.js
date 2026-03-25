@@ -1,11 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Behavior } from "#behavior/Behavior.js";
 import { ClusterBehavior } from "#behavior/cluster/ClusterBehavior.js";
+import { GlobalAttributeState } from "#behavior/cluster/ClusterState.js";
 import { ActionContext } from "#behavior/context/ActionContext.js";
 import { FeatureMismatchError } from "#behavior/internal/ServerBehaviorBacking.js";
 import { StateType } from "#behavior/state/StateType.js";
@@ -22,18 +23,22 @@ import {
     MatterAggregateError,
     MaybePromise,
     Observable,
-} from "#general";
-import { AttributeElement, ClusterModel } from "#model";
+} from "@matter/general";
+import { AttributeElement, ClusterModel, CommandElement } from "@matter/model";
 import {
     Attribute,
     ClusterId,
     ClusterType,
     ClusterTypeModifier,
+    Command,
+    CommandId,
     TlvBoolean,
     TlvInt32,
+    TlvNoResponse,
     TlvNullable,
     TlvString,
-} from "#types";
+    TlvUInt8,
+} from "@matter/types";
 import { MockEndpoint } from "../../endpoint/mock-endpoint.js";
 import { MockEndpointType } from "../mock-behavior.js";
 import { My, MyBehavior, MyCluster } from "./cluster-behavior-test-util.js";
@@ -366,6 +371,82 @@ describe("ClusterBehavior", () => {
                     'The featureMap for node0.part0.myCluster does not match the implementation; please use MyClusterBehavior.with("FeatureName") to configure features',
                 );
             }
+        });
+    });
+
+    describe("non-Matter methods", () => {
+        it("excludes CommandId.NONE from accepted and generated command lists", async () => {
+            // Create a cluster with a regular command and a non-Matter method (id -1)
+            const TestCluster = ClusterType({
+                id: 0xfff1_fc99,
+                name: "TestWithMethod",
+                revision: 1,
+
+                commands: {
+                    realCommand: Command(0x01, TlvUInt8, 0x02, TlvUInt8),
+                    nonMatterMethod: {
+                        ...Command(0x01, TlvUInt8, 0x01, TlvNoResponse),
+                        requestId: CommandId.NONE,
+                        responseId: CommandId.NONE,
+                    },
+                },
+            });
+
+            interface TestInterface {
+                components: [
+                    {
+                        flags: {};
+                        methods: {
+                            realCommand(request: number): MaybePromise<number>;
+                            nonMatterMethod(request: number): MaybePromise;
+                        };
+                    },
+                ];
+            }
+
+            const TestSchema = new ClusterModel({
+                id: 0xfff1_fc99,
+                name: "TestWithMethod",
+                children: [
+                    CommandElement({
+                        id: 0x01,
+                        name: "RealCommand",
+                        response: "RealCommandResponse",
+                        type: "uint8",
+                        conformance: "M",
+                    }),
+                    CommandElement({
+                        id: 0x02,
+                        name: "RealCommandResponse",
+                        direction: "response",
+                        type: "uint8",
+                        conformance: "M",
+                    }),
+                    CommandElement({
+                        id: CommandElement.NO_ID,
+                        name: "NonMatterMethod",
+                        type: "uint8",
+                        conformance: "M",
+                    }),
+                ],
+            });
+
+            const TestBehavior = ClusterBehavior.withInterface<TestInterface>().for(TestCluster, TestSchema);
+
+            class MyTestBehavior extends TestBehavior {
+                override realCommand() {
+                    return 42;
+                }
+
+                override nonMatterMethod() {}
+            }
+
+            const endpoint = await MockEndpoint.createWith(MyTestBehavior);
+            await endpoint.act(agent => {
+                const state = agent.testWithMethod.state as unknown as GlobalAttributeState;
+                expect(state.acceptedCommandList).deep.equals([CommandId(0x01)]);
+                expect(state.generatedCommandList).deep.equals([CommandId(0x02)]);
+            });
         });
     });
 

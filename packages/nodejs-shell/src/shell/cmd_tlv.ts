@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Bytes, Diagnostic, Logger, serialize, UnexpectedDataError } from "#general";
-import { TlvAny, TlvArrayReader, TlvElement, TlvStream, TlvType } from "#types";
+import { Bytes, Diagnostic, Logger, serialize, UnexpectedDataError } from "@matter/general";
+import { TlvAny, TlvArrayReader, TlvElement, TlvStream, TlvType } from "@matter/types";
 import type { Argv } from "yargs";
 
 const logger = Logger.get("tlv");

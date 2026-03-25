@@ -1,10 +1,15 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import type { SupportedTransportsBitmap } from "#common/SupportedTransportsBitmap.js";
+import { PeerLossContext } from "#peer/PeerLossContext.js";
+import { SessionClosedError } from "#protocol/errors.js";
+import { MessageChannel } from "#protocol/MessageChannel.js";
+import type { MessageExchange } from "#protocol/MessageExchange.js";
+import { SessionIntervals } from "#session/SessionIntervals.js";
 import {
     AsyncObservable,
     Bytes,
@@ -21,11 +26,8 @@ import {
     Time,
     Timespan,
     Timestamp,
-} from "#general";
-import { SessionClosedError } from "#protocol/errors.js";
-import { MessageChannel } from "#protocol/MessageChannel.js";
-import type { MessageExchange } from "#protocol/MessageExchange.js";
-import type { NodeId, TypeFromPartialBitSchema } from "#types";
+} from "@matter/general";
+import type { NodeId, TypeFromPartialBitSchema } from "@matter/types";
 import type {
     DecodedMessage,
     DecodedPacket,
@@ -58,9 +60,9 @@ export abstract class Session {
     readonly #exchanges = new Set<MessageExchange>();
     protected deferredClose = false;
 
-    protected readonly idleInterval: Duration;
-    protected readonly activeInterval: Duration;
-    protected readonly activeThreshold: Duration;
+    protected idleInterval: Duration;
+    protected activeInterval: Duration;
+    protected activeThreshold: Duration;
     protected readonly dataModelRevision: number;
     protected readonly interactionModelRevision: number;
     protected readonly specificationVersion: number;
@@ -125,7 +127,7 @@ export abstract class Session {
     notifyActivity(messageReceived: boolean) {
         this.timestamp = Time.nowMs;
         if (messageReceived) {
-            // only update active timestamp if we received a message
+            // only update the active timestamp if we received a message
             this.activeTimestamp = this.timestamp;
         }
     }
@@ -197,6 +199,16 @@ export abstract class Session {
         };
     }
 
+    /**
+     * Allows updating the Session timing parameters based on received information from the peer during PASE/CASE initialization
+     */
+    set timingParameters(intervals: Partial<SessionIntervals>) {
+        const { idleInterval, activeInterval, activeThreshold } = SessionIntervals(intervals);
+        this.idleInterval = idleInterval;
+        this.activeInterval = activeInterval;
+        this.activeThreshold = activeThreshold;
+    }
+
     abstract isSecure: boolean;
     abstract id: number;
     abstract peerSessionId: number;
@@ -257,21 +269,19 @@ export abstract class Session {
      * This terminates (potentially) subscriptions and exchanges without notifying peers.  It places the session in a
      * closing state so no further exchanges are accepted.
      *
-     * @param except an exchange that should not be forced close; this allows the current exchange to remain open
-     * @param keepSubscriptions whether to keep the subscriptions open after force-closing the session.
-     *  TODO refactor when moving subscriptions away from sessions
+     * TODO refactor when moving subscriptions away from sessions
      */
-    async initiateForceClose(except?: MessageExchange, keepSubscriptions = false) {
+    async initiateForceClose(context: PeerLossContext) {
         await this.initiateClose(async () => {
-            if (!keepSubscriptions) {
+            if (!context.keepSubscriptions) {
                 await this.closeSubscriptions();
             }
             for (const exchange of this.#exchanges) {
-                if (exchange === except) {
+                if (exchange === context.currentExchange) {
                     this.deferredClose = true;
                     continue;
                 }
-                await exchange.close(true);
+                await exchange.close(context.cause);
             }
         });
     }
@@ -323,13 +333,14 @@ export abstract class Session {
         }
     }
 
+    async [Symbol.asyncDispose]() {
+        await this.close();
+    }
+
     protected get manager() {
         return this.#manager;
     }
 
-    /**
-     * This is primarily intended for testing.
-     */
     protected set channel(channel: MessageChannel) {
         if (this.#channel !== undefined) {
             throw new ImplementationError("Cannot replace active channel");
@@ -342,7 +353,7 @@ export abstract class Session {
     }
 
     /**
-     * Invoked by manager when the session is "live".
+     * Invoked by the manager when the session is "live".
      *
      * This is separate from construction because we sometimes discard sessions without installing in a manager or
      * closing.
@@ -363,6 +374,12 @@ export abstract class Session {
 export namespace Session {
     export interface CommonConfig {
         manager?: SessionManager;
+
+        /**
+         * When setting this to true the session is not automatically registered to a provided session manager.
+         * You need to do this yourself.
+         */
+        delayManagerRegistration?: true;
         channel?: Channel<Bytes>;
     }
 

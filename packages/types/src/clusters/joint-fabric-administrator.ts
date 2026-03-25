@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -10,7 +10,7 @@ import { MutableCluster } from "../cluster/mutation/MutableCluster.js";
 import { WritableAttribute, Command, TlvNoResponse } from "../cluster/Cluster.js";
 import { TlvFabricIndex } from "../datatype/FabricIndex.js";
 import { TlvNullable } from "../tlv/TlvNullable.js";
-import { AccessLevel } from "#model";
+import { AccessLevel } from "@matter/model";
 import { TlvNoArguments } from "../tlv/TlvNoArguments.js";
 import { TlvField, TlvObject } from "../tlv/TlvObject.js";
 import { TlvByteString } from "../tlv/TlvString.js";
@@ -19,13 +19,14 @@ import { TlvEnum, TlvUInt16, TlvUInt32 } from "../tlv/TlvNumber.js";
 import { TlvEndpointNumber } from "../datatype/EndpointNumber.js";
 import { StatusResponseError } from "../common/StatusResponseError.js";
 import { Status } from "../globals/Status.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace JointFabricAdministrator {
     /**
-     * This command shall be generated in response to a ICACCSRRequest command. Check ICAC Cross Signing for details
-     * about the generation of the ICACCSR.
+     * This command shall be generated in response to a ICACCSRRequest command.
+     *
+     * Check ICAC Cross Signing for details about the generation of the ICACCSR.
      *
      * @see {@link MatterSpecification.v142.Core} § 11.25.7.2
      */
@@ -40,8 +41,9 @@ export namespace JointFabricAdministrator {
     });
 
     /**
-     * This command shall be generated in response to a ICACCSRRequest command. Check ICAC Cross Signing for details
-     * about the generation of the ICACCSR.
+     * This command shall be generated in response to a ICACCSRRequest command.
+     *
+     * Check ICAC Cross Signing for details about the generation of the ICACCSR.
      *
      * @see {@link MatterSpecification.v142.Core} § 11.25.7.2
      */
@@ -436,8 +438,8 @@ export namespace JointFabricAdministrator {
              * This command shall be used for communicating to client the endpoint that holds the Joint Fabric
              * Administrator Cluster.
              *
-             * ### This field shall contain the unique identifier for the endpoint that holds the Joint Fabric
-             * Administrator Cluster.
+             * This field shall contain the unique identifier for the endpoint that holds the Joint Fabric Administrator
+             * Cluster.
              *
              * @see {@link MatterSpecification.v142.Core} § 11.25.7.9
              */
@@ -455,7 +457,9 @@ export namespace JointFabricAdministrator {
      * An instance of the Joint Fabric Administrator Cluster only applies to Joint Fabric Administrator nodes fulfilling
      * the role of Anchor CA.
      *
-     * NOTE Support for Joint Fabric Administrator Cluster is provisional.
+     * > [!NOTE]
+     *
+     * > Support for Joint Fabric Administrator Cluster is provisional.
      *
      * @see {@link MatterSpecification.v142.Core} § 11.25
      */

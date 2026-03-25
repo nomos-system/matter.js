@@ -31,7 +31,7 @@
     "dependencies": {
         "@matter/general": "*",
         "@matter/nodejs": "*",
-        "ws": "^8.18.3"
+        "ws": "^8.20.0"
     },
     "devDependencies": {
         "@matter/tools": "*",
@@ -49,11 +49,6 @@
         "require/**/*",
         "LICENSE"
     ],
-    "imports": {
-        "#general": "@matter/general",
-        "#nodejs": "@matter/nodejs",
-        "#node": "@matter/node"
-    },
     "type": "module",
     "main": "dist/cjs/index.js",
     "types": "dist/cjs/index.d.ts",

@@ -1,12 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import type Chai from "chai";
 import "chai-as-promised";
 import type { DiffMarker } from "./chai.js";
+import type { BootKind } from "./mocks/boot.js";
 import type { DiagnosticMessageLike, MockLogger } from "./mocks/logging.js";
 import type { MockTime } from "./mocks/time.js";
 import type { TestDescriptor, TestSuiteDescriptor } from "./test-descriptor.js";
@@ -51,7 +52,7 @@ declare global {
               /**
                * Set boot manager.
                */
-              bootSetup(boot: { reboot(): void | Promise<void> }): void;
+              bootSetup(boot: { reboot(kind?: BootKind): void | Promise<void> }): void;
 
               /**
                * Configure time.
@@ -67,6 +68,11 @@ declare global {
                * Receive intercepted log messages.
                */
               loggerSink?: (text: string, message: DiagnosticMessageLike) => void;
+
+              /**
+               * Dump information about current state of process to log.
+               */
+              generateDiagnostics?: () => string;
 
               /**
                * Extract error details.

@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -68,7 +68,7 @@ export enum MeasurementType {
     Frequency = 11,
 
     /**
-     * Power Factor ratio in+/- 1/100ths of a percent.
+     * Power Factor ratio in +/- 1/100ths of a percent.
      */
     PowerFactor = 12,
 

@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { Crypto } from "#general";
-import { Branded, Bytes, DataWriter, hex } from "#general";
+import type { Crypto } from "@matter/general";
+import { Branded, Bytes, DataWriter, hex } from "@matter/general";
 import type { FabricId } from "./FabricId.js";
 
 const COMPRESSED_FABRIC_ID_INFO = Bytes.fromString("CompressedFabric");
@@ -18,7 +18,7 @@ const COMPRESSED_FABRIC_ID_INFO = Bytes.fromString("CompressedFabric");
  *
  * @see {@link MatterSpecification.v14.Core} § 4.3.2.2
  */
-export type GlobalFabricId = Branded<bigint, "CompressedFabricId">;
+export type GlobalFabricId = Branded<bigint, "GlobalFabricId">;
 
 export function GlobalFabricId(value: Parameters<typeof BigInt>[0] | Bytes): GlobalFabricId {
     if (Bytes.isBytes(value)) {

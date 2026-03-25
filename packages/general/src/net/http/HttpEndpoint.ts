@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -55,6 +55,14 @@ export namespace HttpEndpoint {
      * Configuration options.
      */
     export interface Options {
+        certificate?: string;
+        key?: string;
+    }
+
+    /**
+     * Full configuration.
+     */
+    export interface Configuration extends Options {
         address: AppAddress.Definition;
     }
 }

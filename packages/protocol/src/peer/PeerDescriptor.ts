@@ -1,12 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { DiscoveryData } from "#common/Scanner.js";
-import { isDeepEqual, ServerAddressUdp } from "#general";
-import type { PeerDataStore } from "#peer/PeerAddressStore.js";
+import { SessionParameters } from "#session/SessionParameters.js";
+import { isDeepEqual, ServerAddressUdp } from "@matter/general";
+import { CaseAuthenticatedTag } from "@matter/types";
 import { PeerAddress } from "./PeerAddress.js";
 
 /**
@@ -21,6 +22,11 @@ export interface PeerDescriptor {
     address: PeerAddress;
 
     /**
+     * The data model revision the peer supports, if known.
+     */
+    dataModelRevision?: number;
+
+    /**
      * A physical address the peer may be accessed at, if known.
      */
     operationalAddress?: ServerAddressUdp;
@@ -31,25 +37,36 @@ export interface PeerDescriptor {
     discoveryData?: DiscoveryData;
 
     /**
-     * The data store for the peer.
-     *
-     * @deprecated
+     * Parameters from most recent session.
      */
-    dataStore?: PeerDataStore;
+    sessionParameters?: SessionParameters;
+
+    /**
+     * Case Authenticated Tags (CATs) to use for operational CASE sessions with this node.
+     *
+     * CATs provide additional authentication context for Matter operational sessions. They are only used for
+     * operational CASE connections after commissioning is complete, not during the initial PASE commissioning
+     * process.
+     */
+    caseAuthenticatedTags?: readonly CaseAuthenticatedTag[];
 }
 
 export class ObservablePeerDescriptor implements PeerDescriptor {
     #address: PeerAddress;
     #operationalAddress?: ServerAddressUdp;
     #discoveryData?: DiscoveryData;
-    #dataStore?: PeerDataStore;
+    #caseAuthenticatedTags?: readonly CaseAuthenticatedTag[];
+    #sessionParameters?: SessionParameters;
     #onChange: () => void;
 
-    constructor({ address, operationalAddress, discoveryData, dataStore }: PeerDescriptor, onChange: () => void) {
+    constructor(
+        { address, operationalAddress, discoveryData, caseAuthenticatedTags }: PeerDescriptor,
+        onChange: () => void,
+    ) {
         this.#address = PeerAddress(address);
         this.#operationalAddress = operationalAddress;
         this.#discoveryData = discoveryData;
-        this.#dataStore = dataStore;
+        this.#caseAuthenticatedTags = caseAuthenticatedTags;
         this.#onChange = onChange;
     }
 
@@ -66,7 +83,7 @@ export class ObservablePeerDescriptor implements PeerDescriptor {
             return;
         }
 
-        this.#operationalAddress = value;
+        this.#operationalAddress = value ? { ...value } : undefined;
         this.#onChange();
     }
 
@@ -83,7 +100,29 @@ export class ObservablePeerDescriptor implements PeerDescriptor {
         this.#onChange();
     }
 
-    get dataStore() {
-        return this.#dataStore;
+    get sessionParameters() {
+        return this.#sessionParameters;
+    }
+
+    set sessionParameters(value: SessionParameters | undefined) {
+        if (value === undefined || isDeepEqual(value, this.#sessionParameters)) {
+            return;
+        }
+
+        this.#sessionParameters = { ...value };
+        this.#onChange();
+    }
+
+    get caseAuthenticatedTags() {
+        return this.#caseAuthenticatedTags;
+    }
+
+    set caseAuthenticatedTags(cats: undefined | readonly CaseAuthenticatedTag[]) {
+        if (isDeepEqual(cats, this.#caseAuthenticatedTags)) {
+            return;
+        }
+
+        this.#caseAuthenticatedTags = cats ? [...cats] : undefined;
+        this.#onChange();
     }
 }

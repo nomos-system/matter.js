@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -23,8 +23,8 @@ import {
     Observer,
     StorageContext,
     StorageManager,
-} from "#general";
-import { FabricId, FabricIndex, GlobalFabricId, NodeId } from "#types";
+} from "@matter/general";
+import { FabricId, FabricIndex, GlobalFabricId, NodeId } from "@matter/types";
 import { Fabric } from "./Fabric.js";
 
 const logger = Logger.get("FabricManager");
@@ -103,7 +103,7 @@ export class FabricManager {
         await this.#construction;
         this.#nextFabricIndex = 1;
         this.#fabrics.clear();
-        await this.#storage?.clear();
+        await this.#storage?.clearAll();
     }
 
     /**

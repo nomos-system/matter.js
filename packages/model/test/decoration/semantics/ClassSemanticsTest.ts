@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Import from index to ensure correct initialization order
+// Import from index to ensure the correct initialization order
 import { ClassSemantics } from "#decoration/semantics/index.js";
 
 import { cluster } from "#decoration/decorators/cluster.js";
@@ -119,7 +119,7 @@ describe("ClassSemantics", () => {
 
         const schema = Schema.Required(Bar);
         expect(schema.children.length).equals(1);
-        const bar = schema.get(FieldModel, "bar");
+        const bar = schema.fields("bar");
         expect(bar).not.undefined;
         expect(bar!.base).equals(any);
     });

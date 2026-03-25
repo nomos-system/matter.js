@@ -1,15 +1,21 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { RootSupervisor } from "#behavior/supervision/RootSupervisor.js";
-import { camelize } from "#general";
-import type { Schema } from "#model";
-import { Conformance, DataModelPath, FeatureSet, FieldValue, Metatype, ValueModel } from "#model";
-import { AccessControl, ConformanceError, SchemaImplementationError, Val } from "#protocol";
-import { EnumValueConformanceError, UnknownEnumValueError } from "@matter/protocol";
+import { camelize } from "@matter/general";
+import type { Schema } from "@matter/model";
+import { Conformance, DataModelPath, FeatureSet, FieldValue, Metatype, ValueModel } from "@matter/model";
+import {
+    AccessControl,
+    ConformanceError,
+    EnumValueConformanceError,
+    SchemaImplementationError,
+    UnknownEnumValueError,
+    Val,
+} from "@matter/protocol";
 import { ValueSupervisor } from "../../supervision/ValueSupervisor.js";
 import { NameResolver } from "../managed/NameResolver.js";
 import {
@@ -227,7 +233,7 @@ export function astToFunction(schema: ValueModel, supervisor: RootSupervisor): V
 
                 // Throw at runtime
                 throw new SchemaImplementationError(
-                    DataModelPath(schema.path),
+                    new DataModelPath(schema.path),
                     `Unsupported conformance AST node type ${(ast as any).type}`,
                 );
         }
@@ -284,7 +290,7 @@ export function astToFunction(schema: ValueModel, supervisor: RootSupervisor): V
     function createGroup(param: Conformance.Ast.Otherwise): DynamicNode {
         if (!Array.isArray(param)) {
             throw new SchemaImplementationError(
-                DataModelPath(schema.path),
+                new DataModelPath(schema.path),
                 "Conformance AST group parameter is not an array",
             );
         }
@@ -512,7 +518,7 @@ export function astToFunction(schema: ValueModel, supervisor: RootSupervisor): V
 
             default:
                 throw new SchemaImplementationError(
-                    DataModelPath(schema.path),
+                    new DataModelPath(schema.path),
                     `Unknown logical binary operator ${operator}`,
                 );
         }
@@ -536,7 +542,7 @@ export function astToFunction(schema: ValueModel, supervisor: RootSupervisor): V
             // completeness
             if (lhs.type === Conformance.Special.Name) {
                 const name = camelize(lhs.param, false);
-                const field = supervisor.membersOf(schema).find(model => camelize(model.name, false) === name);
+                const field = supervisor.membersOf(schema).find(model => model.propertyName === name);
                 if (field?.effectiveMetatype === Metatype.enum) {
                     let enumValues: undefined | Record<string, number | undefined>;
                     createNameReference = (name: string) => {

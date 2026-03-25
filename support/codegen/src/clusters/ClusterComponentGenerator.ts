@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -191,7 +191,7 @@ export class ClusterComponentGenerator {
     }
 
     private mapPrivilege(privilege: Access.Privilege) {
-        this.file.addImport("#model", "AccessLevel");
+        this.file.addImport("@matter/model", "AccessLevel");
         return `AccessLevel.${Access.PrivilegeName[privilege]}`;
     }
 

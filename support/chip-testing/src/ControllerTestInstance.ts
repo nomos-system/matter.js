@@ -1,13 +1,14 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { InternalError, Logger } from "@matter/general";
-import { Environment, NodeId, StorageService } from "@matter/main";
+import { Environment, MockStorageService, NodeId } from "@matter/main";
 import { CommissioningController, ControllerStore } from "@project-chip/matter.js";
 import { mkdirSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { ChipToolWebSocketHandler } from "./ChipToolWebSocketHandler.js";
 import {
     getIntParameter,
@@ -45,10 +46,11 @@ export async function startControllerTestApp(
     const storageName = `${storageDir}${getParameter("KVS") ?? "/chip_tool_kvs"}`;
     logger.info(`Using storage directory: ${storageName}`);
 
-    const storage = new storageType(storageName);
     if (hasParameter("factoryreset")) {
-        await storage.clear();
+        await rm(storageName, { recursive: true, force: true });
     }
+
+    const storage = new storageType(storageName);
 
     const testInstance = new testInstanceClass({
         storage,
@@ -70,7 +72,6 @@ export class ControllerTestInstance extends TestInstance {
         }
     >();
     #commandHandler: ChipToolWebSocketHandler;
-    #storages: Map<string, Map<string, StorageBackendAsyncJsonFile>> = new Map();
 
     constructor(config: ControllerTestInstanceConfig) {
         super(config);
@@ -79,26 +80,19 @@ export class ControllerTestInstance extends TestInstance {
 
     /** Prepare Controller identities alpha, beta and gamma used by tests. */
     #setupControllers() {
-        const initStorageService = (identity: string) =>
-            new StorageService(this.#env, namespace => {
-                const identityStore = this.#storages.get(identity) ?? new Map<string, StorageBackendAsyncJsonFile>();
+        const initStorageService = (env: Environment) =>
+            new MockStorageService(env, namespace => {
                 const storageDir = getParameter("storage-directory") ?? "/tmp";
                 const storageName = `${storageDir}${getParameter("KVS") ?? "/chip_tool_kvs"}-${namespace}`;
                 logger.info(`Storage service requested for namespace ${namespace}: ${storageName}`);
-                if (identityStore.has(namespace)) {
-                    return identityStore.get(namespace)!;
-                }
-                const storage = new StorageBackendAsyncJsonFile(storageName);
-                identityStore.set(namespace, storage);
-                this.#storages.set(identity, identityStore);
-                return storage;
+                return new StorageBackendAsyncJsonFile(storageName);
             });
 
         // Each developer gets his own derived environment because should have it's own storage
         // TODO Enhance Controller to allow multiple Fabrics and then each identity is "just" an own Fabric
         //      But Let's do that later with ServerNode. For now it works like this.
         const envAlpha = new Environment(`${this.id}-alpha`, this.#env);
-        envAlpha.set(StorageService, initStorageService("alpha"));
+        initStorageService(envAlpha);
 
         this.#controllerInstances.set("alpha", {
             env: envAlpha,
@@ -117,7 +111,7 @@ export class ControllerTestInstance extends TestInstance {
         });
 
         const envBeta = new Environment(`${this.id}-beta`, this.#env);
-        envBeta.set(StorageService, initStorageService("beta"));
+        initStorageService(envBeta);
         this.#controllerInstances.set("beta", {
             env: envBeta,
             handler: new LegacyControllerCommandHandler(
@@ -135,7 +129,7 @@ export class ControllerTestInstance extends TestInstance {
         });
 
         const envGamma = new Environment(`${this.id}-gamma`, this.#env);
-        envGamma.set(StorageService, initStorageService("gamma"));
+        initStorageService(envGamma);
         this.#controllerInstances.set("gamma", {
             env: envGamma,
             handler: new LegacyControllerCommandHandler(
@@ -196,16 +190,9 @@ export class ControllerTestInstance extends TestInstance {
     override async stop() {
         this.#commandHandler.close();
         if (this.#controllerInstances.size > 0) {
-            for (const [identity, { handler, env }] of this.#controllerInstances.entries()) {
+            for (const { handler, env } of this.#controllerInstances.values()) {
                 await handler.close();
                 await env.close(ControllerStore); // Manually close ControllerStore to ensure data persistence
-                const identityStores = this.#storages.get(identity);
-                if (identityStores) {
-                    for (const storage of identityStores.values()) {
-                        console.info(`Closing storage for identity ${identity}`);
-                        await storage.close();
-                    }
-                }
             }
             this.#controllerInstances.clear();
         }

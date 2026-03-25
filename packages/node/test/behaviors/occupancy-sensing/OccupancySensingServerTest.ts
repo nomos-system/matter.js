@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { OccupancySensingServer } from "#behaviors/occupancy-sensing";
-import { OccupancySensing } from "#clusters/occupancy-sensing";
 import { Val } from "@matter/protocol";
+import { OccupancySensing } from "@matter/types/clusters/occupancy-sensing";
 import { MockEndpoint } from "../../endpoint/mock-endpoint.js";
 
 describe("OccupancySensingServer", () => {

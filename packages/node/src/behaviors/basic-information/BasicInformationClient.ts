@@ -1,14 +1,14 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { BasicInformation } from "#clusters/basic-information";
+import { BasicInformation } from "@matter/types/clusters/basic-information";
 import { ClientBehavior } from "../../behavior/cluster/ClientBehavior.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 
 export const BasicInformationClientConstructor = ClientBehavior(BasicInformation.Complete);
 export interface BasicInformationClient extends InstanceType<typeof BasicInformationClientConstructor> {}

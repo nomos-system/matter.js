@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { MaybePromise } from "#general";
-import { ContentLauncher } from "#clusters/content-launcher";
+import { MaybePromise } from "@matter/general";
+import { ContentLauncher } from "@matter/types/clusters/content-launcher";
 
 export namespace ContentLauncherInterface {
     export interface UrlPlayback {
@@ -35,8 +35,9 @@ export namespace ContentLauncherInterface {
 
     export interface ContentSearch {
         /**
-         * Upon receipt, this shall launch the specified content with optional search criteria. This command returns a
-         * Launch Response.
+         * Upon receipt, this shall launch the specified content with optional search criteria.
+         *
+         * This command returns a Launch Response.
          *
          * @see {@link MatterSpecification.v142.Cluster} § 6.7.7.1
          */

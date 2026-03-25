@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { MaybePromise } from "#general";
-import { OtaSoftwareUpdateProvider } from "#clusters/ota-software-update-provider";
+import { MaybePromise } from "@matter/general";
+import { OtaSoftwareUpdateProvider } from "@matter/types/clusters/ota-software-update-provider";
 
 export namespace OtaSoftwareUpdateProviderInterface {
     export interface Base {

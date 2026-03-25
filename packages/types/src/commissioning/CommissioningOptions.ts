@@ -1,11 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Bytes } from "#general";
-import { Duration } from "@matter/general";
+import { Bytes, Duration } from "@matter/general";
 import { ProductDescription } from "../common/ProductDescription.js";
 import { CommissioningFlowType } from "../schema/PairingCodeSchema.js";
 

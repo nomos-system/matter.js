@@ -1,29 +1,26 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { OnOffClient } from "#behaviors/on-off";
+import { OnOffClient, OnOffServer } from "#behaviors/on-off";
 import { ScenesManagementClient } from "#behaviors/scenes-management";
-import { OnOff } from "#clusters/on-off";
 import { ServerNode } from "#node/index.js";
-import { Read } from "#protocol";
-import { AttributeId, ClusterId, EndpointNumber, GroupId } from "#types";
+import { Read } from "@matter/protocol";
+import { AttributeId, ClusterId, EndpointNumber, GroupId } from "@matter/types";
+import { OnOff } from "@matter/types/clusters/on-off";
 import { MockSite } from "../../node/mock-site.js";
 
 describe("ScenesManagementServer", () => {
     before(() => {
         MockTime.init();
-
-        // Required for crypto to succeed
-        MockTime.macrotasks = true;
     });
 
     it("add and recall onoff boolean scene value", async () => {
         await using site = new MockSite();
         // Device is automatically configured with vendorId 0xfff1 and productId 0x8000
-        const { controller } = await site.addCommissionedPair({
+        const { controller, device } = await site.addCommissionedPair({
             device: {
                 type: ServerNode.RootEndpoint,
             },
@@ -35,56 +32,68 @@ describe("ScenesManagementServer", () => {
 
         const onoff = peer1.endpoints.for(EndpointNumber(1));
         // Ensure off
-        await onoff.commandsOf(OnOffClient).off();
+        await MockTime.resolve(onoff.commandsOf(OnOffClient).off());
 
         const cmds = onoff.commandsOf(ScenesManagementClient);
 
         expect(
-            await cmds.addScene({
-                groupId: GroupId(0),
-                sceneId: 1,
-                transitionTime: 1000,
-                sceneName: "Scene1",
-                extensionFieldSetStructs: [
-                    {
-                        clusterId: ClusterId(6),
-                        attributeValueList: [{ attributeId: AttributeId(0), valueUnsigned8: 1 }],
-                    },
-                ],
-            }),
+            await MockTime.resolve(
+                cmds.addScene({
+                    groupId: GroupId(0),
+                    sceneId: 1,
+                    transitionTime: 1000,
+                    sceneName: "Scene1",
+                    extensionFieldSetStructs: [
+                        {
+                            clusterId: ClusterId(6),
+                            attributeValueList: [{ attributeId: AttributeId(0), valueUnsigned8: 1 }],
+                        },
+                    ],
+                }),
+            ),
         ).deep.equals({ status: 0, groupId: GroupId(0), sceneId: 1 });
 
         expect(
-            await cmds.addScene({
-                groupId: GroupId(0),
-                sceneId: 2,
-                transitionTime: 60000000,
-                sceneName: "Scene2",
-                extensionFieldSetStructs: [
-                    {
-                        clusterId: ClusterId(6),
-                        attributeValueList: [{ attributeId: AttributeId(0), valueUnsigned8: 1 }],
-                    },
-                ],
-            }),
-        ).deep.equals({ status: 0, groupId: GroupId(0), sceneId: 2 });
-
-        await cmds.recallScene({ groupId: GroupId(0), sceneId: 1 });
-
-        await MockTime.advance(2000);
-
-        const read = peer1.interaction.read(
-            Read(
-                Read.Attribute({
-                    endpoint: EndpointNumber(1),
-                    cluster: OnOff.Complete,
-                    attributes: ["onOff"],
+            await MockTime.resolve(
+                cmds.addScene({
+                    groupId: GroupId(0),
+                    sceneId: 2,
+                    transitionTime: 60000000,
+                    sceneName: "Scene2",
+                    extensionFieldSetStructs: [
+                        {
+                            clusterId: ClusterId(6),
+                            attributeValueList: [{ attributeId: AttributeId(0), valueUnsigned8: 1 }],
+                        },
+                    ],
                 }),
             ),
-        );
+        ).deep.equals({ status: 0, groupId: GroupId(0), sceneId: 2 });
 
-        for await (const chunks of read) {
-            expect((chunks as Array<any>)[0].value).equals(true);
-        }
+        const waiter = MockTime.resolve(device.endpoints.for(1).eventsOf(OnOffServer).onOff$Changed);
+
+        await MockTime.resolve(cmds.recallScene({ groupId: GroupId(0), sceneId: 1 }));
+
+        await MockTime.advance(1500);
+
+        await waiter;
+
+        await MockTime.resolve(
+            (async () => {
+                const read = peer1.interaction.read(
+                    Read(
+                        Read.Attribute({
+                            endpoint: EndpointNumber(1),
+                            cluster: OnOff.Complete,
+                            attributes: ["onOff"],
+                        }),
+                    ),
+                );
+
+                for await (const chunks of read) {
+                    expect((chunks as Array<any>)[0].value).equals(true);
+                }
+            })(),
+        );
     });
 });

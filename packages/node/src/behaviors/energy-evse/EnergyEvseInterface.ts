@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { MaybePromise } from "#general";
-import { EnergyEvse } from "#clusters/energy-evse";
+import { MaybePromise } from "@matter/general";
+import { EnergyEvse } from "@matter/types/clusters/energy-evse";
 
 export namespace EnergyEvseInterface {
     export interface Base {

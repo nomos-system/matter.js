@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -14,7 +14,7 @@ import { TlvNodeId } from "../datatype/NodeId.js";
 import { TlvEndpointNumber } from "../datatype/EndpointNumber.js";
 import { TypeFromSchema } from "../tlv/TlvSchema.js";
 import { TlvNullable } from "../tlv/TlvNullable.js";
-import { AccessLevel } from "#model";
+import { AccessLevel } from "@matter/model";
 import { Priority } from "../globals/Priority.js";
 import { TlvNoArguments } from "../tlv/TlvNoArguments.js";
 import { TlvString } from "../tlv/TlvString.js";
@@ -24,7 +24,7 @@ import { TlvInt32, TlvEpochUs, TlvEnum, TlvUInt8 } from "../tlv/TlvNumber.js";
 import { BitFlag } from "../schema/BitmapSchema.js";
 import { StatusResponseError } from "../common/StatusResponseError.js";
 import { Status } from "../globals/Status.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace TimeSynchronization {
@@ -581,12 +581,14 @@ export namespace TimeSynchronization {
 
         commands: {
             /**
-             * This command is used to set the TrustedTimeSource attribute. Upon receipt of this command:
+             * This command is used to set the TrustedTimeSource attribute.
              *
-             *   • If the TrustedTimeSource field in the command is null, the node shall set the TrustedTimeSource
+             * Upon receipt of this command:
+             *
+             *   - If the TrustedTimeSource field in the command is null, the node shall set the TrustedTimeSource
              *     attribute to null and shall generate a MissingTrustedTimeSource event.
              *
-             *   • Otherwise, the node shall set the TrustedTimeSource attribute to a struct which has NodeID and
+             *   - Otherwise, the node shall set the TrustedTimeSource attribute to a struct which has NodeID and
              *     Endpoint fields matching those in the TrustedTimeSource field and has its FabricIndex field set to
              *     the command’s accessing fabric index.
              *
@@ -677,11 +679,10 @@ export namespace TimeSynchronization {
     export const TimeZoneComponent = MutableCluster.Component({
         attributes: {
             /**
-             * This attribute shall contain a list of time zone offsets from UTC and when they shall take effect.
-             *
-             * This attribute uses a list of time offset configurations to allow Nodes to handle scheduled regulatory
-             * time zone changes. This attribute shall NOT be used to indicate daylight savings time changes (see
-             * Section 11.17.8.7, “DSTOffset Attribute” for daylight savings time).
+             * This attribute shall contain a list of time zone offsets from UTC and when they shall take effect. This
+             * attribute uses a list of time offset configurations to allow Nodes to handle scheduled regulatory time
+             * zone changes. This attribute shall NOT be used to indicate daylight savings time changes (see Section
+             * 11.17.8.7, “DSTOffset Attribute” for daylight savings time).
              *
              * The first entry shall have a ValidAt entry of 0. If there is a second entry, it shall have a non-zero
              * ValidAt time.
@@ -694,10 +695,10 @@ export namespace TimeSynchronization {
              * If a node does not support a TimeZoneDatabase, the Name field of the TimeZoneStruct is only applicable
              * for client-side localization. In particular:
              *
-             *   • If the node does not support a TimeZoneDatabase, the Name field shall NOT be used to calculate the
+             *   - If the node does not support a TimeZoneDatabase, the Name field shall NOT be used to calculate the
              *     local time.
              *
-             *   • If the node does not support a TimeZoneDatabase, the Name field shall NOT be used to calculate DST
+             *   - If the node does not support a TimeZoneDatabase, the Name field shall NOT be used to calculate DST
              *     start or end dates.
              *
              * When time passes, the node SHOULD remove any entries which are no longer active and change the ValidAt
@@ -807,10 +808,10 @@ export namespace TimeSynchronization {
             /**
              * This command is used to set the DST offsets for a node.
              *
-             *   • If the length of DSTOffset is larger than DSTOffsetListMaxSize, the node shall respond with
+             *   - If the length of DSTOffset is larger than DSTOffsetListMaxSize, the node shall respond with
              *     RESOURCE_EXHAUSTED.
              *
-             *   • Else if the list entries do not conform to the list requirements for DSTOffset attribute, the node
+             *   - Else if the list entries do not conform to the list requirements for DSTOffset attribute, the node
              *     shall respond with CONSTRAINT_ERROR.
              *
              * If there are no errors in the list, the DSTOffset field shall be copied to the DSTOffset attribute.

@@ -1,12 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 export * from "./AttributeModel.js";
 export * from "./ClusterModel.js";
 export * from "./CommandModel.js";
+export * from "./ConditionModel.js";
 export * from "./CrossReference.js";
 export * from "./DatatypeModel.js";
 export * from "./DeviceTypeModel.js";

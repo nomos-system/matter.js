@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -25,7 +25,7 @@ Resource.add({
         "> [!NOTE]" +
         "\n" +
         "> We have considered a “DisableLowPowerMode” command but have not added it due to suspected issues " +
-        "  with energy consumption regulations. This can be added in the future.",
+        "with energy consumption regulations. This can be added in the future.",
 
     children: [{
         tag: "command", name: "Sleep", xref: "cluster§1.11.4.1",

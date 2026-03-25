@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { InternalError, Observable } from "#general";
-import { BdxStatusCode } from "#types";
+import { InternalError, Observable } from "@matter/general";
+import { BdxStatusCode } from "@matter/types";
 import { BdxError } from "../BdxError.js";
 import { BdxMessenger } from "../BdxMessenger.js";
 import { PersistedFileDesignator } from "../PersistedFileDesignator.js";
@@ -20,6 +20,7 @@ export abstract class Flow {
     #finalBlockCounter?: number;
     readonly progressInfo = Observable<[bytesTransferred: number, totalBytesLength: number | undefined]>();
     readonly progressFinished = Observable<[totalBytesTransferred: number]>();
+    readonly progressCancelled = Observable();
     #dataLength: number | undefined;
     #transferredBytes = 0;
 
@@ -111,19 +112,26 @@ export abstract class Flow {
         // Emit initial progress info
         this.progressInfo.emit(0, this.dataLength);
 
-        // Continue to transfer chunks until done or closed
-        while (!this.isClosed) {
-            if (await this.transferNextChunk()) {
-                break;
+        try {
+            // Continue to transfer chunks until done or closed
+            while (!this.isClosed) {
+                if (await this.transferNextChunk()) {
+                    break;
+                }
+                this.progressInfo.emit(this.transferredBytes, this.dataLength);
             }
             this.progressInfo.emit(this.transferredBytes, this.dataLength);
-        }
-        this.progressInfo.emit(this.transferredBytes, this.dataLength);
 
-        if (!this.isClosed) {
-            await this.finalizeTransfer();
+            if (this.isClosed) {
+                this.progressCancelled.emit();
+            } else {
+                await this.finalizeTransfer();
+                this.progressFinished.emit(this.transferredBytes);
+            }
+        } catch (error) {
+            this.progressCancelled.emit();
+            throw error;
         }
-        this.progressFinished.emit(this.transferredBytes);
     }
 
     protected abstract initTransfer(): Promise<void>;

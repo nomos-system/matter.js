@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Environment, RuntimeService, StorageBackendMemory } from "@matter/main";
+import { Environment, RuntimeService } from "@matter/main";
 import { Subject } from "@matter/testing";
 import { AllClustersTestInstance } from "../src/AllClustersTestInstance.js";
 import { BridgeTestInstance } from "../src/BridgeTestInstance.js";
@@ -26,7 +26,6 @@ export function App(implementation: DeviceTestInstanceConstructor<NodeTestInstan
     const factory = (domain: string) => {
         return new implementation({
             domain,
-            storage: new StorageBackendMemory(),
             async commandPipeFactory(_subject, name) {
                 await chip.openPipe(name);
             },

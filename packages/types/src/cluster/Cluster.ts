@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { MatterError, Merge } from "#general";
 import { Priority } from "#globals/Priority.js";
-import { AccessLevel } from "#model";
+import { MatterError, Merge } from "@matter/general";
+import { AccessLevel } from "@matter/model";
 import { AttributeId, TlvAttributeId } from "../datatype/AttributeId.js";
 import { ClusterId } from "../datatype/ClusterId.js";
 import { CommandId, TlvCommandId } from "../datatype/CommandId.js";
@@ -561,7 +561,7 @@ export interface UnknownAttribute<T, F extends BitSchema> extends Attribute<T, F
     unknown: true;
 }
 export const UnknownAttribute = <F extends BitSchema>(id: number): UnknownAttribute<any, F> => ({
-    id: AttributeId(id),
+    id: id as AttributeId,
     schema: TlvAny,
     optional: false,
     writable: true,
@@ -698,6 +698,25 @@ export const ConditionalCommand = <RequestT, ResponseT, F extends BitSchema>(
     isConditional: true,
     optionalIf,
     mandatoryIf,
+});
+
+export const UnknownCommand = <RequestT, ResponseT, F extends BitSchema>(
+    requestId: number,
+    requestSchema: TlvSchema<RequestT>,
+    responseId: number,
+    responseSchema: TlvSchema<ResponseT>,
+    { invokeAcl = AccessLevel.Operate, timed = false }: CommandOptions = {},
+): Command<RequestT, ResponseT, F> => ({
+    optional: false,
+    requestId: requestId as CommandId,
+    requestSchema,
+    responseId: responseId as CommandId,
+    responseSchema,
+    invokeAcl,
+    timed,
+    isConditional: false,
+    optionalIf: [],
+    mandatoryIf: [],
 });
 
 /**

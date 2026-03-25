@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Logger } from "#general";
+import { Logger } from "@matter/general";
 import { DclCertificateService } from "@matter/protocol";
 import { Argv } from "yargs";
 import { MatterNode } from "../MatterNode.js";
@@ -223,6 +223,41 @@ export default function commands(theNode: MatterNode) {
                         );
                 })
 
+                // OTA Test Images
+                .command(
+                    "ota-test-images",
+                    "Manage whether test OTA images (from Test DCL) are offered to nodes requesting updates",
+                    yargs => {
+                        return yargs
+                            .command(
+                                "* [action]",
+                                "get/delete OTA test images setting",
+                                yargs => {
+                                    return yargs.positional("action", {
+                                        describe: "get/delete",
+                                        choices: ["get", "delete"] as const,
+                                        default: "get",
+                                        type: "string",
+                                    });
+                                },
+                                async argv => doOtaTestImages(theNode, argv),
+                            )
+                            .command(
+                                "set <value>",
+                                "Enable or disable offering test OTA images to nodes",
+                                yargs => {
+                                    return yargs.positional("value", {
+                                        describe: "Enable test OTA images (true/false)",
+                                        type: "string",
+                                        choices: ["true", "false"] as const,
+                                        demandOption: true,
+                                    });
+                                },
+                                async argv => doOtaTestImages(theNode, { action: "set", ...argv }),
+                            );
+                    },
+                )
+
                 // DCL Test Certificates
                 .command(
                     "dcl-test-certificates",
@@ -284,7 +319,7 @@ async function doLogLevel(
                 return;
             }
             await theNode.Store.set(storageKey, value);
-            console.log(`New Loglevel for ${logtype}:" ${value}"`);
+            console.log(`New Loglevel for ${logtype}: "${value}"`);
             setLogLevel(args.type === "console" ? "default" : "file", value);
             break;
         case "delete":
@@ -461,6 +496,41 @@ async function doThreadCredentials(
     }
 }
 
+async function doOtaTestImages(
+    theNode: MatterNode,
+    args: {
+        action: string;
+        value?: string;
+    },
+) {
+    const { action, value } = args;
+    switch (action) {
+        case "get":
+            const enabled = await theNode.Store.get<boolean>("AllowTestOtaImages", false);
+            console.log(
+                `OTA test images: ${enabled ? "enabled (production + test DCL)" : "disabled (production DCL only)"}`,
+            );
+            break;
+        case "set":
+            if (value === undefined) {
+                console.log(`Cannot change OTA test images setting: New value not provided`);
+                return;
+            }
+            const newValue = value === "true";
+            await theNode.Store.set("AllowTestOtaImages", newValue);
+            console.log(
+                `OTA test images: ${newValue ? "enabled (production + test DCL)" : "disabled (production DCL only)"}. Please restart the shell for the changes to take effect.`,
+            );
+            break;
+        case "delete":
+            await theNode.Store.delete("AllowTestOtaImages");
+            console.log(
+                `OTA test images setting reset to default (disabled). Please restart the shell for the changes to take effect.`,
+            );
+            break;
+    }
+}
+
 async function doDclTestCertificates(
     theNode: MatterNode,
     args: {
@@ -484,7 +554,7 @@ async function doDclTestCertificates(
             const newValue = value === "true";
             await theNode.Store.set("DclFetchTestCertificates", newValue);
 
-            // Close existing certificate service so it gets re-initialized with new setting
+            // Close the existing certificate service so it gets re-initialized with new setting
             await theNode.environment.close(DclCertificateService);
 
             console.log(
@@ -494,7 +564,7 @@ async function doDclTestCertificates(
         case "delete":
             await theNode.Store.delete("DclFetchTestCertificates");
 
-            // Close existing certificate service so it gets re-initialized with new setting
+            // Close the existing certificate service so it gets re-initialized with new setting
             await theNode.environment.close(DclCertificateService);
 
             console.log(

@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -10,7 +10,7 @@ import { MutableCluster } from "../cluster/mutation/MutableCluster.js";
 import { Attribute, Command, TlvNoResponse, OptionalAttribute, OptionalEvent } from "../cluster/Cluster.js";
 import { TlvUInt64, TlvUInt16, TlvUInt32, TlvEnum, TlvUInt8, TlvInt8 } from "../tlv/TlvNumber.js";
 import { TlvNoArguments } from "../tlv/TlvNoArguments.js";
-import { AccessLevel } from "#model";
+import { AccessLevel } from "@matter/model";
 import { BitFlag } from "../schema/BitmapSchema.js";
 import { TlvNullable } from "../tlv/TlvNullable.js";
 import { TlvString, TlvByteString } from "../tlv/TlvString.js";
@@ -19,7 +19,7 @@ import { TlvField, TlvObject } from "../tlv/TlvObject.js";
 import { TlvBoolean } from "../tlv/TlvBoolean.js";
 import { TypeFromSchema } from "../tlv/TlvSchema.js";
 import { Priority } from "../globals/Priority.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace ThreadNetworkDiagnostics {
@@ -80,7 +80,7 @@ export namespace ThreadNetworkDiagnostics {
         SleepyEndDevice = 2,
 
         /**
-         * The Node acts as an End Device without RX- off-when-idle sleepy radio behavior.
+         * The Node acts as an End Device without RX-off-when-idle sleepy radio behavior.
          */
         EndDevice = 3,
 
@@ -232,7 +232,7 @@ export namespace ThreadNetworkDiagnostics {
     export const TlvRouteTable = TlvObject({
         /**
          * This field shall specify the IEEE 802.15.4 extended address for the Node for which this route table entry
-         * corresponds. The uint64 value is composed by taking the 8 octets of the extended address EUI- 64 and treating
+         * corresponds. The uint64 value is composed by taking the 8 octets of the extended address EUI-64 and treating
          * them as a big-endian integer. For example, octet string (in hexadecimal, from first octet to last)
          * 00112233AABBCCDD would lead to a value of 0x00112233AABBCCDD.
          *
@@ -544,7 +544,7 @@ export namespace ThreadNetworkDiagnostics {
              *
              * Reception of this command shall reset the following attributes to 0:
              *
-             *   • OverrunCount
+             *   - OverrunCount
              *
              * Upon completion, this command shall send a status code of SUCCESS back to the initiator.
              *
@@ -1004,7 +1004,7 @@ export namespace ThreadNetworkDiagnostics {
              *
              * @see {@link MatterSpecification.v142.Core} § 11.14.6.6
              */
-            meshLocalPrefix: Attribute(0x5, TlvNullable(TlvByteString)),
+            meshLocalPrefix: Attribute(0x5, TlvNullable(TlvByteString.bound({ minLength: 1, maxLength: 17 }))),
 
             /**
              * Indicates the current list of Nodes that comprise the neighbor table on the Node.
@@ -1092,10 +1092,8 @@ export namespace ThreadNetworkDiagnostics {
             /**
              * Indicates the channels within channel page 0, in the 2.4GHz ISM band. The channels are represented in
              * most significant bit order, with bit value 1 meaning selected, bit value 0 meaning unselected. For
-             * example, the most significant bit of the left-most byte indicates channel
-             *
-             * 0. If channel 0 and channel 10 are selected, the mask would be: 80 20 00 00. Null when there is no
-             * dataset configured.
+             * example, the most significant bit of the left-most byte indicates channel 0. If channel 0 and channel 10
+             * are selected, the mask would be: 80 20 00 00. Null when there is no dataset configured.
              *
              * @see {@link MatterSpecification.v142.Core} § 11.14.6.61
              */

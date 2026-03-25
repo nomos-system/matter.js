@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { BytesStreamReader, InternalError } from "#general";
-import { BdxStatusCode } from "#types";
+import { BytesStreamReader, InternalError } from "@matter/general";
+import { BdxStatusCode } from "@matter/types";
 import { BdxError } from "../BdxError.js";
 import { Flow } from "./Flow.js";
 

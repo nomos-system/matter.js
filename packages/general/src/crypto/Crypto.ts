@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -126,6 +126,38 @@ export abstract class Crypto extends Entropy {
      * Compute the shared secret for a Diffie-Hellman exchange.
      */
     abstract generateDhSecret(key: PrivateKey, peerKey: PublicKey): MaybePromise<Bytes>;
+
+    /**
+     * Multiply an EC point by a scalar on the P-256 curve.
+     *
+     * @param point - 65-byte uncompressed EC point (04 || x || y)
+     * @param scalar - 32-byte big-endian scalar
+     * @returns 65-byte uncompressed EC point
+     */
+    abstract ecMultiply(point: Bytes, scalar: Bytes): Bytes;
+
+    /**
+     * Add two EC points on the P-256 curve.
+     *
+     * @param a - 65-byte uncompressed EC point (04 || x || y)
+     * @param b - 65-byte uncompressed EC point (04 || x || y)
+     * @returns 65-byte uncompressed EC point
+     */
+    ecAdd(a: Bytes, b: Bytes): Bytes {
+        return ec.p256.Point.fromBytes(Bytes.of(a))
+            .add(ec.p256.Point.fromBytes(Bytes.of(b)))
+            .toBytes(false);
+    }
+
+    /**
+     * Negate an EC point on the P-256 curve.
+     *
+     * @param point - 65-byte uncompressed EC point (04 || x || y)
+     * @returns 65-byte uncompressed EC point
+     */
+    ecNegate(point: Bytes): Bytes {
+        return ec.p256.Point.fromBytes(Bytes.of(point)).negate().toBytes(false);
+    }
 
     reportUsage(component?: string) {
         const message = ["Using", Diagnostic.strong(this.implementationName), "crypto implementation"];

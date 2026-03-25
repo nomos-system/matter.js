@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Agent } from "#endpoint/Agent.js";
 import { EndpointType } from "#endpoint/type/EndpointType.js";
-import { AggregatorDt, BridgedNodeDt, DeviceClassification, RootNodeDt } from "#model";
-import { DeviceTypeId, ProductDescription, VendorId } from "#types";
+import { AggregatorDt, BridgedNodeDt, DeviceClassification, RootNodeDt } from "@matter/model";
+import { DeviceTypeId, ProductDescription, VendorId } from "@matter/types";
 import { BasicInformationBehavior } from "../../../behaviors/basic-information/BasicInformationBehavior.js";
 import { DescriptorBehavior } from "../../../behaviors/descriptor/DescriptorBehavior.js";
 import { Behavior } from "../../Behavior.js";

@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { ClusterServerObj } from "#cluster/server/ClusterServerTypes.js";
-import { ClusterClientObj, ClusterClientObjInternal } from "#protocol";
-import { ClusterType } from "#types";
+import { ClusterClientObj, ClusterClientObjInternal } from "@matter/protocol";
+import { ClusterType } from "@matter/types";
 
 export function isClusterClient<const T extends ClusterType>(
     obj: ClusterClientObj<T> | ClusterServerObj<T>,

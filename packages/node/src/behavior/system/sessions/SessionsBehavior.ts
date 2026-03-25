@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { EventEmitter, Observable } from "#general";
 import type { ServerNode } from "#node/ServerNode.js";
-import { ExposedFabricInformation, NodeSession, SessionManager, Subscription } from "#protocol";
-import { NodeId } from "#types";
+import { EventEmitter, Observable } from "@matter/general";
+import { ExposedFabricInformation, NodeSession, SessionManager, Subscription } from "@matter/protocol";
+import { NodeId } from "@matter/types";
 import { NodeLifecycle } from "../../../node/NodeLifecycle.js";
 import { Behavior } from "../../Behavior.js";
 
@@ -30,7 +30,7 @@ export class SessionsBehavior extends Behavior {
 
     #convertToExposedSession(session: NodeSession): SessionsBehavior.Session {
         return {
-            name: session.via,
+            name: `${session.via}`,
             nodeId: session.nodeId,
             peerNodeId: session.peerNodeId,
             fabric: session.fabric?.externalInformation,

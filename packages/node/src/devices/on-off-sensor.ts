@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -17,7 +17,7 @@ import { LevelControlBehavior as BaseLevelControlBehavior } from "../behaviors/l
 import { ColorControlBehavior as BaseColorControlBehavior } from "../behaviors/color-control/ColorControlBehavior.js";
 import { MutableEndpoint } from "../endpoint/type/MutableEndpoint.js";
 import { SupportedBehaviors } from "../endpoint/properties/SupportedBehaviors.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 
 /**
  * An On/Off Sensor is a measurement and sensing device that, when bound to a lighting device such as a Dimmable Light,

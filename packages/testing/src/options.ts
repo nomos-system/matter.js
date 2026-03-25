@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -13,6 +13,7 @@ export type TestOptions = {
     allLogs?: boolean;
     wtf?: boolean;
     debug?: boolean;
+    machine?: boolean;
 };
 
 function option<T extends keyof TestOptions>(options: TestOptions, name: T) {

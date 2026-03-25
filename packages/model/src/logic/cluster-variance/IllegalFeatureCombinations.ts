@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { InternalError, isDeepEqual } from "#general";
+import { InternalError, isDeepEqual } from "@matter/general";
 import { Conformance } from "../../aspects/index.js";
 import { ClusterModel, FieldModel } from "../../models/index.js";
 import { FeatureBitmap } from "./FeatureBitmap.js";

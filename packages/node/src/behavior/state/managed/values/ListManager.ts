@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { isObject, serialize } from "#general";
-import type { Schema } from "#model";
-import { Access, DataModelPath, ValueModel } from "#model";
+import { isObject, serialize } from "@matter/general";
+import type { Schema } from "@matter/model";
+import { Access, DataModelPath, ValueModel } from "@matter/model";
 import {
     AccessControl,
     ExpiredReferenceError,
@@ -16,8 +16,8 @@ import {
     SchemaImplementationError,
     Val,
     WriteError,
-} from "#protocol";
-import { StatusCode } from "#types";
+} from "@matter/protocol";
+import { StatusCode } from "@matter/types";
 import type { RootSupervisor } from "../../../supervision/RootSupervisor.js";
 import type { ValueSupervisor } from "../../../supervision/ValueSupervisor.js";
 import { Instrumentation } from "../Instrumentation.js";
@@ -56,7 +56,7 @@ export function ListManager(owner: RootSupervisor, schema: Schema): ValueSupervi
 function createConfig(owner: RootSupervisor, schema: Schema): ListConfig {
     const entry = schema instanceof ValueModel ? schema.listEntry : undefined;
     if (entry === undefined) {
-        throw new SchemaImplementationError(DataModelPath(schema.path), "List schema has no entry definition");
+        throw new SchemaImplementationError(new DataModelPath(schema.path), "List schema has no entry definition");
     }
 
     const entryManager = owner.get(entry);

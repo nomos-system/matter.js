@@ -1,14 +1,14 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { LocalActorContext } from "#behavior/context/server/LocalActorContext.js";
 import type { ValueSupervisor } from "#behavior/supervision/ValueSupervisor.js";
-import { asJson, Bytes } from "#general";
-import { DataModelPath } from "#model";
-import { StatusResponse, TlvOfModel } from "#types";
+import { asJson, Bytes } from "@matter/general";
+import { DataModelPath } from "@matter/model";
+import { StatusResponse, TlvOfModel } from "@matter/types";
 
 /**
  * Api data envelope packages used for request and response.
@@ -34,7 +34,7 @@ export class Envelope<T = unknown> {
      */
     validate(path?: DataModelPath) {
         if (!path) {
-            path = DataModelPath(this.#supervisor.schema.path);
+            path = new DataModelPath(this.#supervisor.schema.path);
         }
 
         this.#js = this.#supervisor.cast(this.#js) as T;

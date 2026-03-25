@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import type { Endpoint } from "#endpoint/Endpoint.js";
-import { Construction, MaybePromise, StorageContext, StorageContextFactory } from "#general";
+import { Construction, MaybePromise, StorageContext, StorageContextFactory } from "@matter/general";
 import type { Node } from "../node/Node.js";
 import { EndpointStore } from "./EndpointStore.js";
 

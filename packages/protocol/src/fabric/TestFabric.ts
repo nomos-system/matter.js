@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { CertificateAuthority } from "#certificate/CertificateAuthority.js";
-import { ImplementationError, MockCrypto } from "#general";
-import { FabricId, FabricIndex, VendorId } from "#types";
+import { ImplementationError, MockCrypto } from "@matter/general";
+import { FabricId, FabricIndex, VendorId } from "@matter/types";
 import { FabricAuthority } from "./FabricAuthority.js";
 import { FabricManager } from "./FabricManager.js";
 

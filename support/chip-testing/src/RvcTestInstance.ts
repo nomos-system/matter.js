@@ -1,19 +1,11 @@
 /**
  * @licensepart
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { InternalError, Logger, Seconds } from "@matter/general";
-import {
-    AreaNamespaceTag,
-    capitalize,
-    deepCopy,
-    Endpoint,
-    Environment,
-    ServerNode,
-    StorageService,
-} from "@matter/main";
+import { AreaNamespaceTag, capitalize, deepCopy, Endpoint, ServerNode } from "@matter/main";
 import { AdministratorCommissioningServer } from "@matter/main/behaviors/administrator-commissioning";
 import { NetworkCommissioningServer } from "@matter/main/behaviors/network-commissioning";
 import { ServiceAreaServer } from "@matter/main/behaviors/service-area";
@@ -183,8 +175,6 @@ export class RvcTestInstance extends NodeTestInstance {
     }
 
     async setupServer(): Promise<ServerNode> {
-        Environment.default.get(StorageService).factory = (_namespace: string) => this.config.storage;
-
         const networkId = new Uint8Array(32);
 
         const serverNode = await ServerNode.create(
@@ -229,7 +219,7 @@ export class RvcTestInstance extends NodeTestInstance {
                     productLabel: "MorePowerBridge 6200",
                     productId: 0x8001,
                     serialNumber: `9999-9999-9999`,
-                    manufacturingDate: "20210101",
+                    manufacturingDate: "20200101",
                     partNumber: "123456",
                     productUrl: "https://test.com",
                     uniqueId: `node-matter-unique`,

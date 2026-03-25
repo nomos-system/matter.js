@@ -1,10 +1,10 @@
 /**
  * @licensepart
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Endpoint, Environment, ServerNode, StorageService } from "@matter/main";
+import { Endpoint, ServerNode } from "@matter/main";
 import { AdministratorCommissioningServer } from "@matter/main/behaviors/administrator-commissioning";
 import { BridgedDeviceBasicInformationServer } from "@matter/main/behaviors/bridged-device-basic-information";
 import { NetworkCommissioningServer } from "@matter/main/behaviors/network-commissioning";
@@ -25,8 +25,6 @@ export class BridgeTestInstance extends NodeTestInstance {
     }
 
     async setupServer(): Promise<ServerNode> {
-        Environment.default.get(StorageService).factory = (_namespace: string) => this.config.storage;
-
         const networkId = new Uint8Array(32);
 
         const serverNode = await ServerNode.create(
@@ -59,7 +57,7 @@ export class BridgeTestInstance extends NodeTestInstance {
                     productLabel: "MorePowerBridge 6200",
                     productId: 0x8001,
                     serialNumber: `9999-9999-9999`,
-                    manufacturingDate: "20210101",
+                    manufacturingDate: "20200101",
                     partNumber: "123456",
                     productUrl: "https://test.com",
                     uniqueId: `node-matter-unique`,
@@ -73,6 +71,9 @@ export class BridgeTestInstance extends NodeTestInstance {
                 administratorCommissioning: {
                     windowStatus: AdministratorCommissioning.CommissioningWindowStatus.WindowNotOpen,
                 },
+                groupKeyManagement: {
+                    maxGroupsPerFabric: 50,
+                },
                 networkCommissioning: {
                     maxNetworks: 1,
                     interfaceEnabled: true,
@@ -84,9 +85,32 @@ export class BridgeTestInstance extends NodeTestInstance {
             },
         );
 
-        const bridgedLight = new Endpoint(DimmableLightDevice.with(BridgedDeviceBasicInformationServer), {
-            id: "onoff-3",
-            number: 3,
+        const aggregator = new Endpoint(AggregatorEndpoint, { id: "aggregator", number: 1 });
+
+        await serverNode.add(aggregator);
+
+        await aggregator.add(this.createBridgedLight(3));
+
+        // For RR 1.1
+        await aggregator.add(this.createBridgedLight(4));
+        await aggregator.add(this.createBridgedLight(5));
+        await aggregator.add(this.createBridgedLight(6));
+        await aggregator.add(this.createBridgedLight(7));
+        await aggregator.add(this.createBridgedLight(8));
+        await aggregator.add(this.createBridgedLight(9));
+        await aggregator.add(this.createBridgedLight(10));
+        await aggregator.add(this.createBridgedLight(11));
+        await aggregator.add(this.createBridgedLight(12));
+        await aggregator.add(this.createBridgedLight(13));
+        await aggregator.add(this.createBridgedLight(14));
+
+        return serverNode;
+    }
+
+    createBridgedLight(id: number) {
+        return new Endpoint(DimmableLightDevice.with(BridgedDeviceBasicInformationServer), {
+            id: `onoff-${id}`,
+            number: id,
             bridgedDeviceBasicInformation: {
                 vendorName: "Vendorname",
                 vendorId: VendorId(0xfff1),
@@ -98,7 +122,7 @@ export class BridgeTestInstance extends NodeTestInstance {
                 hardwareVersionString: "1.0",
                 softwareVersion: 1,
                 softwareVersionString: "1.0",
-                manufacturingDate: "20210101",
+                manufacturingDate: "20200101",
                 partNumber: "123456",
                 productUrl: "https://test.com",
                 reachable: true,
@@ -109,13 +133,5 @@ export class BridgeTestInstance extends NodeTestInstance {
                 },
             },
         });
-
-        const aggregator = new Endpoint(AggregatorEndpoint, { id: "aggregator", number: 1 });
-
-        await serverNode.add(aggregator);
-
-        await aggregator.add(bridgedLight);
-
-        return serverNode;
     }
 }

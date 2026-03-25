@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Duration, Instant, Logger, Minutes, Seconds } from "#general";
+import { Duration, Instant, Logger, Millis, Minutes, Seconds } from "@matter/general";
 
 const logger = Logger.get("PhysicalDeviceProperties");
 
@@ -14,16 +14,20 @@ const DEFAULT_SUBSCRIPTION_CEILING_WIFI = Minutes(1);
 const DEFAULT_SUBSCRIPTION_CEILING_THREAD = Minutes(1);
 const DEFAULT_SUBSCRIPTION_CEILING_THREAD_SLEEPY = Minutes(3);
 const DEFAULT_SUBSCRIPTION_CEILING_BATTERY_POWERED = Minutes(10);
+const THREAD_SUBSCRIPTION_CEILING_JITTER = 0.05; // 5% +/- Jitter for the Subscription ceiling time
 
 export interface PhysicalDeviceProperties {
-    threadConnected: boolean;
-    wifiConnected: boolean;
-    ethernetConnected: boolean;
+    supportsThread: boolean;
+    supportsWifi: boolean;
+    supportsEthernet: boolean;
     rootEndpointServerList: number[];
     isMainsPowered: boolean;
     isBatteryPowered: boolean;
     isIntermittentlyConnected: boolean;
     isThreadSleepyEndDevice: boolean;
+    threadActive?: boolean;
+    threadPan?: bigint;
+    threadChannel?: number;
 }
 
 export namespace PhysicalDeviceProperties {
@@ -49,17 +53,18 @@ export namespace PhysicalDeviceProperties {
             isMainsPowered,
             isBatteryPowered,
             isIntermittentlyConnected,
-            threadConnected,
+            supportsThread,
             isThreadSleepyEndDevice,
+            threadActive,
         } = properties ?? {};
 
-        if (isIntermittentlyConnected) {
-            if (minIntervalFloor !== undefined && minIntervalFloor !== DEFAULT_SUBSCRIPTION_FLOOR_ICD) {
+        if (isIntermittentlyConnected && minIntervalFloor !== DEFAULT_SUBSCRIPTION_FLOOR_ICD) {
+            if (minIntervalFloor !== undefined) {
                 logger.info(
                     `${description}: Overwriting minIntervalFloorSeconds for intermittently connected device to ${Duration.format(DEFAULT_SUBSCRIPTION_FLOOR_ICD)}`,
                 );
-                minIntervalFloor = DEFAULT_SUBSCRIPTION_FLOOR_ICD;
             }
+            minIntervalFloor = DEFAULT_SUBSCRIPTION_FLOOR_ICD;
         }
         if (minIntervalFloor === undefined) {
             minIntervalFloor = DEFAULT_SUBSCRIPTION_FLOOR_DEFAULT;
@@ -70,7 +75,7 @@ export namespace PhysicalDeviceProperties {
                 ? DEFAULT_SUBSCRIPTION_CEILING_BATTERY_POWERED
                 : isThreadSleepyEndDevice
                   ? DEFAULT_SUBSCRIPTION_CEILING_THREAD_SLEEPY
-                  : threadConnected
+                  : supportsThread
                     ? DEFAULT_SUBSCRIPTION_CEILING_THREAD
                     : DEFAULT_SUBSCRIPTION_CEILING_WIFI;
         if (maxIntervalCeiling === undefined) {
@@ -80,6 +85,16 @@ export namespace PhysicalDeviceProperties {
             logger.debug(
                 `${description}: maxIntervalCeilingSeconds ideally is ${Duration.format(defaultCeiling)} instead of ${Duration.format(maxIntervalCeiling)} due to device type`,
             );
+        }
+
+        if (threadActive) {
+            // Add some Jitter to the Subscription ceiling time to ensure the device responses are spread a bit when
+            // devices are longer idle
+            // Logic does not validate if the resulting value gets too small because our defaults are high enough
+            // for this to never happen.
+            const maxJitter = maxIntervalCeiling * THREAD_SUBSCRIPTION_CEILING_JITTER;
+            const jitter = Math.round(maxJitter * Math.random() * 2 - maxJitter);
+            maxIntervalCeiling = Seconds(Seconds.of(Millis(maxIntervalCeiling + jitter)));
         }
 
         return {

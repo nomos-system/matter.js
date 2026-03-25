@@ -1,11 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Advertiser } from "#advertisement/Advertiser.js";
 import { ServiceDescription } from "#advertisement/ServiceDescription.js";
+import type { MdnsServer } from "#mdns/MdnsServer.js";
 import {
     Bytes,
     Crypto,
@@ -17,10 +18,9 @@ import {
     RetrySchedule,
     Seconds,
     STANDARD_MATTER_PORT,
-} from "#general";
-import type { MdnsServer } from "#mdns/MdnsServer.js";
-import { DatatypeModel, FieldElement } from "#model";
-import { MAXIMUM_COMMISSIONING_TIMEOUT } from "#types";
+} from "@matter/general";
+import { DatatypeModel, FieldElement } from "@matter/model";
+import { MAXIMUM_COMMISSIONING_TIMEOUT } from "@matter/types";
 import { CommissionableMdnsAdvertisement } from "./CommissionableMdnsAdvertisement.js";
 import { CommissionerMdnsAdvertisement } from "./CommissionerMdnsAdvertisement.js";
 import type { MdnsAdvertisement } from "./MdnsAdvertisement.js";

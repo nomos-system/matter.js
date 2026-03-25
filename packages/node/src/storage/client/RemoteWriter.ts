@@ -1,14 +1,14 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { InternalError } from "#general";
 import { ClientStructure } from "#node/client/ClientStructure.js";
 import type { ClientNode } from "#node/ClientNode.js";
-import { Write, WriteResult, type Val } from "#protocol";
-import type { ClusterId, ClusterType, EndpointNumber } from "#types";
+import { InternalError } from "@matter/general";
+import { Write, WriteResult, type Val } from "@matter/protocol";
+import type { ClusterId, ClusterType, EndpointNumber } from "@matter/types";
 import type { ClientNodeStore } from "./ClientNodeStore.js";
 
 /**
@@ -55,8 +55,7 @@ export function RemoteWriter(node: ClientNode, structure: ClientStructure): Remo
         }
 
         const write = Write(...attrWrites);
-        const response = await node.interaction.write(write);
-        WriteResult.assertSuccess(response);
+        WriteResult.assertSuccess(await node.interaction.write(write));
     };
 }
 

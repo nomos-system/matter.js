@@ -1,15 +1,15 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { LowPower } from "#clusters/low-power";
+import { LowPower } from "@matter/types/clusters/low-power";
 import { ClusterBehavior } from "../../behavior/cluster/ClusterBehavior.js";
 import { LowPowerInterface } from "./LowPowerInterface.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 
 /**
  * LowPowerBehavior is the base class for objects that support interaction with {@link LowPower.Cluster}.

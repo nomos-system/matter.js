@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -9,10 +9,10 @@
 import { MutableCluster } from "../cluster/mutation/MutableCluster.js";
 import { WritableAttribute, FixedAttribute } from "../cluster/Cluster.js";
 import { TlvEnum } from "../tlv/TlvNumber.js";
-import { AccessLevel } from "#model";
+import { AccessLevel } from "@matter/model";
 import { TlvArray } from "../tlv/TlvArray.js";
 import { BitFlag } from "../schema/BitmapSchema.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace TimeFormatLocalization {
@@ -129,10 +129,8 @@ export namespace TimeFormatLocalization {
              * Indicates the calendar format that the Node is currently configured to use when conveying dates.
              *
              * If not UseActiveLocale, this value shall take priority over any unit implied through the ActiveLocale
-             * attribute.
-             *
-             * If UseActiveLocale, any unit implied through the ActiveLocale attribute is used as the calendar type, and
-             * if ActiveLocale is not present, the calendar type is unknown.
+             * attribute. If UseActiveLocale, any unit implied through the ActiveLocale attribute is used as the
+             * calendar type, and if ActiveLocale is not present, the calendar type is unknown.
              *
              * @see {@link MatterSpecification.v142.Core} § 11.4.6.2
              */
@@ -174,10 +172,8 @@ export namespace TimeFormatLocalization {
              * Indicates the format that the Node is currently configured to use when conveying the hour unit of time.
              *
              * If not UseActiveLocale, this value shall take priority over any unit implied through the ActiveLocale
-             * attribute.
-             *
-             * If UseActiveLocale, any unit implied through the ActiveLocale attribute is used as the hour format, and
-             * if ActiveLocale is not present, the hour format is unknown.
+             * attribute. If UseActiveLocale, any unit implied through the ActiveLocale attribute is used as the hour
+             * format, and if ActiveLocale is not present, the hour format is unknown.
              *
              * @see {@link MatterSpecification.v142.Core} § 11.4.6.1
              */

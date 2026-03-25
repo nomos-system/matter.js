@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -16,7 +16,7 @@ import { TlvUInt8, TlvEnum } from "../tlv/TlvNumber.js";
 import { TlvVendorId } from "../datatype/VendorId.js";
 import { ModeBase } from "./mode-base.js";
 import { TypeFromSchema } from "../tlv/TlvSchema.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace DeviceEnergyManagementMode {
@@ -196,19 +196,19 @@ export namespace DeviceEnergyManagementMode {
          *
          * A few examples are provided below.
          *
-         *   • A mode named "100%" can have both the High (manufacturer specific) and Max (standard) mode tag. Clients
+         *   - A mode named "100%" can have both the High (manufacturer specific) and Max (standard) mode tag. Clients
          *     seeking the mode for either High or Max will find the same mode in this case.
          *
-         *   • A mode that includes a LowEnergy tag can be displayed by the client using a widget icon that shows a
+         *   - A mode that includes a LowEnergy tag can be displayed by the client using a widget icon that shows a
          *     green leaf.
          *
-         *   • A mode that includes a LowNoise tag may be used by the client when the user wishes for a lower level of
+         *   - A mode that includes a LowNoise tag may be used by the client when the user wishes for a lower level of
          *     audible sound, less likely to disturb the household’s activities.
          *
-         *   • A mode that includes a LowEnergy tag (standard, defined in this cluster specification) and also a
+         *   - A mode that includes a LowEnergy tag (standard, defined in this cluster specification) and also a
          *     Delicate tag (standard, defined in the namespace of a Laundry Mode derived cluster).
          *
-         *   • A mode that includes both a generic Quick tag (defined here), and Vacuum and Mop tags, (defined in the
+         *   - A mode that includes both a generic Quick tag (defined here), and Vacuum and Mop tags, (defined in the
          *     RVC Clean cluster that is a derivation of this cluster).
          *
          * @see {@link MatterSpecification.v142.Cluster} § 1.10.5.2.3

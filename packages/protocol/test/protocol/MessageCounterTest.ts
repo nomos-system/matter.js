@@ -1,11 +1,18 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { b$, InternalError, StandardCrypto, StorageBackendMemory, StorageContext, StorageManager } from "#general";
 import { MAX_COUNTER_VALUE_32BIT, MessageCounter, PersistedMessageCounter } from "#protocol/MessageCounter.js";
+import {
+    b$,
+    InternalError,
+    MemoryStorageDriver,
+    StandardCrypto,
+    StorageContext,
+    StorageManager,
+} from "@matter/general";
 
 describe("MessageCounter", () => {
     const crypto = new StandardCrypto();
@@ -13,7 +20,7 @@ describe("MessageCounter", () => {
 
     beforeEach(async () => {
         crypto.randomBytes = () => b$`12345678`;
-        const testStorage = new StorageBackendMemory();
+        const testStorage = new MemoryStorageDriver();
         const testStorageManager = new StorageManager(testStorage);
         await testStorageManager.initialize();
         testStorageContext = testStorageManager.createContext("TestContext");

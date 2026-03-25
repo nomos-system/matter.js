@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Immutable, Seconds, ServerAddress } from "#general";
-import { CommissionableDevice, OperationalDevice, PeerAddress, SessionParameters } from "#protocol";
-import { DeviceTypeId, VendorId } from "#types";
+import { Immutable, ServerAddress } from "@matter/general";
+import { CommissionableDevice, OperationalDevice, PeerAddress } from "@matter/protocol";
+import { DeviceTypeId, VendorId } from "@matter/types";
 import type { CommissioningClient } from "./CommissioningClient.js";
 
 /**
@@ -33,7 +33,10 @@ export namespace RemoteDescriptor {
             return PeerAddress.is(subject.peerAddress, object.peerAddress);
         }
 
-        if (object.deviceIdentifier !== undefined) {
+        // An empty deviceIdentifier means the scanner could not determine the device's identity
+        // (e.g. macOS CoreBluetooth hides real BLE addresses).  Treat it the same as absent —
+        // an empty string must not be used to match unrelated devices.
+        if (object.deviceIdentifier !== undefined && object.deviceIdentifier !== "") {
             return subject.deviceIdentifier === object.deviceIdentifier;
         }
 
@@ -57,7 +60,7 @@ export namespace RemoteDescriptor {
             rotatingIdentifier,
             pairingHint,
             pairingInstructions,
-            sessionIntervals,
+            sessionParameters,
             tcpSupport,
             longIdleTimeOperatingMode,
         } = long;
@@ -67,7 +70,7 @@ export namespace RemoteDescriptor {
         }
 
         if (ttl !== undefined) {
-            result.ttl = Seconds(ttl);
+            result.ttl = ttl;
         }
 
         if (deviceIdentifier !== undefined) {
@@ -102,8 +105,8 @@ export namespace RemoteDescriptor {
             }
         }
 
-        if (sessionIntervals !== undefined) {
-            const { idleInterval, activeInterval, activeThreshold } = sessionIntervals;
+        if (sessionParameters !== undefined) {
+            const { idleInterval, activeInterval, activeThreshold } = sessionParameters;
 
             if (idleInterval !== undefined) {
                 result.SII = idleInterval;
@@ -123,7 +126,7 @@ export namespace RemoteDescriptor {
         }
 
         if (longIdleTimeOperatingMode !== undefined) {
-            result.ICD = 1;
+            result.ICD = longIdleTimeOperatingMode ? 1 : 0;
         }
 
         const isOperational = long.peerAddress !== undefined;
@@ -165,7 +168,7 @@ export namespace RemoteDescriptor {
         }
 
         if (addresses?.length) {
-            long.addresses = addresses.map(ServerAddress.definitionOf);
+            long.addresses = addresses;
         }
 
         if (deviceIdentifier !== undefined) {
@@ -173,25 +176,23 @@ export namespace RemoteDescriptor {
         }
 
         if (VP !== undefined) {
-            const [vendor, product] = VP.split("+").map(Number.parseInt);
+            const [vendor, product] = VP.split("+").map(part => Number.parseInt(part, 10));
 
-            long.vendorId = Number.isFinite(vendor) ? VendorId(vendor) : undefined;
+            long.vendorId = Number.isFinite(vendor) ? VendorId(vendor, false) : undefined;
             long.productId = Number.isFinite(product) ? product : undefined;
         }
 
-        let sessionParameters: Partial<SessionParameters> | undefined;
         if (SII !== undefined) {
-            (sessionParameters ??= {}).idleInterval = SII;
+            (long.sessionParameters ??= {}).idleInterval = SII;
         }
         if (SAI !== undefined) {
-            (sessionParameters ??= {}).activeInterval = SAI;
+            (long.sessionParameters ??= {}).activeInterval = SAI;
         }
         if (SAT !== undefined) {
-            (sessionParameters ??= {}).activeThreshold = SAT;
+            (long.sessionParameters ??= {}).activeThreshold = SAT;
         }
-        long.sessionIntervals = sessionParameters;
 
-        long.deviceType = DT === undefined ? undefined : DeviceTypeId(DT);
+        long.deviceType = DT === undefined ? undefined : DeviceTypeId(DT, false);
         long.deviceName = DN;
         long.rotatingIdentifier = RI;
         long.pairingHint = PH;
@@ -206,6 +207,7 @@ export namespace RemoteDescriptor {
         if ("CM" in descriptor) {
             long.commissioningMode = descriptor.CM;
         }
+
         return long;
     }
 }

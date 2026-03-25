@@ -1,14 +1,16 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { CommissioningMode } from "#advertisement/CommissioningMode.js";
 import { ServiceDescription } from "#advertisement/ServiceDescription.js";
-import { AdministratorCommissioning } from "#clusters/administrator-commissioning";
 import { FailsafeContext } from "#common/FailsafeContext.js";
 import { FabricManager } from "#fabric/FabricManager.js";
+import { SecureChannelProtocol } from "#securechannel/SecureChannelProtocol.js";
+import { PaseServer } from "#session/pase/PaseServer.js";
+import { SessionManager } from "#session/SessionManager.js";
 import {
     Environment,
     Environmental,
@@ -20,11 +22,9 @@ import {
     ObserverGroup,
     Time,
     Timer,
-} from "#general";
-import { SecureChannelProtocol } from "#securechannel/SecureChannelProtocol.js";
-import { PaseServer } from "#session/pase/PaseServer.js";
-import { SessionManager } from "#session/SessionManager.js";
-import { CommissioningOptions, STANDARD_COMMISSIONING_TIMEOUT, StatusCode, StatusResponseError } from "#types";
+} from "@matter/general";
+import { CommissioningOptions, STANDARD_COMMISSIONING_TIMEOUT, StatusCode, StatusResponseError } from "@matter/types";
+import { AdministratorCommissioning } from "@matter/types/clusters/administrator-commissioning";
 import { DeviceAdvertiser } from "./DeviceAdvertiser.js";
 
 const logger = Logger.get("DeviceCommissioner");

@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Specification } from "#model";
 import { SpecificationVersion } from "#schema/SpecificationVersionSchema.js";
+import { Specification } from "@matter/model";
 
 describe("SpecificationVersionSchema", () => {
     it("encodes and decodes a specification version", () => {

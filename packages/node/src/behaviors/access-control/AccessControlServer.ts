@@ -1,13 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { ActionContext } from "#behavior/context/ActionContext.js";
-import { AccessControl as AccessControlTypes } from "#clusters/access-control";
-import { Bytes, deepCopy, InternalError, Logger } from "#general";
 import { NodeLifecycle } from "#node/NodeLifecycle.js";
+import { Bytes, deepCopy, InternalError, Logger } from "@matter/general";
 import {
     AccessControl,
     AclEndpointContext,
@@ -21,7 +20,7 @@ import {
     MessageExchange,
     NodeSession,
     SecureSession,
-} from "#protocol";
+} from "@matter/protocol";
 import {
     CaseAuthenticatedTag,
     ClusterId,
@@ -35,7 +34,8 @@ import {
     SubjectId,
     TlvTaggedList,
     TlvType,
-} from "#types";
+} from "@matter/types";
+import { AccessControl as AccessControlTypes } from "@matter/types/clusters/access-control";
 import { AccessControlBehavior } from "./AccessControlBehavior.js";
 
 const logger = Logger.get("AccessControlServer");

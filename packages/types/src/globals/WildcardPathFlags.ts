@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -9,8 +9,9 @@
 import { BitFlag } from "../schema/BitmapSchema.js";
 
 /**
- * The WildcardPathFlagsBitmap indicates flags that apply to the path, affecting wildcard expansion. The following flags
- * are defined:
+ * The WildcardPathFlagsBitmap indicates flags that apply to the path, affecting wildcard expansion.
+ *
+ * The following flags are defined:
  *
  * @see {@link MatterSpecification.v142.Core} § 8.9.2.5
  */

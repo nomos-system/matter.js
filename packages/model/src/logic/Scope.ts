@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Conformance } from "#aspects/Conformance.js";
 import { ElementTag } from "#common/ElementTag.js";
 import { SchemaImplementationError } from "#common/errors.js";
-import { ImplementationError } from "#general";
+import { ImplementationError } from "@matter/general";
 import { ModelIndex, MutableModelIndex } from "./ModelIndex.js";
 import { ModelTraversal } from "./ModelTraversal.js";
 
@@ -323,7 +323,7 @@ function findAllMembers<T extends Model>(parent: T, tags: Set<ElementTag>, scope
  * We consider the standard set of "global" attributes members of all clusters.  This injects those members that are
  * not otherwise defined in the cluster.
  */
-function injectGlobalAttributes(scope: ClusterModel, members: ClusterModel.Child[]) {
+function injectGlobalAttributes(scope: ClusterModel, members: MutableModelIndex<ClusterModel.Child>) {
     const missingGlobalIds = new Set(GLOBAL_IDS);
     for (const m of members) {
         if (m.tag === ElementTag.Attribute && m.id) {
@@ -368,7 +368,7 @@ function injectGlobalAttributes(scope: ClusterModel, members: ClusterModel.Child
 function filterWithConformance<T extends Model>(
     parent: T,
     tags: Set<ElementTag>,
-    members: Model[],
+    members: Iterable<Model>,
     features: Conformance.FeatureContext,
     conformantOnly: boolean,
     cache?: Map<Model, Map<ElementTag, Set<Model>>>,

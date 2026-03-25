@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Bytes, ImplementationError, InternalError, Merge, UnexpectedDataError } from "#general";
-import { FabricIndex } from "#model";
+import { Bytes, ImplementationError, InternalError, Merge, UnexpectedDataError } from "@matter/general";
+import { FabricIndex } from "@matter/model";
 import {
     ValidationDatatypeMismatchError,
     ValidationError,

@@ -1,12 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Endpoint } from "#endpoint/Endpoint.js";
 import { EndpointType } from "#endpoint/type/EndpointType.js";
 import type { ClientNode } from "#node/ClientNode.js";
+import { hex } from "@matter/general";
 import { Endpoints } from "./Endpoints.js";
 
 /**
@@ -27,7 +28,7 @@ export class ClientNodeEndpoints extends Endpoints {
             id: `ep${endpointId}`,
             number: endpointId,
             type: EndpointType({
-                name: "Unknown",
+                name: `Unknown#${hex.word(type.deviceType ?? EndpointType.UNKNOWN_DEVICE_TYPE)}`,
                 deviceType: EndpointType.UNKNOWN_DEVICE_TYPE,
                 deviceRevision: EndpointType.UNKNOWN_DEVICE_REVISION,
                 ...type,

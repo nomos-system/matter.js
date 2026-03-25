@@ -1,15 +1,15 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { DishwasherMode } from "#clusters/dishwasher-mode";
+import { DishwasherMode } from "@matter/types/clusters/dishwasher-mode";
 import { ClusterBehavior } from "../../behavior/cluster/ClusterBehavior.js";
 import { DishwasherModeInterface } from "./DishwasherModeInterface.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 
 /**
  * DishwasherModeBehavior is the base class for objects that support interaction with {@link DishwasherMode.Cluster}.

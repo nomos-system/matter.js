@@ -1,14 +1,22 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { LocalActorContext } from "#behavior/context/server/LocalActorContext.js";
 import { RootSupervisor } from "#behavior/supervision/RootSupervisor.js";
-import { Properties } from "#general";
-import { AttributeModel, ClusterModel, DataModelPath, FeatureMap, FeatureSet, FieldElement, FieldModel } from "#model";
-import { StatusResponseError } from "#types";
+import { Properties } from "@matter/general";
+import {
+    AttributeModel,
+    ClusterModel,
+    DataModelPath,
+    FeatureMap,
+    FeatureSet,
+    FieldElement,
+    FieldModel,
+} from "@matter/model";
+import { StatusResponseError } from "@matter/types";
 
 export function Fields(
     ...definition: {
@@ -80,7 +88,7 @@ function validate({ fields, features }: ClusterStructure, { supports, record, er
 
     // Perform validation
     try {
-        manager.validate?.(record ?? {}, LocalActorContext.ReadOnly, { path: DataModelPath(cluster.path) });
+        manager.validate?.(record ?? {}, LocalActorContext.ReadOnly, { path: new DataModelPath(cluster.path) });
         expect(error, `Expected ${error?.constructor.name} but none thrown`);
     } catch (e) {
         if (!error || (e as any).constructor.name === "AssertionError") {

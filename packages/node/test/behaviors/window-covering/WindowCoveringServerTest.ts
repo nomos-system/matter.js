@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { WindowCoveringServer } from "#behaviors/window-covering";
-import { WindowCovering } from "#clusters/window-covering";
+import { WindowCovering } from "@matter/types/clusters/window-covering";
 import { MockEndpoint } from "../../endpoint/mock-endpoint.js";
 
 class TestWindowCoveringServer extends WindowCoveringServer.with(

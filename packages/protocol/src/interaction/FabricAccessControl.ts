@@ -4,10 +4,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 import { Subject } from "#action/server/Subject.js";
-import { AccessControl } from "#clusters/access-control";
 import type { Fabric } from "#fabric/Fabric.js";
-import { Diagnostic, InternalError, Logger, MatterFlowError } from "#general";
-import { AccessLevel } from "#model";
+import { Diagnostic, InternalError, Logger, MatterFlowError } from "@matter/general";
+import { AccessLevel } from "@matter/model";
 import {
     CaseAuthenticatedTag,
     ClusterId,
@@ -18,7 +17,8 @@ import {
     StatusCode,
     StatusResponseError,
     SubjectId,
-} from "#types";
+} from "@matter/types";
+import { AccessControl } from "@matter/types/clusters/access-control";
 import { AccessControl as AccessControlContext } from "../action/server/AccessControl.js";
 
 const logger = Logger.get("FabricAccessControl");
@@ -124,12 +124,12 @@ export class FabricAccessControl {
     ): AccessLevel[] {
         if (location.cluster === undefined) {
             // Without a cluster, internal behaviors are only accessible internally, so this is an irrelevant placeholder
-            logger.warn("Access control check without cluster, returning View access level");
+            logger.warn(`Access control check without cluster at ${location.path}, returning View access level`);
             return [AccessLevel.View];
         }
         if (endpoint === undefined) {
             // Without an endpoint, we can't determine access levels, ???
-            logger.warn("Access control check without endpoint, returning View access level");
+            logger.warn(`Access control check without endpoint at ${location.path}, returning View access level`);
             return [AccessLevel.View];
         }
 

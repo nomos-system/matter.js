@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { ScopedStorage } from "#bdx/ScopedStorage.js";
-import { Bytes, ImplementationError, Logger, StorageContext } from "#general";
+import { Bytes, ImplementationError, Logger, StorageContext } from "@matter/general";
 import { FileDesignator } from "./FileDesignator.js";
 
 const logger = Logger.get("PersistedFileDesignator");

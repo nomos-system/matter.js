@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { ClusterType, TypeFromSchema } from "#types";
-import { AttributeId, BitSchema, CommandId, TypeFromPartialBitSchema } from "#types";
+import type { ClusterType, TypeFromSchema } from "@matter/types";
+import { AttributeId, BitSchema, CommandId, TypeFromPartialBitSchema } from "@matter/types";
 import type { Behavior } from "../Behavior.js";
 import type { ClusterOf } from "./cluster-behavior-utils.js";
 

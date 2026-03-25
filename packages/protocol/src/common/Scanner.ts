@@ -1,25 +1,26 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import {
+    AddressLifespan,
     BasicSet,
     ChannelType,
     Duration,
     Environment,
     Environmental,
-    Lifespan,
+    Millis,
     ServerAddress,
     ServerAddressUdp,
-} from "#general";
-import { DiscoveryCapabilitiesBitmap, NodeId, TypeFromPartialBitSchema, VendorId } from "#types";
-import { Fabric } from "../fabric/Fabric.js";
+} from "@matter/general";
+import { DiscoveryCapabilitiesBitmap, TypeFromPartialBitSchema, VendorId } from "@matter/types";
 
 /**
- * All information exposed by a commissionable device via announcements.
- * The properties are named identical as in the Matter specification.
+ * All information exposed by a device via announcements.
+ *
+ * Names are from the Matter specification.
  */
 export type DiscoveryData = {
     /** VendorId + ProductId */
@@ -56,8 +57,46 @@ export type DiscoveryData = {
     ICD?: number;
 };
 
+export function DiscoveryData(kvs: Map<string, string>) {
+    const dd: DiscoveryData = {};
+
+    for (const key in kvs.keys()) {
+        switch (key) {
+            case "VP":
+            case "DN":
+            case "RI":
+            case "PI":
+                dd[key] = `${kvs.get(key)}`;
+                break;
+
+            case "DT":
+            case "PH":
+            case "T":
+            case "ICD": {
+                const num = Number(kvs.get(key));
+                if (isFinite(num)) {
+                    dd[key] = num;
+                }
+                break;
+            }
+
+            case "SII":
+            case "SAI":
+            case "SAT": {
+                const num = Number(kvs.get(key));
+                if (isFinite(num)) {
+                    dd[key] = Millis(num);
+                }
+                break;
+            }
+        }
+    }
+
+    return dd;
+}
+
 export type DiscoverableDevice<SA extends ServerAddress> = DiscoveryData &
-    Partial<Lifespan> & {
+    Partial<AddressLifespan> & {
         /** The device's addresses IP/port pairs */
         addresses: SA[];
     };
@@ -81,7 +120,8 @@ export type CommissionableDevice = DiscoverableDevice<ServerAddress> & {
 
 /**
  * Identifier to use to discover a commissionable device.
- * Please decide for the best matching identifier that you have.
+ *
+ * Use the most specific identifier available.
  */
 export type CommissionableDeviceIdentifiers =
     | {
@@ -117,23 +157,6 @@ export type CommissionableDeviceIdentifiers =
 
 export interface Scanner {
     type: ChannelType;
-
-    /**
-     * Send DNS-SD queries to discover the current addresses of an operational paired device by its operational ID
-     * and return them.
-     */
-    findOperationalDevice(
-        fabric: Fabric,
-        nodeId: NodeId,
-        timeout?: Duration,
-        ignoreExistingRecords?: boolean,
-    ): Promise<OperationalDevice | undefined>;
-
-    /**
-     * Return already discovered addresses of an operational paired device and return them. Does not send out new
-     * DNS-SD queries.
-     */
-    getDiscoveredOperationalDevice(fabric: Fabric, nodeId: NodeId): OperationalDevice | undefined;
 
     /**
      * Send DNS-SD queries to discover commissionable devices by a provided identifier (e.g. discriminator,

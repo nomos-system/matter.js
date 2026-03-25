@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
-import { Bytes, Crypto, ImplementationError, InternalError, StorageContext } from "#general";
 import { PersistedMessageCounter } from "#protocol/MessageCounter.js";
 import { MessageReceptionStateEncryptedWithRollover } from "#protocol/MessageReceptionState.js";
-import { NodeId } from "#types";
+import { Bytes, Crypto, ImplementationError, InternalError, StorageContext } from "@matter/general";
+import { NodeId } from "@matter/types";
 
 export class MessagingState {
     /**

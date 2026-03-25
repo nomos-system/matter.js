@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { AccessLevel } from "#model";
-import { PeerAddress, ProtocolMocks, Session } from "#protocol";
+import { AccessLevel } from "@matter/model";
+import { PeerAddress, ProtocolMocks, Session } from "@matter/protocol";
 
 /**
  * A mock message exchange.

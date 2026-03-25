@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -14,7 +14,7 @@ import { TlvString } from "../tlv/TlvString.js";
 import { BitFlag } from "../schema/BitmapSchema.js";
 import { TlvOptionalField, TlvObject } from "../tlv/TlvObject.js";
 import { TypeFromSchema } from "../tlv/TlvSchema.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace TemperatureControl {
@@ -131,9 +131,8 @@ export namespace TemperatureControl {
              * SetTemperature command.
              *
              * For example, if the value of MinTemperature is 25.00C (2500) and the Step value is 0.50C (50), valid
-             * values of the TargetTemperature field of the SetTemperature command would be 25.50C
-             *
-             * (2550), 26.00C (2600), 26.50C (2650), etc.
+             * values of the TargetTemperature field of the SetTemperature command would be 25.50C (2550), 26.00C
+             * (2600), 26.50C (2650), etc.
              *
              * @see {@link MatterSpecification.v142.Cluster} § 8.2.5.4
              */

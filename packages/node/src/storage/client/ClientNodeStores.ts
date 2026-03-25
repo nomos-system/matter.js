@@ -1,13 +1,19 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Construction, MatterAggregateError, StorageBackendMemory, StorageContext, StorageManager } from "#general";
 import type { ClientGroup } from "#node/ClientGroup.js";
 import type { ClientNode } from "#node/ClientNode.js";
 import type { Node } from "#node/Node.js";
+import {
+    Construction,
+    MatterAggregateError,
+    MemoryStorageDriver,
+    StorageContext,
+    StorageManager,
+} from "@matter/general";
 import { ClientNodeStore } from "./ClientNodeStore.js";
 
 /**
@@ -50,7 +56,7 @@ export class ClientNodeStores {
                 }
             }
 
-            this.#createNodeStore(id);
+            this.#createNodeStore(id, true);
         }
 
         await MatterAggregateError.allSettled(
@@ -72,19 +78,23 @@ export class ClientNodeStores {
     }
 
     /**
-     * Obtain the store for a single {@link ClientNode}.
+     * Get the store for a single {@link ClientNode} or peer Id.
      *
-     * These stores are cached internally by ID.
+     * These stores are cached internally by Id.
      */
-    storeForNode(node: ClientNode): ClientNodeStore {
+    storeForNode(nodeOrId: ClientNode | string): ClientNodeStore {
         this.#construction.assert();
 
-        const store = this.#stores[node.id];
+        if (typeof nodeOrId !== "string") {
+            nodeOrId = nodeOrId.id;
+        }
+
+        const store = this.#stores[nodeOrId];
         if (store) {
             return store;
         }
 
-        return this.#createNodeStore(node.id);
+        return this.#createNodeStore(nodeOrId);
     }
 
     storeForGroup(node: ClientGroup): ClientNodeStore {
@@ -115,16 +125,21 @@ export class ClientNodeStores {
      * Group stores are always created with a memory backend as they are transient.
      */
     #createGroupStore(id: string) {
-        const manager = new StorageManager(new StorageBackendMemory());
+        const manager = new StorageManager(new MemoryStorageDriver());
         manager.initialize();
-        const store = new ClientNodeStore(id, manager.createContext(id));
+        const store = new ClientNodeStore(id, manager.createContext(id), false);
         store.construction.start();
         this.#stores[id] = store;
         return store;
     }
 
-    #createNodeStore(id: string) {
-        const store = new ClientNodeStore(id, this.#storage.createContext(id));
+    #createNodeStore(id: string, isPreexisting = false) {
+        const store = new ClientNodeStore(
+            id,
+            this.#storage.createContext(id),
+            isPreexisting,
+            () => delete this.#stores[id],
+        );
         store.construction.start();
         this.#stores[id] = store;
         return store;

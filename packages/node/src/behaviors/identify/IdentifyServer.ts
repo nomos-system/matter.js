@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Identify } from "#clusters/identify";
-import { MaybePromise, Observable, Seconds, Time, Timer } from "#general";
+import { MaybePromise, Observable, Seconds, Time, Timer } from "@matter/general";
 import { hasRemoteActor } from "@matter/protocol";
+import { Identify } from "@matter/types/clusters/identify";
 import { IdentifyBehavior } from "./IdentifyBehavior.js";
 
 /**

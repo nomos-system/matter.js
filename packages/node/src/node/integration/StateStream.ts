@@ -1,17 +1,16 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Behavior } from "#behavior/Behavior.js";
 import { Endpoint } from "#endpoint/Endpoint.js";
-import { Abort, deepCopy, Duration, Gate, Millis, Timer } from "#general";
-import { DatatypeModel, FieldElement } from "#model";
 import { Node } from "#node/Node.js";
 import { ServerNode } from "#node/ServerNode.js";
-import { Val } from "#protocol";
-import { EndpointNumber } from "#types";
+import { Abort, deepCopy, Duration, Gate, Millis, Timer } from "@matter/general";
+import { DatatypeModel, FieldElement } from "@matter/model";
+import { EndpointNumber } from "@matter/types";
 import { ChangeNotificationService } from "./ChangeNotificationService.js";
 
 /**
@@ -103,14 +102,17 @@ export function StateStream(
                     // Property update
                     const state = stateOfBehavior(node.id, endpoint.number, behavior.id);
                     state.queueEntry = undefined;
-                    let changes = endpoint.stateOf(behavior);
+
+                    let changes: Record<string, unknown>;
                     if (state.dirty) {
-                        changes = Object.fromEntries(
-                            [...state.dirty].map(name => [name, (changes as Val.Struct)[name]]),
-                        );
+                        const allState = endpoint.stateOf(behavior) as Record<string, unknown>;
+                        changes = {};
+                        for (const name of state.dirty) {
+                            changes[name] = deepCopy(allState[name]);
+                        }
                         state.dirty = undefined;
                     } else {
-                        changes = deepCopy(changes);
+                        changes = deepCopy(endpoint.stateOf(behavior));
                     }
                     yield {
                         kind: "update",

@@ -1,14 +1,14 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { ReactNativeBle } from "#ble/ReactNativeBle.js";
-import { Environment, Network, StorageService, VariableService } from "#general";
-import { Ble } from "#protocol";
+import { Environment, Network, StorageService, VariableService } from "@matter/general";
+import { Ble } from "@matter/protocol";
 import { NetworkReactNative } from "../net/NetworkReactNative.js";
-import { StorageBackendAsyncStorage } from "../storage/StorageBackendAsyncStorage.js";
+import { ReactNativeWebStorageDriver } from "../storage/ReactNativeWebStorageDriver.js";
 
 /**
  * This is the default environment implementation for React-native:
@@ -35,12 +35,8 @@ function loadVariables(env: Environment) {
 
 function configureStorage(env: Environment) {
     const service = env.get(StorageService);
-
-    env.vars.use(() => {
-        service.location = "Memory";
-    });
-
-    service.factory = namespace => new StorageBackendAsyncStorage(namespace);
+    service.registerDriver(ReactNativeWebStorageDriver);
+    service.defaultDriver = "async-storage";
 }
 
 function configureNetwork(env: Environment) {

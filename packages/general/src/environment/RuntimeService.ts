@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -216,7 +216,7 @@ export class RuntimeService {
     }
 
     get [Diagnostic.value]() {
-        return Diagnostic.node("⚙️", "Workers", {
+        return Diagnostic.node("🛠", `workers for ${this.#env.name}`, {
             children: [...this.#workers].map(worker => {
                 let diagnostic: unknown = worker[DiagnosticPresentation.name];
 

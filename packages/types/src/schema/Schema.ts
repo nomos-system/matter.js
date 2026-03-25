@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Bytes } from "#general";
+import { Bytes } from "@matter/general";
 
 /** Define a schema to encode / decode convert type T to type E. */
 export abstract class Schema<T, E = Bytes> {

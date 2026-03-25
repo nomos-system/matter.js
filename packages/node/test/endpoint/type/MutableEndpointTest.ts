@@ -1,14 +1,14 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { SupportedBehaviors } from "#endpoint/properties/SupportedBehaviors.js";
 import { MutableEndpoint } from "#endpoint/type/MutableEndpoint.js";
 import { RootEndpoint } from "#endpoints/root";
-import { DeviceClassification } from "#model";
-import { DeviceTypeId } from "#types";
+import { DeviceClassification } from "@matter/model";
+import { DeviceTypeId } from "@matter/types";
 import { MockBehavior1, MockBehavior2 } from "../mock-endpoint.js";
 
 const Identity = {

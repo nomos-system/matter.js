@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -16,7 +16,7 @@ import { SubscribeResult } from "#action/response/SubscribeResult.js";
 import { WriteResult } from "#action/response/WriteResult.js";
 import { CommandInvokeResponse } from "#action/server/CommandInvokeResponse.js";
 import { EventReadResponse } from "#action/server/EventReadResponse.js";
-import { Logger, NotImplementedError } from "#general";
+import { Logger, NotImplementedError } from "@matter/general";
 import { AttributeReadResponse } from "./AttributeReadResponse.js";
 import { AttributeWriteResponse } from "./AttributeWriteResponse.js";
 
@@ -48,7 +48,7 @@ export class ServerInteraction<
             yield* attributeReader.process(request);
 
             const { existent, status, success } = attributeReader.counts;
-            readInfo = `${existent} matching attributes (${status ? `${status} status, ` : ""}${success ? `${success} values` : ""})`;
+            readInfo = `${existent} matching attributes (${status ? `${status} status` : ""}${success ? `${success} values` : ""})`;
         }
 
         if (Read.containsEvent(request)) {
@@ -69,11 +69,11 @@ export class ServerInteraction<
         // TODO - validate request
 
         const writer = new AttributeWriteResponse(this.#node, session);
-        return await writer.process(request);
+        return (await writer.process(request)) as Awaited<WriteResult<T>>;
     }
 
     async *invoke(request: Invoke, session: SessionT): InvokeResult {
-        // TODO -  validate request
+        // TODO - validate request
 
         const invoker = new CommandInvokeResponse(this.#node, session);
         yield* invoker.process(request);

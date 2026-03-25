@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -12,7 +12,7 @@ import { TlvArray } from "../tlv/TlvArray.js";
 import { TlvField, TlvOptionalField, TlvObject } from "../tlv/TlvObject.js";
 import { TlvString } from "../tlv/TlvString.js";
 import { TypeFromSchema } from "../tlv/TlvSchema.js";
-import { AccessLevel } from "#model";
+import { AccessLevel } from "@matter/model";
 import { TlvUInt32, TlvUInt16, TlvUInt8, TlvBitmap } from "../tlv/TlvNumber.js";
 import { Priority } from "../globals/Priority.js";
 import { TlvNoArguments } from "../tlv/TlvNoArguments.js";
@@ -21,7 +21,7 @@ import { TlvNullable } from "../tlv/TlvNullable.js";
 import { BitFlag } from "../schema/BitmapSchema.js";
 import { StatusResponseError } from "../common/StatusResponseError.js";
 import { Status } from "../globals/Status.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace ContentControl {
@@ -948,9 +948,9 @@ export namespace ContentControl {
              * A server that does not support the PM feature shall respond with InvalidPINCode to clients that only have
              * Operate privilege unless:
              *
-             *   • It has been provided with the PIN value to expect via an out of band mechanism, and
+             *   - It has been provided with the PIN value to expect via an out of band mechanism, and
              *
-             *   • The client has provided a PINCode that matches the expected PIN value.
+             *   - The client has provided a PINCode that matches the expected PIN value.
              *
              * @see {@link MatterSpecification.v142.Cluster} § 6.13.8.6
              */
@@ -1018,7 +1018,7 @@ export namespace ContentControl {
              * The purpose of this command is to specify whether programs with no Content rating must be blocked by this
              * media device.
              *
-             * Upon receipt of the UnblockUnratedContent command, the media device shall set the BlockUn rated attribute
+             * Upon receipt of the UnblockUnratedContent command, the media device shall set the BlockUnrated attribute
              * to FALSE.
              *
              * @see {@link MatterSpecification.v142.Cluster} § 6.13.8.9
@@ -1376,7 +1376,9 @@ export namespace ContentControl {
      * responsibility of the end product to enforce appropriate right access (for example, to prevent a child from
      * disabling this feature).
      *
-     * NOTE Support for Content Control cluster is provisional.
+     * > [!NOTE]
+     *
+     * > Support for Content Control cluster is provisional.
      *
      * ContentControlCluster supports optional features that you can enable with the ContentControlCluster.with()
      * factory method.

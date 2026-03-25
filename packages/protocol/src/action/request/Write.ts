@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { AccessControl } from "#clusters/access-control";
-import { Diagnostic, Duration } from "#general";
-import { Specification } from "#model";
-import { ArraySchema, AttributeData, AttributeId, ClusterId, ClusterType, WriteRequest } from "#types";
+import { Diagnostic, Duration } from "@matter/general";
+import { Specification } from "@matter/model";
+import { ArraySchema, AttributeData, AttributeId, ClusterId, ClusterType, WriteRequest } from "@matter/types";
+import { AccessControl } from "@matter/types/clusters/access-control";
 import { MalformedRequestError } from "./MalformedRequestError.js";
 import { resolvePathForSpecifier, Specifier } from "./Specifier.js";
 

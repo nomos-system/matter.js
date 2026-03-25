@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -16,7 +16,7 @@ import {
 } from "../behaviors/activated-carbon-filter-monitoring/ActivatedCarbonFilterMonitoringServer.js";
 import { MutableEndpoint } from "../endpoint/type/MutableEndpoint.js";
 import { SupportedBehaviors } from "../endpoint/properties/SupportedBehaviors.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 
 /**
  * An Extractor Hood is a device that is generally installed above a cooking surface in residential kitchens. An
@@ -26,17 +26,17 @@ import { Identity } from "#general";
  *
  * Extractor Hoods may also be known by the following names:
  *
- *   • Hoods
+ *   - Hoods
  *
- *   • Extractor Fans
+ *   - Extractor Fans
  *
- *   • Extractors
+ *   - Extractors
  *
- *   • Range Hoods
+ *   - Range Hoods
  *
- *   • Telescoping Hoods
+ *   - Telescoping Hoods
  *
- *   • Telescoping Extractors
+ *   - Telescoping Extractors
  *
  * @see {@link MatterSpecification.v142.Device} § 13.10
  */

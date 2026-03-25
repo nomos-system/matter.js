@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { InternalError } from "#general";
+import { InternalError } from "@matter/general";
 import { Constraint } from "../aspects/index.js";
 import { ElementTag, Metatype, Specification } from "../common/index.js";
 import { AnyElement } from "../elements/index.js";

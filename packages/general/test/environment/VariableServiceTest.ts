@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -75,6 +75,36 @@ describe("VariableService", () => {
                 indexedobject: { entry: { subentry: "Value" } },
             }),
         );
+    });
+
+    it("fallback lookup resolves hyphenated name via sanitized key", () => {
+        const vars = new VariableService(new Environment("test"));
+        vars.set("matter.nodes.shell.91.network", "value1");
+        expect(vars.get("MATTER-NODES-SHELL-91-NETWORK")).equals("value1");
+        expect(vars.get("matter-nodes-shell-91-network")).equals("value1");
+    });
+
+    it("fallback lookup returns undefined/fallback without throwing for names with leading or trailing special chars", () => {
+        const vars = new VariableService(new Environment("test"));
+        expect(vars.get("_foo")).equals(undefined);
+        expect(vars.get("foo_", "default")).equals("default");
+        expect(vars.get("-bar")).equals(undefined);
+        expect(vars.get("bar-", 42)).equals(42);
+    });
+
+    it("fallback lookup adds sanitized name to usage collectors", () => {
+        const vars = new VariableService(new Environment("test"));
+        vars.set("some.key", "initial");
+
+        const history = Array<string | undefined>();
+        const usage = vars.use(() => {
+            history.push(vars.get("some-key") as string | undefined);
+        });
+
+        vars.set("some.key", "updated");
+        usage.close();
+
+        expect(history).deep.equals(["initial", "updated"]);
     });
 
     it("updates usages automatically", () => {

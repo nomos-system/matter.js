@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 import dgram from "react-native-udp";
@@ -19,7 +19,7 @@ import {
     UdpChannel,
     UdpChannelOptions,
     UdpSocketType,
-} from "#general";
+} from "@matter/general";
 import { Platform } from "react-native";
 import { NetworkReactNative } from "./NetworkReactNative.js";
 
@@ -198,11 +198,11 @@ export class UdpChannelReactNative implements UdpChannel {
             listener(netInterface, address, port, data);
         };
 
-        // eslint-disable-next-line @typescript-eslint/no-misused-promises
+        // oxlint-disable-next-line @typescript-eslint/no-misused-promises
         this.#socket.on("message", messageListener);
         return {
             close: async () => {
-                // eslint-disable-next-line @typescript-eslint/no-misused-promises
+                // oxlint-disable-next-line @typescript-eslint/no-misused-promises
                 this.#socket.removeListener("message", messageListener);
             },
         };

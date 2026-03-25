@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { BasicSet, decamelize, Diagnostic, ImmutableSet, MutableSet, ObservableSet } from "#general";
 import { IdentityConflictError } from "#node/server/IdentityService.js";
+import { BasicSet, decamelize, Diagnostic, ImmutableSet, MutableSet, ObservableSet } from "@matter/general";
 import { Endpoint } from "../Endpoint.js";
 
 /**
@@ -119,7 +119,7 @@ export class EndpointContainer<T extends Endpoint = Endpoint>
     }
 
     /**
-     * Confirm availability of an ID amongst the endpoint's children.
+     * Confirm the availability of an ID amongst the endpoint's children.
      */
     assertIdAvailable(id: string, endpoint: Endpoint) {
         const other = this.get(id);

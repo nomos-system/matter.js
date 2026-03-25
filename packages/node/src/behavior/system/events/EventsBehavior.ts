@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { deepCopy, StorageManager } from "#general";
-import { DatatypeModel, FieldElement } from "#model";
-import { NonvolatileEventStore, OccurrenceManager, VolatileEventStore } from "#protocol";
+import { deepCopy, StorageManager } from "@matter/general";
+import { DatatypeModel, FieldElement } from "@matter/model";
+import { NonvolatileEventStore, OccurrenceManager, VolatileEventStore } from "@matter/protocol";
 import { Behavior } from "../../Behavior.js";
 
 /**

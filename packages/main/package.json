@@ -25,19 +25,10 @@
         "clean": "matter-build clean",
         "build": "matter-build",
         "build-clean": "matter-build --clean",
-        "coverage": "c8 matter-test esm",
-        "embed-examples": "embedme **/README.md"
+        "coverage": "c8 matter-test esm"
     },
     "imports": {
-        "#general": "@matter/general",
         "#platform": "@matter/main/platform",
-        "#model": "@matter/model",
-        "#types": "@matter/types",
-        "#protocol": "@matter/protocol",
-        "#clusters/*": "@matter/types/clusters/*",
-        "#behaviors/*": "@matter/node/behaviors/*",
-        "#endpoints/*": "@matter/node/endpoints/*",
-        "#devices/*": "@matter/node/devices/*",
         "#*": "./src/*"
     },
     "dependencies": {

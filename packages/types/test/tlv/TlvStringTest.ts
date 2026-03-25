@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { ValidationError } from "#common/ValidationError.js";
-import { Bytes } from "#general";
 import { TlvAny } from "#tlv/TlvAny.js";
 import { TlvByteString, TlvString } from "#tlv/TlvString.js";
+import { Bytes } from "@matter/general";
 
 type TestVector<I, E> = { [testName: string]: { input: I; out: E } };
 

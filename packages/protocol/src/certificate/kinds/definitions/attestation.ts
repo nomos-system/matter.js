@@ -1,15 +1,15 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { VendorId } from "#types";
-import { X509Certificate } from "./base.js";
+import { VendorId } from "@matter/types";
+import { MatterCertificate } from "./base.js";
 
 /** Definitions for Matter Attestation certificates (PAA, PAI, DAC) */
 export namespace AttestationCertificate {
-    export interface Dac extends X509Certificate {
+    export interface Dac extends MatterCertificate {
         issuer: {
             commonName: string;
             productId?: number;
@@ -22,7 +22,7 @@ export namespace AttestationCertificate {
         };
     }
 
-    export interface Pai extends X509Certificate {
+    export interface Pai extends MatterCertificate {
         issuer: {
             commonName: string;
             vendorId?: VendorId;
@@ -34,7 +34,7 @@ export namespace AttestationCertificate {
         };
     }
 
-    export interface Paa extends X509Certificate {
+    export interface Paa extends MatterCertificate {
         issuer: {
             commonName: string;
             vendorId?: VendorId;

@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { MaybePromise, Observable } from "#general";
+import { MaybePromise, Observable } from "@matter/general";
 import { LowPowerBehavior } from "./LowPowerBehavior.js";
 
 /**

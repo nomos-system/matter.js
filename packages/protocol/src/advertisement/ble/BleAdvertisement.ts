@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { BtpCodec } from "#codec/BtpCodec.js";
-import { Days, Duration, Millis, Minutes, Seconds } from "#general";
+import { Days, Duration, Millis, Minutes, Seconds } from "@matter/general";
 import { Advertisement } from "../Advertisement.js";
 import { ServiceDescription } from "../ServiceDescription.js";
 import type { BleAdvertiser } from "./BleAdvertiser.js";

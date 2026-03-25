@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { capitalize, decamelize, Diagnostic } from "#general";
-import { ClientNode, SoftwareUpdateManager } from "#node";
-import { PeerAddress } from "#protocol";
-import { FabricIndex, NodeId, VendorId } from "#types";
+import { capitalize, decamelize, Diagnostic } from "@matter/general";
+import { ClientNode, SoftwareUpdateManager } from "@matter/node";
+import { PeerAddress } from "@matter/protocol";
+import { FabricIndex, NodeId, VendorId } from "@matter/types";
 import { CommissioningControllerNodeOptions, NodeStateInformation } from "@project-chip/matter.js/device";
 import type { Argv } from "yargs";
 import { MatterNode } from "../MatterNode.js";
@@ -306,7 +306,7 @@ export default function commands(theNode: MatterNode) {
                         yargs
                             .command(
                                 "known [node-id]",
-                                "List which OTA updates are known to be available for commissioned nodes. A first query by the provider must have happened for this to be filled.",
+                                "List which OTA updates are known to be available for commissioned nodes. Only nodes that are connected and subscribed are considered.",
                                 yargs => {
                                     return yargs
                                         .positional("node-id", {
@@ -345,7 +345,7 @@ export default function commands(theNode: MatterNode) {
                                         console.log(`OTA updates available for ${updatesAvailable.length} nodes:`);
                                         for (const { peerAddress, info } of updatesAvailable) {
                                             console.log(
-                                                peerAddress,
+                                                peerAddress.toString(),
                                                 `: new Version: ${info.softwareVersion} (${info.softwareVersionString})`,
                                             );
                                         }
@@ -367,7 +367,7 @@ export default function commands(theNode: MatterNode) {
                                         .option("mode", {
                                             describe: "DCL mode (prod or test)",
                                             type: "string",
-                                            choices: ["prod", "test"],
+                                            choices: ["prod", "test", "both"],
                                             default: "prod",
                                         })
                                         .option("local", {
@@ -378,7 +378,7 @@ export default function commands(theNode: MatterNode) {
                                 },
                                 async argv => {
                                     const { nodeId: nodeIdStr, mode, local } = argv;
-                                    const isProduction = mode === "prod";
+                                    const isProduction = mode === "prod" ? true : mode === "test" ? false : undefined;
 
                                     await theNode.start();
                                     if (theNode.commissioningController === undefined) {
@@ -413,9 +413,11 @@ export default function commands(theNode: MatterNode) {
                                     console.log(
                                         `  Current Software Version: ${basicInfo.softwareVersion} (${basicInfo.softwareVersionString})`,
                                     );
-                                    console.log(`  DCL Mode: ${isProduction ? "production" : "test"}\n`);
+                                    console.log(`  DCL Mode: ${mode}\n`);
 
-                                    const updateInfo = await theNode.otaService.checkForUpdate({
+                                    const updateInfo = await (
+                                        await theNode.otaService()
+                                    ).checkForUpdate({
                                         vendorId: basicInfo.vendorId as VendorId,
                                         productId: basicInfo.productId as number,
                                         currentSoftwareVersion: basicInfo.softwareVersion as number,
@@ -457,7 +459,7 @@ export default function commands(theNode: MatterNode) {
                                         .option("mode", {
                                             describe: "DCL mode (prod or test)",
                                             type: "string",
-                                            choices: ["prod", "test"],
+                                            choices: ["prod", "test", "both"],
                                             default: "prod",
                                         })
                                         .option("force", {
@@ -473,7 +475,7 @@ export default function commands(theNode: MatterNode) {
                                 },
                                 async argv => {
                                     const { nodeId: nodeIdStr, mode, force, local } = argv;
-                                    const isProduction = mode === "prod";
+                                    const isProduction = mode === "prod" ? true : mode === "test" ? false : undefined;
                                     const forceDownload = force === true;
 
                                     await theNode.start();
@@ -509,9 +511,11 @@ export default function commands(theNode: MatterNode) {
                                     console.log(
                                         `  Current Software Version: ${basicInfo.softwareVersion} (${basicInfo.softwareVersionString})`,
                                     );
-                                    console.log(`  DCL Mode: ${isProduction ? "production" : "test"}\n`);
+                                    console.log(`  DCL Mode: ${mode}\n`);
 
-                                    const updateInfo = await theNode.otaService.checkForUpdate({
+                                    const updateInfo = await (
+                                        await theNode.otaService()
+                                    ).checkForUpdate({
                                         vendorId: basicInfo.vendorId as VendorId,
                                         productId: basicInfo.productId as number,
                                         currentSoftwareVersion: basicInfo.softwareVersion as number,
@@ -529,17 +533,16 @@ export default function commands(theNode: MatterNode) {
                                         `  New Version: ${updateInfo.softwareVersion} (${updateInfo.softwareVersionString})`,
                                     );
                                     console.log(`  OTA URL: ${updateInfo.otaUrl}`);
+                                    console.log(`  Source: ${updateInfo.source}`);
                                     if (updateInfo.otaFileSize) {
                                         const sizeKB = Number(updateInfo.otaFileSize) / 1024;
                                         console.log(`  File Size: ${sizeKB.toFixed(2)} KB`);
                                     }
 
                                     console.log("\nDownloading update...");
-                                    const fd = await theNode.otaService.downloadUpdate(
-                                        updateInfo,
-                                        isProduction,
-                                        forceDownload,
-                                    );
+                                    const fd = await (
+                                        await theNode.otaService()
+                                    ).downloadUpdate(updateInfo, forceDownload);
 
                                     console.log(`✓ Update downloaded and stored successfully: ${fd.text}`);
                                     console.log(
@@ -560,7 +563,7 @@ export default function commands(theNode: MatterNode) {
                                         .option("mode", {
                                             describe: "DCL mode (prod or test)",
                                             type: "string",
-                                            choices: ["prod", "test"],
+                                            choices: ["prod", "test", "both"],
                                             default: "prod",
                                         })
                                         .option("force", {
@@ -576,7 +579,7 @@ export default function commands(theNode: MatterNode) {
                                 },
                                 async argv => {
                                     const { nodeId: nodeIdStr, mode, force, local } = argv;
-                                    const isProduction = mode === "prod";
+                                    const isProduction = mode === "prod" ? true : mode === "test" ? false : undefined;
                                     const forceDownload = force === true;
 
                                     await theNode.start();
@@ -613,9 +616,11 @@ export default function commands(theNode: MatterNode) {
                                     console.log(
                                         `  Current Software Version: ${basicInfo.softwareVersion} (${basicInfo.softwareVersionString})`,
                                     );
-                                    console.log(`  DCL Mode: ${isProduction ? "production" : "test"}\n`);
+                                    console.log(`  DCL Mode: ${mode}\n`);
 
-                                    const localUpdates = await theNode.otaService.find({
+                                    const localUpdates = await (
+                                        await theNode.otaService()
+                                    ).find({
                                         vendorId: basicInfo.vendorId as VendorId,
                                         productId: basicInfo.productId as number,
                                         currentVersion: basicInfo.softwareVersion as number,
@@ -626,7 +631,9 @@ export default function commands(theNode: MatterNode) {
                                         return;
                                     }
 
-                                    const updateInfo = await theNode.otaService.checkForUpdate({
+                                    const updateInfo = await (
+                                        await theNode.otaService()
+                                    ).checkForUpdate({
                                         vendorId: basicInfo.vendorId as VendorId,
                                         productId: basicInfo.productId as number,
                                         currentSoftwareVersion: basicInfo.softwareVersion as number,
@@ -650,11 +657,9 @@ export default function commands(theNode: MatterNode) {
                                         }
 
                                         console.log("\nDownloading update...");
-                                        const fd = await theNode.otaService.downloadUpdate(
-                                            updateInfo,
-                                            isProduction,
-                                            forceDownload,
-                                        );
+                                        const fd = await (
+                                            await theNode.otaService()
+                                        ).downloadUpdate(updateInfo, forceDownload);
 
                                         updateVersion = updateInfo.softwareVersion;
 

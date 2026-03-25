@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { camelize } from "#general";
+import { camelize } from "@matter/general";
 import {
     AttributeModel,
     ClusterModel,
@@ -14,8 +14,8 @@ import {
     Matter,
     MatterModel,
     Model,
-} from "#model";
-import { AttributePath, CommandPath, EventPath } from "#types";
+} from "@matter/model";
+import { AttributePath, CommandPath, EventPath } from "@matter/types";
 
 /**
  * Creates a {@link DataModelPath} from a Matter wire-format {@link AttributePath}, {@link EventPath}, or
@@ -33,7 +33,7 @@ export function ExpandedPath({ path, matter, base, kind }: ExpandedPath.Definiti
     }
 
     const endpointIdent = path.endpointId ?? "*";
-    base = base ? base.at(endpointIdent, "endpoint") : DataModelPath(endpointIdent, "endpoint");
+    base = base ? base.at(endpointIdent, "endpoint") : new DataModelPath(endpointIdent, "endpoint");
 
     let cluster: ClusterModel | undefined;
     base = base.at(identityOf(matter, ClusterModel, path.clusterId), "cluster");
@@ -73,7 +73,7 @@ export function ExpandedPath({ path, matter, base, kind }: ExpandedPath.Definiti
             cluster = instance as ClusterModel;
         }
 
-        return camelize(instance.name);
+        return instance.propertyName;
     }
 }
 

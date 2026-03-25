@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { MaybePromise } from "#general";
-import { MediaInput } from "#clusters/media-input";
+import { MaybePromise } from "@matter/general";
+import { MediaInput } from "@matter/types/clusters/media-input";
 
 export namespace MediaInputInterface {
     export interface Base {
@@ -36,8 +36,9 @@ export namespace MediaInputInterface {
 
     export interface NameUpdates {
         /**
-         * Upon receipt, this command shall rename the input at a specific index in the Input List. Updates to the input
-         * name shall appear in the device’s settings menus.
+         * Upon receipt, this command shall rename the input at a specific index in the Input List.
+         *
+         * Updates to the input name shall appear in the device’s settings menus.
          *
          * @see {@link MatterSpecification.v142.Cluster} § 6.9.7.4
          */

@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -9,3 +9,6 @@ export * from "./HttpEndpointFactory.js";
 export * from "./HttpEndpointGroup.js";
 export * from "./HttpService.js";
 export * from "./HttpSharedEndpoint.js";
+export * from "./MockHttpEndpointFactory.js";
+export * from "./MockWsConnection.js";
+export * from "./WebSocketClient.js";

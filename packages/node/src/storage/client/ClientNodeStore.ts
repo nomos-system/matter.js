@@ -1,15 +1,16 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Endpoint } from "#endpoint/Endpoint.js";
-import { InternalError, StorageContext, StorageContextFactory } from "#general";
 import type { ClientNode } from "#node/ClientNode.js";
-import { EndpointNumber } from "#types";
+import { InternalError, StorageContext, StorageContextFactory } from "@matter/general";
+import { EndpointNumber } from "@matter/types";
 import { NodeStore } from "../NodeStore.js";
 import { ClientEndpointStore } from "./ClientEndpointStore.js";
+import { LocalWriter } from "./LocalWriter.js";
 import type { RemoteWriter } from "./RemoteWriter.js";
 
 /**
@@ -20,10 +21,15 @@ export class ClientNodeStore extends NodeStore {
     #storage?: StorageContext;
     #stores = new Map<EndpointNumber, ClientEndpointStore>();
     #write?: RemoteWriter;
+    #localWriter?: LocalWriter;
+    #isPreexisting: boolean;
+    #onErase?: () => void;
 
-    constructor(id: string, storage: StorageContextFactory) {
+    constructor(id: string, storage: StorageContextFactory, isPreexisting: boolean, onErase?: () => void) {
         super(storage);
         this.#id = id;
+        this.#isPreexisting = isPreexisting;
+        this.#onErase = onErase;
     }
 
     override toString() {
@@ -32,6 +38,10 @@ export class ClientNodeStore extends NodeStore {
 
     get id() {
         return this.#id;
+    }
+
+    get isPreexisting() {
+        return this.#isPreexisting;
     }
 
     get write() {
@@ -46,13 +56,30 @@ export class ClientNodeStore extends NodeStore {
         this.#write = write;
     }
 
+    get localWriter() {
+        if (this.#localWriter === undefined) {
+            this.#localWriter = new LocalWriter(this);
+        }
+        return this.#localWriter;
+    }
+
     get endpointStores() {
         return this.#stores.values();
     }
 
-    override erase() {
+    storeForEndpointNumber(endpointNumber: EndpointNumber) {
+        const store = this.#stores.get(endpointNumber);
+        if (store === undefined) {
+            throw new InternalError(`No endpoint store for endpoint ${endpointNumber}`);
+        }
+        return store;
+    }
+
+    override async erase() {
         this.#stores = new Map();
-        return this.#storage?.clearAll();
+        this.#onErase?.();
+        await this.#storage?.clearAll();
+        await this.construction.close();
     }
 
     override storeForEndpoint(endpoint: Endpoint) {

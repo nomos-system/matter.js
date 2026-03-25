@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { InternalError, Logger, MaybePromise, StorageContext } from "#general";
-import { EventNumber } from "#types";
+import { InternalError, Logger, MaybePromise, StorageContext } from "@matter/general";
+import { EventNumber } from "@matter/types";
 
 import { BaseEventStore } from "./BaseEventStore.js";
 import { OccurrenceSummary } from "./EventStore.js";

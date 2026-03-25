@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Bytes as ByteUtils, Duration, serialize as stringSerialize, UnexpectedDataError } from "#general";
+import { Bytes as ByteUtils, Duration, serialize as stringSerialize, UnexpectedDataError } from "@matter/general";
 import type { Metatype } from "./Metatype.js";
 
 /**

@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -10,6 +10,7 @@ export * from "./ValueValidator.js";
 import "./AttributeValidator.js";
 import "./ClusterValidator.js";
 import "./CommandValidator.js";
+import "./ConditionValidator.js";
 import "./DatatypeValidator.js";
 import "./DeviceTypeValidator.js";
 import "./EndpointValidator.js";

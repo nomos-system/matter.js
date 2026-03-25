@@ -1,10 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { ClusterId, EndpointNumber, EventId, EventNumber, Priority } from "#types";
+import { Timestamp } from "@matter/general";
+import { ClusterId, EndpointNumber, EventId, EventNumber, Priority } from "@matter/types";
 
 /**
  * Description of a single event occurrence.
@@ -13,7 +14,7 @@ export interface Occurrence {
     endpointId: EndpointNumber;
     clusterId: ClusterId;
     eventId: EventId;
-    epochTimestamp: number;
+    epochTimestamp: Timestamp;
     priority: Priority;
     payload: unknown;
 }

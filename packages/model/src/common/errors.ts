@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { MatterError } from "#general";
+import { MatterError } from "@matter/general";
 import { DataModelPath } from "./DataModelPath.js";
 
 export type SchemaErrorPath = (DataModelPath & { path?: undefined }) | { path: DataModelPath | string };

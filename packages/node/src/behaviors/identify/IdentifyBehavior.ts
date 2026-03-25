@@ -1,15 +1,15 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { Identify } from "#clusters/identify";
+import { Identify } from "@matter/types/clusters/identify";
 import { ClusterBehavior } from "../../behavior/cluster/ClusterBehavior.js";
 import { IdentifyInterface } from "./IdentifyInterface.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 
 /**
  * IdentifyBehavior is the base class for objects that support interaction with {@link Identify.Cluster}.

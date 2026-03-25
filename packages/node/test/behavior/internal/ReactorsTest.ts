@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -11,9 +11,9 @@ import { Contextual } from "#behavior/context/Contextual.js";
 import { NodeActivity } from "#behavior/context/NodeActivity.js";
 import { BehaviorBacking } from "#behavior/internal/BehaviorBacking.js";
 import { Reactors } from "#behavior/internal/Reactors.js";
-import { Environment, MaybePromise, Observable } from "#general";
-import { hasLocalActor, Subject } from "#protocol";
-import { NodeId } from "#types";
+import { Environment, MaybePromise, Observable } from "@matter/general";
+import { hasLocalActor, Subject } from "@matter/protocol";
+import { NodeId } from "@matter/types";
 
 class MockAgent {
     behavior: Behavior;

@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -17,12 +17,12 @@ import {
 } from "../cluster/Cluster.js";
 import { TlvUInt16, TlvUInt8, TlvBitmap, TlvEnum } from "../tlv/TlvNumber.js";
 import { TlvNullable } from "../tlv/TlvNullable.js";
-import { AccessLevel } from "#model";
+import { AccessLevel } from "@matter/model";
 import { TlvField, TlvObject } from "../tlv/TlvObject.js";
 import { TypeFromSchema } from "../tlv/TlvSchema.js";
 import { BitFlag } from "../schema/BitmapSchema.js";
 import { ClusterType } from "../cluster/ClusterType.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace LevelControl {
@@ -42,14 +42,17 @@ export namespace LevelControl {
         /**
          * Lighting (LT)
          *
-         * This feature supports an interface for controlling the level of a light source. For the CurrentLevel
-         * attribute:
+         * This feature supports an interface for controlling the level of a light source.
+         *
+         * For the CurrentLevel attribute:
          *
          * A value of 0x00 shall NOT be used.
          *
-         * A value of 0x01 shall indicate the minimum level that can be attained on a device. A value of 0xFE shall
-         * indicate the maximum level that can be attained on a device. A value of null shall represent an undefined
-         * value.
+         * A value of 0x01 shall indicate the minimum level that can be attained on a device.
+         *
+         * A value of 0xFE shall indicate the maximum level that can be attained on a device.
+         *
+         * A value of null shall represent an undefined value.
          *
          * All other values are application specific gradations from the minimum to the maximum level.
          *
@@ -60,7 +63,9 @@ export namespace LevelControl {
         /**
          * Frequency (FQ)
          *
-         * NOTE The Frequency feature is provisional.
+         * > [!NOTE]
+         *
+         * > The Frequency feature is provisional.
          *
          * @see {@link MatterSpecification.v142.Cluster} § 1.6.4.3
          */
@@ -258,11 +263,11 @@ export namespace LevelControl {
              *
              * Changes to this attribute shall only be marked as reportable in the following cases:
              *
-             *   • When it changes from 0 to any value higher than 10, or
+             *   - When it changes from 0 to any value higher than 10, or
              *
-             *   • When it changes, with a delta larger than 10, caused by the invoke of a command, or
+             *   - When it changes, with a delta larger than 10, caused by the invoke of a command, or
              *
-             *   • When it changes to 0.
+             *   - When it changes to 0.
              *
              * For commands with a transition time or changes to the transition time less than 1 second, changes to this
              * attribute shall NOT be reported.
@@ -318,11 +323,11 @@ export namespace LevelControl {
              *
              * Changes to this attribute shall only be marked as reportable in the following cases:
              *
-             *   • At most once per second, or
+             *   - At most once per second, or
              *
-             *   • At the start of the movement/transition, or
+             *   - At the start of the movement/transition, or
              *
-             *   • At the end of the movement/transition.
+             *   - At the end of the movement/transition.
              *
              * @see {@link MatterSpecification.v142.Cluster} § 1.6.6.6
              */
@@ -368,14 +373,17 @@ export namespace LevelControl {
             onOff: BitFlag(0),
 
             /**
-             * This feature supports an interface for controlling the level of a light source. For the CurrentLevel
-             * attribute:
+             * This feature supports an interface for controlling the level of a light source.
+             *
+             * For the CurrentLevel attribute:
              *
              * A value of 0x00 shall NOT be used.
              *
-             * A value of 0x01 shall indicate the minimum level that can be attained on a device. A value of 0xFE shall
-             * indicate the maximum level that can be attained on a device. A value of null shall represent an undefined
-             * value.
+             * A value of 0x01 shall indicate the minimum level that can be attained on a device.
+             *
+             * A value of 0xFE shall indicate the maximum level that can be attained on a device.
+             *
+             * A value of null shall represent an undefined value.
              *
              * All other values are application specific gradations from the minimum to the maximum level.
              *
@@ -384,7 +392,9 @@ export namespace LevelControl {
             lighting: BitFlag(1),
 
             /**
-             * NOTE The Frequency feature is provisional.
+             * > [!NOTE]
+             *
+             * > The Frequency feature is provisional.
              *
              * @see {@link MatterSpecification.v142.Cluster} § 1.6.4.3
              */
@@ -397,11 +407,11 @@ export namespace LevelControl {
              *
              * Changes to this attribute shall only be marked as reportable in the following cases:
              *
-             *   • At most once per second, or
+             *   - At most once per second, or
              *
-             *   • At the end of the movement/transition, or
+             *   - At the end of the movement/transition, or
              *
-             *   • When it changes from null to any other value and vice versa.
+             *   - When it changes from null to any other value and vice versa.
              *
              * @see {@link MatterSpecification.v142.Cluster} § 1.6.6.2
              */
@@ -426,13 +436,13 @@ export namespace LevelControl {
              *
              * Command execution shall NOT continue beyond the Options processing if all of these criteria are true:
              *
-             *   • The command is one of the ‘without On/Off’ commands: Move, Move to Level, Step, or Stop.
+             *   - The command is one of the ‘without On/Off’ commands: Move, Move to Level, Step, or Stop.
              *
-             *   • The On/Off cluster exists on the same endpoint as this cluster.
+             *   - The On/Off cluster exists on the same endpoint as this cluster.
              *
-             *   • The OnOff attribute of the On/Off cluster, on this endpoint, is FALSE.
+             *   - The OnOff attribute of the On/Off cluster, on this endpoint, is FALSE.
              *
-             *   • The value of the ExecuteIfOff bit is 0.
+             *   - The value of the ExecuteIfOff bit is 0.
              *
              * @see {@link MatterSpecification.v142.Cluster} § 1.6.6.9
              */

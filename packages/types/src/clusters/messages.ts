@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -17,7 +17,7 @@ import { TlvNullable } from "../tlv/TlvNullable.js";
 import { TypeFromSchema } from "../tlv/TlvSchema.js";
 import { TlvFabricIndex } from "../datatype/FabricIndex.js";
 import { Priority } from "../globals/Priority.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace Messages {
@@ -309,7 +309,9 @@ export namespace Messages {
          * If the ResponseRequired bit is set on the message but this list is empty, the device shall provide a generic
          * acknowledgement button, e.g. "OK".
          *
-         * If the ResponseRequired bit is not set on the message, this list shall be ignored. See Responses.
+         * If the ResponseRequired bit is not set on the message, this list shall be ignored.
+         *
+         * See Responses.
          *
          * @see {@link MatterSpecification.v142.Cluster} § 1.16.7.1.7
          */

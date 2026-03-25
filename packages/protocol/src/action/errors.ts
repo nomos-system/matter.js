@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Schema, SchemaErrorPath, ValueModel } from "#model";
-import { Status, StatusResponseError } from "#types";
+import { Schema, SchemaErrorPath, ValueModel } from "@matter/model";
+import { Status, StatusResponseError } from "@matter/types";
 
-export { SchemaImplementationError } from "#model";
+export { SchemaImplementationError } from "@matter/model";
 
 /**
  * Thrown due operational schema violation.

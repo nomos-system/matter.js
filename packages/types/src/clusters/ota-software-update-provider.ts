@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -17,7 +17,7 @@ import { TlvBoolean } from "../tlv/TlvBoolean.js";
 import { TypeFromSchema } from "../tlv/TlvSchema.js";
 import { StatusResponseError } from "../common/StatusResponseError.js";
 import { Status as GlobalStatus } from "../globals/Status.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace OtaSoftwareUpdateProvider {
@@ -286,7 +286,7 @@ export namespace OtaSoftwareUpdateProvider {
         delayedActionTime: TlvOptionalField(1, TlvUInt32),
 
         /**
-         * This field, when present, shall contain a URI where the OTA Requestor SHOULD download a Soft ware Image. The
+         * This field, when present, shall contain a URI where the OTA Requestor SHOULD download a Software Image. The
          * syntax of the ImageURI field shall follow the URI syntax as specified in RFC 3986.
          *
          * Beware, this field is conditionally present based on the conformance listed in Section 11.20.6.5.2,
@@ -348,38 +348,38 @@ export namespace OtaSoftwareUpdateProvider {
          *
          * Example ImageURI values are below, and illustrate some but not all of valid and invalid cases:
          *
-         *   • Synchronous or Asynchronous BDX Protocol:
+         *   - Synchronous or Asynchronous BDX Protocol:
          *
-         *     ◦ Valid: bdx://8899AABBCCDDEEFF/the_file_designator123
+         *     - Valid: bdx://8899AABBCCDDEEFF/the_file_designator123
          *
-         *       ▪ Node ID: 0x8899AABBCCDDEEFF
+         *       - Node ID: 0x8899AABBCCDDEEFF
          *
-         *       ▪ File designator: the_file_designator123
+         *       - File designator: the_file_designator123
          *
-         *     ◦ Valid: bdx://0099AABBCCDDEE77/the%20file%20designator/some_more
+         *     - Valid: bdx://0099AABBCCDDEE77/the%20file%20designator/some_more
          *
-         *       ▪ Node ID: 0x0099AABBCCDDEE77
+         *       - Node ID: 0x0099AABBCCDDEE77
          *
-         *       ▪ File designator: the%20file%20designator/some_more. Note that the %20 are retained and not converted
+         *       - File designator: the%20file%20designator/some_more. Note that the %20 are retained and not converted
          *         to ASCII 0x20 (space). The file designator is the path as received verbatim, after the first '/'
          *         (U+002F / SOLIDUS) following the host.
          *
-         *     ◦ Invalid: bdx://99AABBCCDDEE77/the_file_designator123
+         *     - Invalid: bdx://99AABBCCDDEE77/the_file_designator123
          *
-         *       ▪ Node ID: Invalid since it is not exactly 16 characters long, due to having omitted leading zeros.
+         *       - Node ID: Invalid since it is not exactly 16 characters long, due to having omitted leading zeros.
          *
-         *     ◦ Invalid: bdx://0099aabbccddee77/the_file_designator123
+         *     - Invalid: bdx://0099aabbccddee77/the_file_designator123
          *
-         *       ▪ Node ID: Invalid since lowercase hexadecimal was used.
+         *       - Node ID: Invalid since lowercase hexadecimal was used.
          *
-         *     ◦ Invalid: bdx:8899AABBCCDDEEFF/the_file_designator123
+         *     - Invalid: bdx:8899AABBCCDDEEFF/the_file_designator123
          *
-         *       ▪ Invalid since bdx scheme does not contain an authority, that is, it does not have // after the first
+         *       - Invalid since bdx scheme does not contain an authority, that is, it does not have // after the first
          *         :.
          *
-         *   • HTTP over TLS:
+         *   - HTTP over TLS:
          *
-         *     ◦ Valid: https://example.domain:8466/software/image.bin
+         *     - Valid: https://example.domain:8466/software/image.bin
          *
          * See Section 11.20.3.2, “Querying the OTA Provider” for additional details about the flow.
          *
@@ -404,7 +404,6 @@ export namespace OtaSoftwareUpdateProvider {
          * This field provides a string version of the image being provided to the OTA Requestor by the OTA Provider.
          *
          * Beware, this field is conditionally present based on the conformance listed in Section 11.20.6.5.2,
-         *
          * “QueryImageResponse Command”.
          *
          * See Section 11.20.3.2, “Querying the OTA Provider” for additional details about the flow and acceptable

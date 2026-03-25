@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -51,6 +51,11 @@ ModelValidator.validators[RequirementElement.Tag] = class RequirementValidator e
                     break;
             }
         }
+
+        // TODO - conformance references on requirements (condition names, feature names) are not yet validated.
+        // This requires: (1) resolving conditions from the device type hierarchy (including inherited Base
+        // conditions), (2) case-insensitive condition matching, (3) cluster feature resolution for nested
+        // requirements.  See PR #3179 discussion.
 
         super.validate();
     }

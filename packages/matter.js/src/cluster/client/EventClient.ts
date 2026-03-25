@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Duration, ImplementationError } from "#general";
-import { DecodedEventData } from "#protocol";
-import { ClusterId, EndpointNumber, Event, EventId, EventNumber } from "#types";
+import { Duration, ImplementationError } from "@matter/general";
+import { DecodedEventData } from "@matter/protocol";
+import { ClusterId, EndpointNumber, Event, EventId, EventNumber } from "@matter/types";
 import { InteractionClient } from "./InteractionClient.js";
 
 /**

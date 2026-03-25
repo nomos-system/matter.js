@@ -1,11 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Crypto, Diagnostic, Environment } from "#general";
-import { OtaImageReader, PersistedFileDesignator } from "#protocol";
+import { Bytes, Crypto, Diagnostic, Environment } from "@matter/general";
+import { OtaImageReader, PersistedFileDesignator } from "@matter/protocol";
+import { VendorId } from "@matter/types";
 import { createReadStream, createWriteStream, statSync, WriteStream } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
 import { Readable } from "node:stream";
@@ -68,6 +69,8 @@ export default function commands(theNode: MatterNode) {
                         const { file } = argv;
                         const fileArg = file;
 
+                        await theNode.start();
+
                         let updateInfo;
 
                         if (fileArg.startsWith("file://")) {
@@ -78,10 +81,10 @@ export default function commands(theNode: MatterNode) {
                             const nodeStream = createReadStream(filePath);
                             const webStream = Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
 
-                            updateInfo = await theNode.otaService.updateInfoFromStream(webStream, fileArg);
+                            updateInfo = await (await theNode.otaService()).updateInfoFromStream(webStream, fileArg);
                         } else {
                             // Read file from storage using PersistedFileDesignator
-                            const fileDesignator = await theNode.otaService.fileDesignatorForUpdate(fileArg);
+                            const fileDesignator = await (await theNode.otaService()).fileDesignatorForUpdate(fileArg);
                             const blob = await fileDesignator.openBlob();
                             const reader = blob.stream().getReader();
 
@@ -124,7 +127,7 @@ export default function commands(theNode: MatterNode) {
                         // Get crypto from the environment
                         const crypto = Environment.default.get(Crypto);
 
-                        // Generate output filename by adding "-payload" before the extension
+                        // Generate the output filename by adding "-payload" before the extension
                         const dir = dirname(file);
                         const ext = extname(file);
                         const base = basename(file, ext);
@@ -182,12 +185,14 @@ export default function commands(theNode: MatterNode) {
 
                         console.log(`Verifying OTA image: ${fileArg}\n`);
 
+                        await theNode.start();
+
                         let header;
                         let source: string;
 
                         if (fileArg.startsWith("file://")) {
                             // Absolute file path outside storage
-                            const filePath = fileArg.slice(7); // Remove "file://" prefix
+                            const filePath = fileArg.slice(7); // Remove the "file://" prefix
                             source = filePath;
 
                             // Create a Node.js readable stream and convert to Web ReadableStream
@@ -200,7 +205,7 @@ export default function commands(theNode: MatterNode) {
                         } else {
                             // Storage key - read from OTA storage
                             source = `storage:${fileArg}`;
-                            const fileDesignator = await theNode.otaService.fileDesignatorForUpdate(fileArg);
+                            const fileDesignator = await (await theNode.otaService()).fileDesignatorForUpdate(fileArg);
                             const blob = await fileDesignator.openBlob();
                             const reader = blob.stream().getReader();
 
@@ -216,7 +221,7 @@ export default function commands(theNode: MatterNode) {
                         console.log(`Software Version String: ${header.softwareVersionString}`);
                         console.log(`Payload Size: ${header.payloadSize} bytes`);
                         console.log(`Digest Algorithm: ${header.imageDigestType}`);
-                        console.log(`Digest: ${header.imageDigest}`);
+                        console.log(`Digest: ${Bytes.toHex(header.imageDigest)}`);
                         if (header.minApplicableSoftwareVersion !== undefined) {
                             console.log(`Min Applicable Version: ${header.minApplicableSoftwareVersion}`);
                         }
@@ -244,13 +249,15 @@ export default function commands(theNode: MatterNode) {
                                 type: "string",
                             })
                             .option("mode", {
-                                describe: "Filter by mode (prod or test)",
+                                describe: "Filter by mode (prod, test, or local)",
                                 type: "string",
-                                choices: ["prod", "test"],
+                                choices: ["prod", "test", "local"],
                             });
                     },
                     async argv => {
                         const { vid, pid, mode } = argv;
+
+                        await theNode.start();
 
                         // Validate filter options
                         if (pid && !vid) {
@@ -261,13 +268,13 @@ export default function commands(theNode: MatterNode) {
                         // Parse vendor and product IDs from hex strings
                         const vendorId = vid ? parseHexId(vid, "vendor") : undefined;
                         const productId = pid ? parseHexId(pid, "product") : undefined;
-                        const isProduction = mode ? mode === "prod" : undefined;
-
                         // Get list of downloaded updates
-                        const updates = await theNode.otaService.find({
+                        const updates = await (
+                            await theNode.otaService()
+                        ).find({
                             vendorId,
                             productId,
-                            isProduction,
+                            mode: mode as "prod" | "test" | "local" | undefined,
                         });
 
                         if (updates.length === 0) {
@@ -309,26 +316,20 @@ export default function commands(theNode: MatterNode) {
                     "add <file>",
                     "Add an OTA image file to storage",
                     yargs => {
-                        return yargs
-                            .positional("file", {
-                                describe: "Absolute path to the OTA image file",
-                                type: "string",
-                                demandOption: true,
-                            })
-                            .option("mode", {
-                                describe: "Mode for the OTA file (prod or test)",
-                                type: "string",
-                                choices: ["prod", "test"],
-                                default: "prod",
-                            });
+                        return yargs.positional("file", {
+                            describe: "Absolute path to the OTA image file",
+                            type: "string",
+                            demandOption: true,
+                        });
                     },
                     async argv => {
-                        const { file, mode } = argv;
+                        const { file } = argv;
                         let filePath = file;
-                        const isProduction = mode === "prod";
+
+                        await theNode.start();
 
                         if (filePath.startsWith("file://")) {
-                            filePath = filePath.slice(7); // Remove "file://" prefix
+                            filePath = filePath.slice(7); // Remove the "file://" prefix
                         } else if (!filePath.startsWith("/")) {
                             console.error("Error: File path must be absolute or start with file://");
                             return;
@@ -340,14 +341,14 @@ export default function commands(theNode: MatterNode) {
                         let updateInfo;
                         if (filePath.toLowerCase().startsWith("https://")) {
                             // Remote HTTPS file
-                            updateInfo = await theNode.otaService.createUpdateInfoFromFile(filePath);
+                            updateInfo = await (await theNode.otaService()).createUpdateInfoFromFile(filePath);
                         } else {
                             // Local file - use stream
                             const nodeStream = createReadStream(filePath);
                             const webStream = Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
                             const fileUrl = `file://${filePath}`;
                             localFile = true;
-                            updateInfo = await theNode.otaService.updateInfoFromStream(webStream, fileUrl);
+                            updateInfo = await (await theNode.otaService()).updateInfoFromStream(webStream, fileUrl);
                         }
 
                         console.log(`Validated OTA image:`);
@@ -355,16 +356,16 @@ export default function commands(theNode: MatterNode) {
                         console.log(`  Product ID: 0x${updateInfo.pid.toString(16).toUpperCase()}`);
                         console.log(`  Software Version: ${updateInfo.softwareVersion}`);
                         console.log(`  Software Version String: ${updateInfo.softwareVersionString}`);
-                        console.log(`  Mode: ${isProduction ? "production" : "test"}`);
+                        console.log(`  Mode: ${updateInfo.source}`);
 
                         // Download (copy to storage) using the existing logic
                         let fd: PersistedFileDesignator;
                         if (localFile) {
                             const nodeStream = createReadStream(filePath);
                             const webStream = Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
-                            fd = await theNode.otaService.store(webStream, updateInfo, isProduction);
+                            fd = await (await theNode.otaService()).store(webStream, updateInfo, "local");
                         } else {
-                            fd = await theNode.otaService.downloadUpdate(updateInfo, isProduction);
+                            fd = await (await theNode.otaService()).downloadUpdate(updateInfo);
                         }
 
                         console.log(`\nOTA image added to storage successfully: ${fd.text}`);
@@ -392,9 +393,9 @@ export default function commands(theNode: MatterNode) {
                                 requires: "vid",
                             })
                             .option("mode", {
-                                describe: "Mode (prod or test) - requires --vid",
+                                describe: "Mode (prod, test, or local) - requires --vid",
                                 type: "string",
-                                choices: ["prod", "test"],
+                                choices: ["prod", "test", "local"],
                                 default: "prod",
                                 requires: "vid",
                             })
@@ -411,9 +412,13 @@ export default function commands(theNode: MatterNode) {
                     async argv => {
                         const { keyname, vid, pid, mode } = argv;
 
+                        await theNode.start();
+
                         if (keyname) {
                             // Delete by keyname
-                            await theNode.otaService.delete({
+                            await (
+                                await theNode.otaService()
+                            ).delete({
                                 filename: keyname,
                             });
                             console.log(`Deleted OTA image: ${keyname}`);
@@ -421,12 +426,12 @@ export default function commands(theNode: MatterNode) {
                             // Delete by vendor ID, product ID (optional), and mode
                             const vendorId = parseHexId(vid as string, "vendor");
                             const productId = pid ? parseHexId(pid, "product") : undefined;
-                            const isProduction = mode === "prod";
-
-                            const deletedCount = await theNode.otaService.delete({
+                            const deletedCount = await (
+                                await theNode.otaService()
+                            ).delete({
                                 vendorId,
                                 productId,
-                                isProduction,
+                                mode: mode as "prod" | "test" | "local",
                             });
 
                             if (productId !== undefined) {
@@ -462,9 +467,9 @@ export default function commands(theNode: MatterNode) {
                                 type: "string",
                             })
                             .option("mode", {
-                                describe: "Mode when using vendor/product ID (prod or test)",
+                                describe: "Mode when using vendor/product ID (prod, test, or local)",
                                 type: "string",
-                                choices: ["prod", "test"],
+                                choices: ["prod", "test", "local"],
                             })
                             .check(argv => {
                                 if ((argv.pid || argv.mode) && !(argv.pid && argv.mode)) {
@@ -478,13 +483,15 @@ export default function commands(theNode: MatterNode) {
                         const sourceArg = source;
                         const targetArg = target;
 
+                        await theNode.start();
+
                         let keyname: string;
 
                         if (pid && mode) {
                             // Source is vendor ID, construct keyname
                             const vendorId = parseHexId(sourceArg, "vendor");
                             const productId = parseHexId(pid, "product");
-                            const modeStr = mode as "prod" | "test";
+                            const modeStr = mode as "prod" | "test" | "local";
                             keyname = `${vendorId.toString(16)}-${productId.toString(16)}-${modeStr}`;
                         } else {
                             // Source is keyname
@@ -492,7 +499,7 @@ export default function commands(theNode: MatterNode) {
                         }
 
                         // Get file from storage
-                        const fileDesignator = await theNode.otaService.fileDesignatorForUpdate(keyname);
+                        const fileDesignator = await (await theNode.otaService()).fileDesignatorForUpdate(keyname);
 
                         // Determine target path
                         let targetPath = targetArg;
@@ -541,6 +548,84 @@ export default function commands(theNode: MatterNode) {
                         await writer.close();
 
                         console.log(`OTA image copied successfully to: ${targetPath}`);
+                    },
+                )
+                .command(
+                    "download <vendor-id> <product-id> <software-version>",
+                    "Check DCL for OTA updates matching the given vendor/product/version and download them",
+                    yargs => {
+                        return yargs
+                            .positional("vendor-id", {
+                                describe: "Vendor ID (hex, e.g., 0xFFF1 or FFF1)",
+                                type: "string",
+                                demandOption: true,
+                            })
+                            .positional("product-id", {
+                                describe: "Product ID (hex, e.g., 0x8000 or 8000)",
+                                type: "string",
+                                demandOption: true,
+                            })
+                            .positional("software-version", {
+                                describe: "Current software version (decimal number)",
+                                type: "number",
+                                demandOption: true,
+                            })
+                            .option("mode", {
+                                describe: "DCL mode (prod or test)",
+                                type: "string",
+                                choices: ["prod", "test", "both"],
+                                default: "prod",
+                            })
+                            .option("local", {
+                                describe: "Include local update files in search",
+                                type: "boolean",
+                                default: false,
+                            });
+                    },
+                    async argv => {
+                        const { vendorId: vendorIdStr, productId: productIdStr, softwareVersion, mode, local } = argv;
+
+                        await theNode.start();
+
+                        const vendorId = parseHexId(vendorIdStr, "vendor");
+                        const productId = parseHexId(productIdStr, "product");
+                        const isProduction = mode === "prod" ? true : mode === "test" ? false : undefined;
+
+                        console.log(`Checking DCL for OTA updates...`);
+                        console.log(`  Vendor ID: ${Diagnostic.hex(vendorId as VendorId, 4).toUpperCase()}`);
+                        console.log(`  Product ID: ${Diagnostic.hex(productId, 4).toUpperCase()}`);
+                        console.log(`  Current Software Version: ${softwareVersion}`);
+                        console.log(`  DCL Mode: ${mode}\n`);
+
+                        const updateInfo = await (
+                            await theNode.otaService()
+                        ).checkForUpdate({
+                            vendorId: vendorId as VendorId,
+                            productId,
+                            currentSoftwareVersion: softwareVersion,
+                            includeStoredUpdates: local,
+                            isProduction,
+                        });
+
+                        if (updateInfo) {
+                            console.log("✓ Update available!");
+                            console.log(
+                                `  New Version: ${updateInfo.softwareVersion} (${updateInfo.softwareVersionString})`,
+                            );
+                            console.log(`  OTA URL: ${updateInfo.otaUrl}`);
+                            if (updateInfo.otaFileSize) {
+                                const sizeKB = Number(updateInfo.otaFileSize) / 1024;
+                                console.log(`  File Size: ${sizeKB.toFixed(2)} KB`);
+                            }
+                            if (updateInfo.releaseNotesUrl) {
+                                console.log(`  Release Notes: ${updateInfo.releaseNotesUrl}`);
+                            }
+
+                            const fd = await (await theNode.otaService()).downloadUpdate(updateInfo);
+                            console.log(`\nOTA image added to storage successfully: ${fd.text}`);
+                        } else {
+                            console.log("✓ No updates available in DCL for this version.");
+                        }
                     },
                 ),
         handler: async (argv: any) => {

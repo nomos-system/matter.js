@@ -32,15 +32,9 @@
         "build": "matter-build",
         "build-clean": "matter-build --clean",
         "test": "matter-test",
-        "coverage": "c8 matter-test esm",
-        "embed-examples": "embedme **/README.md"
+        "coverage": "c8 matter-test esm"
     },
     "imports": {
-        "#general": "@matter/general",
-        "#types": "@matter/types",
-        "#clusters/*": "@matter/types/clusters/*",
-        "#node": "@matter/node",
-        "#protocol": "@matter/protocol",
         "#*": "./src/*"
     },
     "dependencies": {

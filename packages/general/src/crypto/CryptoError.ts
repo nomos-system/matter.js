@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -35,3 +35,8 @@ export class KeyInputError extends CryptoInputError {}
  * Thrown when verification fails because of an invalid signature format.
  */
 export class SignatureEncodingError extends CryptoVerifyError {}
+
+/**
+ * Thrown when we encounter corrupted certificate data.
+ */
+export class CertificateError extends CryptoError {}

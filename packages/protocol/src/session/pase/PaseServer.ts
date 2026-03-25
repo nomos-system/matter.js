@@ -1,16 +1,17 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Mark } from "#common/Mark.js";
+import { SessionManager } from "#session/SessionManager.js";
 import {
     Bytes,
+    causedBy,
     Channel,
     Crypto,
     Diagnostic,
-    ec,
     Logger,
     MatterFlowError,
     PbkdfParameters,
@@ -19,19 +20,16 @@ import {
     Time,
     Timer,
     UnexpectedDataError,
-} from "#general";
-import { SessionManager } from "#session/SessionManager.js";
-import { NodeId, SECURE_CHANNEL_PROTOCOL_ID, SecureChannelStatusCode } from "#types";
+} from "@matter/general";
+import { NodeId, SECURE_CHANNEL_PROTOCOL_ID, SecureChannelStatusCode } from "@matter/types";
 import { MessageExchange } from "../../protocol/MessageExchange.js";
 import { ProtocolHandler } from "../../protocol/ProtocolHandler.js";
 import { ChannelStatusResponseError } from "../../securechannel/SecureChannelMessenger.js";
 import { DEFAULT_PASSCODE_ID, PaseServerMessenger, SPAKE_CONTEXT } from "./PaseMessenger.js";
 
-const { bytesToNumberBE } = ec;
-
 const logger = Logger.get("PaseServer");
 
-const PASE_PAIRING_TIMEOUT_MS = Seconds(60);
+const PASE_PAIRING_TIMEOUT = Seconds(60);
 const PASE_COMMISSIONING_MAX_ERRORS = 20;
 
 export class MaximumPasePairingErrorsReachedError extends MatterFlowError {}
@@ -56,7 +54,7 @@ export class PaseServer implements ProtocolHandler {
         pbkdfParameters?: PbkdfParameters,
     ) {
         const verificationData = Bytes.of(verificationValue);
-        const w0 = bytesToNumberBE(verificationData.slice(0, 32));
+        const w0 = Bytes.asBigInt(verificationData.slice(0, 32));
         const L = verificationData.slice(32, 32 + 65);
         return new PaseServer(sessions, w0, L, pbkdfParameters);
     }
@@ -95,12 +93,13 @@ export class PaseServer implements ProtocolHandler {
             } catch (error) {
                 this.#pairingErrors++;
                 logger.error(
-                    `An error occurred during the PASE commissioning (${this.#pairingErrors}/${PASE_COMMISSIONING_MAX_ERRORS}):`,
+                    `An error occurred during PASE commissioning (${this.#pairingErrors}/${PASE_COMMISSIONING_MAX_ERRORS}):`,
+                    this.#pairingMessenger?.exchange.diagnostics,
                     error,
                 );
 
                 // If we received a ChannelStatusResponseError we do not need to send one back, so just cancel pairing
-                const sendError = !(error instanceof ChannelStatusResponseError);
+                const sendError = !causedBy(error, ChannelStatusResponseError);
                 await this.cancelPairing(messenger, sendError);
 
                 if (this.#pairingErrors >= PASE_COMMISSIONING_MAX_ERRORS) {
@@ -109,6 +108,8 @@ export class PaseServer implements ProtocolHandler {
                     );
                 }
             } finally {
+                this.#pairingTimer?.stop();
+                this.#pairingTimer = undefined;
                 this.#pairingMessenger = undefined;
                 // Detach and Destroy the unsecure session used to establish the Pase session
                 exchange.session.detachChannel();
@@ -122,7 +123,7 @@ export class PaseServer implements ProtocolHandler {
 
         logger.info("Received pairing request", Mark.INBOUND, Diagnostic.via(messenger.channelName));
 
-        this.#pairingTimer = Time.getTimer("PASE pairing timeout", PASE_PAIRING_TIMEOUT_MS, () =>
+        this.#pairingTimer = Time.getTimer("PASE pairing timeout", PASE_PAIRING_TIMEOUT, () =>
             this.cancelPairing(messenger),
         ).start();
 
@@ -145,6 +146,11 @@ export class PaseServer implements ProtocolHandler {
         const responderRandom = crypto.randomBytes(32);
 
         const responderSessionParams = this.sessions.sessionParameters;
+
+        // Update the session timing parameters with the just received ones to optimize the session establishment
+        if (initiatorSessionParams !== undefined) {
+            messenger.channel.session.timingParameters = initiatorSessionParams;
+        }
 
         const responsePayload = await messenger.sendPbkdfParamResponse({
             initiatorRandom,
@@ -184,19 +190,18 @@ export class PaseServer implements ProtocolHandler {
             isResumption: false,
             peerSessionParameters: initiatorSessionParams,
         });
-        logger.info(session.via, "New session with", Diagnostic.strong(messenger.channelName));
+        logger.info(
+            session.via,
+            "New session with",
+            Diagnostic.strong(messenger.channelName),
+            messenger.exchange.diagnostics,
+        );
 
         await messenger.sendSuccess();
         await messenger.close();
-
-        this.#pairingTimer?.stop();
-        this.#pairingTimer = undefined;
     }
 
     async cancelPairing(messenger: PaseServerMessenger, sendError = true) {
-        this.#pairingTimer?.stop();
-        this.#pairingTimer = undefined;
-
         if (sendError) {
             await messenger.sendError(SecureChannelStatusCode.InvalidParam);
         }

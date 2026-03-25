@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { InternalError, MatterError } from "#general";
 import type { StateStream } from "#node/integration/StateStream.js";
-import { StatusResponseError } from "#types";
+import { InternalError, MatterError } from "@matter/general";
+import { StatusResponseError } from "@matter/types";
 import type { LocalResponse } from "./LocalResponse.js";
 
 /**

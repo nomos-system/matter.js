@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import type { ActionContext } from "#behavior/context/ActionContext.js";
-import { ImplementationError } from "#general";
+import { ImplementationError } from "@matter/general";
 import {
     ClientInvoke,
     ClientSubscription,
@@ -15,7 +15,7 @@ import {
     Subscribe,
     Write,
     WriteResult,
-} from "#protocol";
+} from "@matter/protocol";
 import { ClientNodeInteraction } from "./ClientNodeInteraction.js";
 
 export class InvalidGroupOperationError extends ImplementationError {}

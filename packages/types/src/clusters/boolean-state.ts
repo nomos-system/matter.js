@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -12,7 +12,7 @@ import { TlvBoolean } from "../tlv/TlvBoolean.js";
 import { Priority } from "../globals/Priority.js";
 import { TlvField, TlvObject } from "../tlv/TlvObject.js";
 import { TypeFromSchema } from "../tlv/TlvSchema.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace BooleanState {
@@ -49,9 +49,8 @@ export namespace BooleanState {
             /**
              * This represents a boolean state.
              *
-             * The semantics of this boolean state are defined by the device type using this cluster.
-             *
-             * For example, in a Contact Sensor device type, FALSE=open or no contact, TRUE=closed or contact.
+             * The semantics of this boolean state are defined by the device type using this cluster. For example, in a
+             * Contact Sensor device type, FALSE=open or no contact, TRUE=closed or contact.
              *
              * @see {@link MatterSpecification.v142.Cluster} § 1.7.4.1
              */

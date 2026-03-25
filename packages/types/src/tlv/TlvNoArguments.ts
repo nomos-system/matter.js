@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { UnexpectedDataError } from "#general";
+import { UnexpectedDataError } from "@matter/general";
 import { TlvTag } from "./TlvCodec.js";
 import { TlvObject } from "./TlvObject.js";
 import { TlvWriter } from "./TlvSchema.js";

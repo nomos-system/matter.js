@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { HttpEndpoint } from "#general";
+import { HttpEndpoint } from "@matter/general";
 
 import { IncomingMessage } from "node:http";
 import { Duplex } from "node:stream";
@@ -21,7 +21,7 @@ export interface WsAdapter {
 }
 
 export namespace WsAdapter {
-    // eslint-disable-next-line prefer-const
+    // oxlint-disable-next-line prefer-const
     export let defaultFactory = undefined as undefined | Factory;
 
     export interface Factory {

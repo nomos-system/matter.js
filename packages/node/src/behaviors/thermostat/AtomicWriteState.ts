@@ -1,14 +1,14 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Thermostat } from "#clusters/thermostat";
 import { Endpoint } from "#endpoint/Endpoint.js";
-import { Diagnostic, Logger, Millis, Observable, Seconds, Time, Timer, toHex } from "#general";
-import { PeerAddress, Val } from "#protocol";
-import { AttributeId, ClusterId } from "#types";
+import { Diagnostic, Logger, Millis, Observable, Seconds, Time, Timer, toHex } from "@matter/general";
+import { PeerAddress, Val } from "@matter/protocol";
+import { AttributeId, ClusterId } from "@matter/types";
+import { Thermostat } from "@matter/types/clusters/thermostat";
 
 const logger = Logger.get("AtomicWriteState");
 

@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { ModeUtils } from "#behaviors/mode-base";
-import { LaundryWasherMode } from "#clusters/laundry-washer-mode";
-import { ModeBase } from "#clusters/mode-base";
-import { MaybePromise } from "#general";
+import { MaybePromise } from "@matter/general";
+import { LaundryWasherMode } from "@matter/types/clusters/laundry-washer-mode";
+import { ModeBase } from "@matter/types/clusters/mode-base";
 import { LaundryWasherModeBehavior } from "./LaundryWasherModeBehavior.js";
 
 /**

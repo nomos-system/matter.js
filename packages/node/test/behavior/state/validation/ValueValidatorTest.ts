@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { RootSupervisor } from "#behavior/supervision/RootSupervisor.js";
 import { ValueSupervisor } from "#behavior/supervision/ValueSupervisor.js";
-import { DataModelPath, FieldModel } from "#model";
-import { IntegerRangeError } from "#protocol";
+import { DataModelPath, FieldModel } from "@matter/model";
+import { DatatypeError, IntegerRangeError } from "@matter/protocol";
 
 describe("ValueValidator", () => {
     implementInt("uint8", 0, 0xff);
@@ -46,27 +46,38 @@ function implementIntWithNullability(type: string, nullable: boolean, min: numbe
         });
 
         it("accepts 0", () => {
-            expect(() => validator(0, {} as ValueSupervisor.Session, { path: DataModelPath(schema.path) }));
+            expect(() => validator(0, {} as ValueSupervisor.Session, { path: new DataModelPath(schema.path) }));
         });
 
+        if (nullable) {
+            it("accepts null", () => {
+                expect(() => validator(null, {} as ValueSupervisor.Session, { path: new DataModelPath(schema.path) }));
+            });
+        } else {
+            it(`rejects null`, () => {
+                expect(() =>
+                    validator(null, {} as ValueSupervisor.Session, { path: new DataModelPath(schema.path) }),
+                ).throws(DatatypeError, `Value "null" is not a number or bigint`);
+            });
+        }
+
         it(`accepts ${min} (min)`, () => {
-            expect(() => validator(min, {} as ValueSupervisor.Session, { path: DataModelPath(schema.path) }));
+            expect(() => validator(min, {} as ValueSupervisor.Session, { path: new DataModelPath(schema.path) }));
         });
 
         it(`accepts ${max} (max)`, () => {
-            expect(() => validator(min, {} as ValueSupervisor.Session, { path: DataModelPath(schema.path) }));
+            expect(() => validator(min, {} as ValueSupervisor.Session, { path: new DataModelPath(schema.path) }));
         });
 
         it(`rejects ${tooLow} (too low)`, () => {
-            expect(() => validator(tooLow, {} as ValueSupervisor.Session, { path: DataModelPath(schema.path) })).throws(
-                IntegerRangeError,
-                `Value ${tooLow} is below the ${name} minimum of ${min}`,
-            );
+            expect(() =>
+                validator(tooLow, {} as ValueSupervisor.Session, { path: new DataModelPath(schema.path) }),
+            ).throws(IntegerRangeError, `Value ${tooLow} is below the ${name} minimum of ${min}`);
         });
 
         it(`rejects ${tooHigh} (too high)`, () => {
             expect(() =>
-                validator(tooHigh, {} as ValueSupervisor.Session, { path: DataModelPath(schema.path) }),
+                validator(tooHigh, {} as ValueSupervisor.Session, { path: new DataModelPath(schema.path) }),
             ).throws(IntegerRangeError, `Value ${tooHigh} is above the ${name} maximum of ${max}`);
         });
     });

@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Logger } from "#general";
-import { BdxMessageType, BdxStatusCode } from "#types";
+import { Logger } from "@matter/general";
+import { BdxMessageType, BdxStatusCode } from "@matter/types";
 import { BdxMessenger } from "../BdxMessenger.js";
 import { BdxMessage } from "../schema/BdxMessage.js";
 import { OutboundFlow } from "./OutboundFlow.js";

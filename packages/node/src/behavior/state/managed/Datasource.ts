@@ -1,11 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import {
-    camelize,
     deepCopy,
     Entropy,
     ImplementationError,
@@ -16,8 +15,8 @@ import {
     MaybePromise,
     Observable,
     Transaction,
-} from "#general";
-import { AccessControl, ExpiredReferenceError, hasRemoteActor, Val } from "#protocol";
+} from "@matter/general";
+import { AccessControl, ExpiredReferenceError, hasRemoteActor, Val } from "@matter/protocol";
 import { RootSupervisor } from "../../supervision/RootSupervisor.js";
 import { ValueSupervisor } from "../../supervision/ValueSupervisor.js";
 import { StateType } from "../StateType.js";
@@ -50,6 +49,11 @@ export interface Datasource<T extends StateType = StateType> extends Transaction
      * Validate values against the schema.
      */
     validate(session: ValueSupervisor.Session, values?: Val.Struct): void;
+
+    /**
+     * Release resources.
+     */
+    close(): void;
 
     /**
      * Obtain a read-only view of values.
@@ -88,6 +92,17 @@ export function Datasource<const T extends StateType = StateType>(options: Datas
                 ref = createReference(this, internals, session);
             }
             return ref.managed as InstanceType<T>;
+        },
+
+        close() {
+            if (!internals.externalChangeListener || !internals.store) {
+                return;
+            }
+
+            const store = internals.store as Datasource.ExternallyMutableStore;
+            if (store.externalChangeListener === internals.externalChangeListener) {
+                delete store.externalChangeListener;
+            }
         },
 
         get version() {
@@ -223,12 +238,12 @@ export namespace Datasource {
          *
          * Uses the same semantics as {@link set}.
          */
-        externalSet(values: Val.Struct): Promise<void>;
+        externalSet(values: Val.StructMap): Promise<void>;
 
         /**
          * A listener that reacts to data changes.
          */
-        externalChangeListener?: (changes: Val.Struct) => Promise<void>;
+        externalChangeListener?: (changes: Val.StructMap) => Promise<void>;
 
         /**
          * Callback installed by the store that releases the values from the datasource when invoked.
@@ -273,6 +288,7 @@ interface Internals extends Datasource.Options {
     events: Datasource.Events;
     changedEventFor(key: string): undefined | Datasource.Events[any];
     persistentFields: Set<string>;
+    externalChangeListener?: (changes: Val.StructMap) => Promise<void>;
 }
 
 /**
@@ -385,7 +401,7 @@ function configure(options: Datasource.Options): Internals {
             } else {
                 const field = options.supervisor.schema.member(id);
                 if (field !== undefined) {
-                    event = events[`${camelize(field.name)}$Changed`];
+                    event = events[`${field.propertyName}$Changed`];
                 }
             }
 
@@ -415,23 +431,24 @@ function configureExternalChanges(internals: Internals) {
     internals.version = store.version;
     internals.manageVersion = false;
 
-    store.externalChangeListener = async (potentialChanges: Val.Struct) => {
+    internals.externalChangeListener = store.externalChangeListener = async (potentialChanges: Val.StructMap) => {
         const { values } = internals;
 
-        let changes: undefined | Val.Struct;
-        let oldValues: undefined | Val.Struct;
+        let changes: Map<string, unknown> | undefined;
+        let oldValues: Map<string, unknown> | undefined;
 
-        for (const name in potentialChanges) {
-            if (isDeepEqual(values[name], potentialChanges[name])) {
+        for (const [key, newValue] of potentialChanges) {
+            const name = String(key);
+            if (isDeepEqual(values[name], newValue)) {
                 continue;
             }
 
             if (changes === undefined) {
-                changes = { [name]: potentialChanges[name] };
-                oldValues = { [name]: values[name] };
+                changes = new Map([[name, newValue]]);
+                oldValues = new Map([[name, values[name]]]);
             } else {
-                changes[name] = potentialChanges[name];
-                oldValues![name] = values[name];
+                changes.set(name, newValue);
+                oldValues!.set(name, values[name]);
             }
         }
 
@@ -443,12 +460,12 @@ function configureExternalChanges(internals: Internals) {
 
         internals.values = {
             ...internals.values,
-            ...changes,
+            ...Object.fromEntries(changes),
         };
 
-        const changedProps = Object.keys(changes);
+        const changedProps = Array.from(changes.keys());
 
-        const onChangePromise = internals.onChange?.(Array.from(changedProps));
+        const onChangePromise = internals.onChange?.(changedProps);
 
         const iterator = changedProps[Symbol.iterator]();
 
@@ -471,7 +488,7 @@ function configureExternalChanges(internals: Internals) {
                     continue;
                 }
 
-                const result = event.emit(changes![name], oldValues![name]);
+                const result = event.emit(changes!.get(name), oldValues!.get(name));
                 if (MaybePromise.is(result)) {
                     return Promise.resolve(result).then(emitChanged);
                 }

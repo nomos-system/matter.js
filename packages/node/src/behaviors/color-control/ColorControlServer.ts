@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -10,9 +10,9 @@ import { Transitions } from "#behavior/Transitions.js";
 import { GeneralDiagnosticsBehavior } from "#behaviors/general-diagnostics";
 import { OnOffServer } from "#behaviors/on-off";
 import { ScenesManagementServer } from "#behaviors/scenes-management";
-import { ColorControl } from "#clusters/color-control";
-import { GeneralDiagnostics } from "#clusters/general-diagnostics";
 import { Endpoint } from "#endpoint/Endpoint.js";
+import { AggregatorEndpoint } from "#endpoints/aggregator";
+import { ServerNode } from "#node/ServerNode.js";
 import {
     addValueWithOverflow,
     AsyncObservable,
@@ -21,10 +21,11 @@ import {
     Logger,
     MaybePromise,
     Millis,
-} from "#general";
-import { ServerNode } from "#node/ServerNode.js";
-import { Val } from "#protocol";
-import { ClusterType, StatusCode, StatusResponseError, TypeFromPartialBitSchema } from "#types";
+} from "@matter/general";
+import { Val } from "@matter/protocol";
+import { ClusterType, StatusCode, StatusResponseError, TypeFromPartialBitSchema } from "@matter/types";
+import { ColorControl } from "@matter/types/clusters/color-control";
+import { GeneralDiagnostics } from "@matter/types/clusters/general-diagnostics";
 import { ColorControlBehavior } from "./ColorControlBehavior.js";
 import {
     hsvToMireds,
@@ -373,22 +374,19 @@ export class ColorControlBaseServer extends ColorControlBase {
      */
     protected initializeColorTemperature() {
         // Handle startup color Temperature when the color Temperature feature is supported
-        if (this.#getBootReason() !== GeneralDiagnostics.BootReason.SoftwareUpdateCompleted) {
+        if (
+            this.#getBootReason() !== GeneralDiagnostics.BootReason.SoftwareUpdateCompleted &&
+            !this.endpoint.ownerOfType(AggregatorEndpoint)
+        ) {
             const startUpMiredsValue = this.state.startUpColorTemperatureMireds ?? null;
-            const currentMiredsValue = this.state.colorTemperatureMireds;
-            let targetMiredsValue: number | null;
-            switch (startUpMiredsValue) {
-                case null:
-                    targetMiredsValue = this.#cropColorTemperature(currentMiredsValue);
-                    break;
-                default:
-                    targetMiredsValue = startUpMiredsValue;
-                    break;
-            }
-            if (targetMiredsValue !== currentMiredsValue) {
-                this.state.colorMode = ColorControl.ColorMode.ColorTemperatureMireds;
-                this.state.enhancedColorMode = ColorControl.EnhancedColorMode.ColorTemperatureMireds;
-                this.state.colorTemperatureMireds = targetMiredsValue;
+            if (startUpMiredsValue !== null) {
+                const currentMiredsValue = this.#cropColorTemperature(this.state.colorTemperatureMireds);
+                const targetMiredsValue = this.#cropColorTemperature(startUpMiredsValue);
+                if (targetMiredsValue !== currentMiredsValue) {
+                    this.state.colorMode = ColorControl.ColorMode.ColorTemperatureMireds;
+                    this.state.enhancedColorMode = ColorControl.EnhancedColorMode.ColorTemperatureMireds;
+                    this.state.colorTemperatureMireds = targetMiredsValue;
+                }
             }
         }
     }

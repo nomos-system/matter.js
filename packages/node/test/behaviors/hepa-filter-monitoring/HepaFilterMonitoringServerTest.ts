@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { HepaFilterMonitoringServer } from "#behaviors/hepa-filter-monitoring";
-import { FanControl } from "#clusters/fan-control";
-import { ResourceMonitoring } from "#clusters/resource-monitoring";
 import { AirPurifierDevice } from "#devices/air-purifier";
+import { FanControl } from "@matter/types/clusters/fan-control";
+import { ResourceMonitoring } from "@matter/types/clusters/resource-monitoring";
 import { MockServerNode } from "../../node/mock-server-node.js";
 
 describe("HepaFilterMonitoringServer", () => {

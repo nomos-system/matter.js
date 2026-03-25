@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { ServiceArea } from "#clusters/service-area";
-import { deepCopy, isDeepEqual, MaybePromise } from "#general";
-import { ValidationError } from "#types";
+import { deepCopy, isDeepEqual, MaybePromise } from "@matter/general";
+import { ValidationError } from "@matter/types";
+import { ServiceArea } from "@matter/types/clusters/service-area";
 import { ServiceAreaBehavior } from "./ServiceAreaBehavior.js";
 
 const ServiceAreaBase = ServiceAreaBehavior.with(ServiceArea.Feature.Maps, ServiceArea.Feature.ProgressReporting);

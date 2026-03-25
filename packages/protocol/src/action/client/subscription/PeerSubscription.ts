@@ -1,11 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Diagnostic, Duration, Millis, Seconds, Timestamp } from "#general";
-import type { SubscribeResponse } from "#types";
+import { Subscription } from "#interaction/Subscription.js";
+import { Diagnostic, Duration, Millis, Seconds, Timestamp } from "@matter/general";
+import type { SubscribeResponse } from "@matter/types";
 import { ClientSubscription } from "./ClientSubscription.js";
 
 /**
@@ -40,7 +41,9 @@ export class PeerSubscription extends ClientSubscription {
     timedOut() {
         this.logger.info(
             "Subscription",
-            Diagnostic.strong(this.subscriptionId),
+            Diagnostic.strong(Subscription.idStrOf(this.subscriptionId)),
+            "to peer",
+            this.peer.toString(),
             "timed out after",
             Diagnostic.strong(Duration.format(this.timeout)),
         );

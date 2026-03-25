@@ -1,14 +1,14 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { IcdManagement } from "#clusters/icd-management";
+import { IcdManagement } from "@matter/types/clusters/icd-management";
 import { ClientBehavior } from "../../behavior/cluster/ClientBehavior.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 
 export const IcdManagementClientConstructor = ClientBehavior(IcdManagement.Complete);
 export interface IcdManagementClient extends InstanceType<typeof IcdManagementClientConstructor> {}

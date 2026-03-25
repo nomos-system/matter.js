@@ -1,11 +1,15 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Message } from "#codec/MessageCodec.js";
 import { Fabric as RealFabric } from "#fabric/Fabric.js";
+import { MessageType } from "#interaction/InteractionMessenger.js";
+import { NodeSession as RealNodeSession } from "#session/NodeSession.js";
+import { Session } from "#session/Session.js";
+import { SessionParameters } from "#session/SessionParameters.js";
 import {
     AsyncObservable,
     b$,
@@ -17,17 +21,14 @@ import {
     Environment,
     ImplementationError,
     IpNetworkChannel,
-    Lifetime,
     MAX_UDP_MESSAGE_SIZE,
     MaybePromise,
     MockCrypto,
     Observable,
+    ServerAddress,
     ServerAddressUdp,
-} from "#general";
-import { MessageType } from "#interaction/InteractionMessenger.js";
-import { NodeSession as RealNodeSession } from "#session/NodeSession.js";
-import { Session } from "#session/Session.js";
-import { SessionParameters } from "#session/SessionParameters.js";
+} from "@matter/general";
+import { Specification } from "@matter/model";
 import {
     FabricId,
     FabricIndex,
@@ -37,8 +38,7 @@ import {
     Status,
     TlvStatusResponse,
     VendorId,
-} from "#types";
-import { Specification } from "@matter/model";
+} from "@matter/types";
 import { MessageChannel as RealMessageChannel } from "./MessageChannel.js";
 import { MessageExchange, MessageExchangeContext } from "./MessageExchange.js";
 
@@ -125,9 +125,6 @@ export namespace ProtocolMocks {
 
             // Initialize with a mocked message channel
             this.channel = new MessageChannel({ channel, session: this });
-
-            // ...and mock lifetime
-            this.lifetime = Lifetime.mock;
         }
 
         static override async create(config: NodeSession.CreateConfig) {
@@ -161,16 +158,29 @@ export namespace ProtocolMocks {
         supportsLargeMessages = false;
         name = "mock-byte-channel";
         type = ChannelType.UDP;
-        networkAddress: ServerAddressUdp;
+        #networkAddress: ServerAddressUdp;
+        networkAddressChanged = new Observable<[ServerAddressUdp]>();
 
         constructor(config: MockNetworkConfig) {
             const index = config.index ?? 1;
             this.maxPayloadSize = config.maxPayloadSize ?? MAX_UDP_MESSAGE_SIZE;
-            this.networkAddress = { type: "udp", ip: `::${index}`, port: 5540 };
+            this.#networkAddress = { type: "udp", ip: `::${index}`, port: 5540 };
+        }
+
+        get networkAddress() {
+            return this.#networkAddress;
+        }
+
+        set networkAddress(networkAddress: ServerAddressUdp) {
+            if (ServerAddress.isEqual(networkAddress, this.#networkAddress)) {
+                return;
+            }
+            this.#networkAddress = networkAddress;
+            this.networkAddressChanged.emit(this.networkAddress);
         }
 
         async send(): Promise<void> {
-            // Currently we just ignore transmissions
+            // Currently, we just ignore transmissions
         }
 
         async close() {}
@@ -243,6 +253,7 @@ export namespace ProtocolMocks {
                     localSessionParameters: SessionParameters(
                         context?.localSessionParameters ?? SessionParameters.defaults,
                     ),
+                    async peerLost() {},
                     retry() {},
                 },
             });

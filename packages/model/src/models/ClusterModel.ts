@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import type { Conformance } from "#aspects/Conformance.js";
-import { camelize, describeList } from "#general";
 import { ModelIndex } from "#logic/ModelIndex.js";
 import { ModelTraversal } from "#logic/ModelTraversal.js";
+import { camelize, describeList } from "@matter/general";
 import { Access } from "../aspects/Access.js";
 import { Quality } from "../aspects/Quality.js";
 import { SchemaImplementationError } from "../common/errors.js";
@@ -61,6 +61,14 @@ export class ClusterModel
         return this.scope.membersOf(this, { tags: [ElementTag.Datatype] }) as ModelIndex<DatatypeModel>;
     }
 
+    /**
+     * Fields on a cluster are not part of the standard Matter data model.  They are used for internal extensions that
+     * should not be served via the Matter protocol.
+     */
+    get fields() {
+        return this.scope.membersOf(this, { tags: [ElementTag.Field] }) as ModelIndex<FieldModel>;
+    }
+
     get conformant() {
         return new ClusterModel.Conformant(this);
     }
@@ -86,7 +94,7 @@ export class ClusterModel
 
     get revision() {
         let revision = 1;
-        const revisionAttr = this.get(AttributeModel, ClusterRevision.id);
+        const revisionAttr = this.attributes(ClusterRevision.id);
         if (typeof revisionAttr?.default === "number") {
             revision = revisionAttr.default;
         }
@@ -94,11 +102,26 @@ export class ClusterModel
     }
 
     get features() {
-        return this.featureMap.children ?? [];
+        // Do not use scope (e.g. via this.fields) because features are an input to scope computation
+        const features = new Map<string, FieldModel>();
+        new ModelTraversal().visitInheritance(this.featureMap, model => {
+            for (const child of model.children) {
+                if (child.tag !== "field") {
+                    continue;
+                }
+                if (features.has(child.name)) {
+                    continue;
+                }
+                features.set(child.name, child as FieldModel);
+            }
+        });
+        return [...features.values()];
     }
 
     get featureMap() {
-        return (this.member(FeatureMap.id, [ElementTag.Attribute]) as AttributeModel) ?? new AttributeModel(FeatureMap);
+        // Do not use scope because featureMap is an input to scope computation
+        return (new ModelTraversal().findMember(this, FeatureMap.id, [ElementTag.Attribute]) ??
+            new AttributeModel(FeatureMap)) as AttributeModel;
     }
 
     get definedFeatures(): FeatureSet {
@@ -125,21 +148,27 @@ export class ClusterModel
             this.children.push(featureMap);
         }
 
-        for (const feature of featureMap.children) {
+        for (let feature of this.features) {
             const desc = feature.title && camelize(feature.title);
+            let isSupported;
             if (desc !== undefined && featureSet.has(desc)) {
-                feature.default = true;
+                isSupported = true;
                 featureSet.delete(desc);
-                continue;
-            }
-
-            if (featureSet.has(feature.name)) {
+            } else if (featureSet.has(feature.name)) {
+                isSupported = true;
                 featureSet.delete(feature.name);
-                feature.default = true;
+            }
+
+            if (!!feature.default === isSupported) {
                 continue;
             }
 
-            feature.default = undefined;
+            if (feature.parent !== featureMap) {
+                feature = feature.clone();
+                featureMap.children.push(feature);
+            }
+
+            feature.default = isSupported ? true : undefined;
         }
 
         if (featureSet.size) {

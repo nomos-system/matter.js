@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -66,6 +66,7 @@ import {
     LaundryWasherMode,
     LevelControl,
     MicrowaveOvenMode,
+    ModeBase,
     ModeSelect,
     OccupancySensing,
     OperationalState,
@@ -239,6 +240,12 @@ export class AllClustersTestInstance extends NodeTestInstance {
                 }
                 break;
             }
+            case "setBooleanState":
+                if (endpoint === undefined) {
+                    throw new Error(`Endpoint ${endpointId} not found`);
+                }
+                await endpoint.setStateOf(BooleanStateServer, { stateValue: command.newState });
+                break;
             default:
                 await super.backchannel(command);
         }
@@ -317,7 +324,7 @@ export class AllClustersTestInstance extends NodeTestInstance {
                     productLabel: "MorePowerPro 6100",
                     productId: 0x8001,
                     serialNumber: `9999-9999-9999`,
-                    manufacturingDate: "20210101",
+                    manufacturingDate: "20200101",
                     partNumber: "123456",
                     productUrl: "https://test.com",
                     uniqueId: `node-matter-unique`,
@@ -398,7 +405,18 @@ export class AllClustersTestInstance extends NodeTestInstance {
                 ),
                 DescriptorServer.with(Descriptor.Feature.TagList),
                 DeviceEnergyManagementModeServer,
-                DishwasherModeServer,
+                class extends DishwasherModeServer {
+                    override changeToMode(request: ModeBase.ChangeToModeRequest) {
+                        if (request.newMode === 2) {
+                            // Refuse to self destruct for DISHM/2.1
+                            return {
+                                status: ModeBase.ModeChangeStatus.InvalidInMode,
+                                statusText: `Error: Hostile user rejected`,
+                            };
+                        }
+                        return super.changeToMode(request);
+                    }
+                },
                 DoorLockServer,
                 EnergyEvseModeServer,
                 FixedLabelServer,
@@ -503,6 +521,7 @@ export class AllClustersTestInstance extends NodeTestInstance {
                     "AverageMeasurement",
                 ),
                 UserLabelServer,
+                WaterHeaterModeServer,
                 //TestWaterTankLevelMonitoringServer, // invalid according to Device Composition test
                 TestWindowCoveringServer,
             ),
@@ -619,6 +638,12 @@ export class AllClustersTestInstance extends NodeTestInstance {
                             label: "Heavy",
                             mode: 1,
                             modeTags: [{ value: DishwasherMode.ModeTag.Heavy }],
+                        },
+                        {
+                            // Unsupported mode for DISHM/2.1
+                            label: "Self destruct",
+                            mode: 2,
+                            modeTags: [{ value: DishwasherMode.ModeTag.Max }],
                         },
                     ],
                     currentMode: 0,
@@ -1015,6 +1040,21 @@ export class AllClustersTestInstance extends NodeTestInstance {
                     measurementMedium: ConcentrationMeasurement.MeasurementMedium.Water,
                     levelValue: ConcentrationMeasurement.LevelValue.Critical,
                 },
+                waterHeaterMode: {
+                    supportedModes: [
+                        {
+                            label: "Manual",
+                            mode: 2,
+                            modeTags: [{ value: WaterHeaterMode.ModeTag.Manual }],
+                        },
+                        {
+                            label: "Off",
+                            mode: 1,
+                            modeTags: [{ value: WaterHeaterMode.ModeTag.Off }],
+                        },
+                    ],
+                    currentMode: 2,
+                },
                 /*waterTankLevelMonitoring: {
                     condition: 20,
                     degradationDirection: ResourceMonitoring.DegradationDirection.Up,
@@ -1048,37 +1088,18 @@ export class AllClustersTestInstance extends NodeTestInstance {
         );
         await serverNode.add(endpoint1);
 
-        const endpoint2 = new Endpoint(
-            OnOffLightDevice.with(DescriptorServer.with(Descriptor.Feature.TagList), WaterHeaterModeServer),
-            {
-                number: EndpointNumber(2),
-                id: "ep2",
-                descriptor: {
-                    tagList: [
-                        {
-                            ...NumberTag.Two,
-                            label: "EP2",
-                        },
-                    ],
-                },
-                // TODO: Move into an own Energymanagement app later
-                waterHeaterMode: {
-                    supportedModes: [
-                        {
-                            label: "Manual",
-                            mode: 2,
-                            modeTags: [{ value: WaterHeaterMode.ModeTag.Manual }],
-                        },
-                        {
-                            label: "Off",
-                            mode: 1,
-                            modeTags: [{ value: WaterHeaterMode.ModeTag.Off }],
-                        },
-                    ],
-                    currentMode: 2,
-                },
+        const endpoint2 = new Endpoint(OnOffLightDevice.with(DescriptorServer.with(Descriptor.Feature.TagList)), {
+            number: EndpointNumber(2),
+            id: "ep2",
+            descriptor: {
+                tagList: [
+                    {
+                        ...NumberTag.Two,
+                        label: "EP2",
+                    },
+                ],
             },
-        );
+        });
         await serverNode.add(endpoint2);
 
         const endpoint3 = new Endpoint(

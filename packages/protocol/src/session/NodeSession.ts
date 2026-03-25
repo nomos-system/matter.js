@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -8,6 +8,15 @@ import { Subject } from "#action/server/Subject.js";
 import { DecodedMessage, DecodedPacket, Message, MessageCodec, Packet, SessionType } from "#codec/MessageCodec.js";
 import { Mark } from "#common/Mark.js";
 import { Fabric } from "#fabric/Fabric.js";
+import { Subscription } from "#interaction/Subscription.js";
+import { PeerAddress } from "#peer/PeerAddress.js";
+import { PeerInitiatedCloseError } from "#peer/PeerCommunicationError.js";
+import { PeerLossContext } from "#peer/PeerLossContext.js";
+import { NoAssociatedFabricError } from "#protocol/errors.js";
+import { MessageCounter } from "#protocol/MessageCounter.js";
+import { MessageExchange } from "#protocol/MessageExchange.js";
+import { MessageReceptionStateEncryptedWithoutRollover } from "#protocol/MessageReceptionState.js";
+import { SecureChannelMessenger } from "#securechannel/SecureChannelMessenger.js";
 import {
     AsyncObservableValue,
     BasicSet,
@@ -20,15 +29,8 @@ import {
     Logger,
     MatterFlowError,
     hex,
-} from "#general";
-import { Subscription } from "#interaction/Subscription.js";
-import { PeerAddress } from "#peer/PeerAddress.js";
-import { NoAssociatedFabricError } from "#protocol/errors.js";
-import { MessageCounter } from "#protocol/MessageCounter.js";
-import { MessageExchange } from "#protocol/MessageExchange.js";
-import { MessageReceptionStateEncryptedWithoutRollover } from "#protocol/MessageReceptionState.js";
-import { SecureChannelMessenger } from "#securechannel/SecureChannelMessenger.js";
-import { CaseAuthenticatedTag, FabricIndex, GlobalFabricId, NodeId } from "#types";
+} from "@matter/general";
+import { CaseAuthenticatedTag, FabricIndex, GlobalFabricId, NodeId } from "@matter/types";
 import { SecureSession } from "./SecureSession.js";
 import { Session } from "./Session.js";
 import { SessionParameters } from "./SessionParameters.js";
@@ -48,7 +50,7 @@ export class NodeSession extends SecureSession {
     readonly #decryptKey: Bytes;
     readonly #encryptKey: Bytes;
     readonly #attestationKey: Bytes;
-    #caseAuthenticatedTags: CaseAuthenticatedTag[];
+    #caseAuthenticatedTags: readonly CaseAuthenticatedTag[];
     readonly supportsMRP = true;
     readonly type = SessionType.Unicast;
     readonly #closedByPeer = AsyncObservableValue();
@@ -98,6 +100,7 @@ export class NodeSession extends SecureSession {
             attestationKey,
             caseAuthenticatedTags,
             isInitiator,
+            delayManagerRegistration,
         } = config;
 
         super({
@@ -111,7 +114,7 @@ export class NodeSession extends SecureSession {
                     await this.closeSubscriptions(true);
                 });
             }),
-            messageReceptionState: new MessageReceptionStateEncryptedWithoutRollover(),
+            messageReceptionState: new MessageReceptionStateEncryptedWithoutRollover(0),
         });
 
         this.#crypto = crypto;
@@ -125,14 +128,16 @@ export class NodeSession extends SecureSession {
         this.#caseAuthenticatedTags = caseAuthenticatedTags ?? [];
         this.#isInitiator = isInitiator;
 
-        manager?.sessions.add(this);
-        fabric?.addSession(this);
-
         logger.debug(
             `Created secure ${this.isPase ? "PASE" : "CASE"} session for fabric index ${fabric?.fabricIndex}`,
             this.via,
             this.parameterDiagnostics,
         );
+
+        if (!delayManagerRegistration) {
+            manager?.sessions.add(this);
+        }
+        fabric?.addSession(this);
     }
 
     get parameterDiagnostics() {
@@ -271,16 +276,15 @@ export class NodeSession extends SecureSession {
         return this.#closedByPeer;
     }
 
-    async handlePeerClose() {
+    async handlePeerClose(currentExchange?: MessageExchange) {
         this.#isPeerLost = true;
         await this.#closedByPeer.emit(true);
-        await this.handlePeerLoss();
+        await this.handlePeerLoss({ cause: new PeerInitiatedCloseError(), currentExchange });
     }
 
-    async handlePeerLoss(data: { currentExchange?: MessageExchange; keepSubscriptions?: boolean } = {}) {
+    async handlePeerLoss(context: PeerLossContext) {
         this.#isPeerLost = true;
-        const { currentExchange, keepSubscriptions } = data;
-        await this.initiateForceClose(currentExchange, keepSubscriptions);
+        await this.initiateForceClose(context);
     }
 
     get isPeerLost() {
@@ -312,9 +316,9 @@ export class NodeSession extends SecureSession {
         });
     }
 
-    override async initiateForceClose(currentExchange?: MessageExchange, keepSubscriptions = false) {
+    override async initiateForceClose(context: PeerLossContext) {
         this.#isPeerLost = true;
-        await super.initiateForceClose(currentExchange, keepSubscriptions);
+        await super.initiateForceClose(context);
     }
 
     override addExchange(exchange: MessageExchange) {
@@ -389,6 +393,7 @@ export namespace NodeSession {
             session.via,
             `${operation} session with`,
             Diagnostic.strong(PeerAddress({ fabricIndex: fabric.fabricIndex, nodeId: peerNodeId }).toString()),
+            messenger.exchange.diagnostics,
             Diagnostic.dict({
                 address: messenger.channelName,
                 fabric: `${GlobalFabricId.strOf(fabric.globalId)} (#${fabric.fabricIndex})`,
@@ -405,7 +410,7 @@ export namespace NodeSession {
         fabric?: Fabric;
         peerNodeId: NodeId;
         peerSessionId: number;
-        caseAuthenticatedTags?: CaseAuthenticatedTag[];
+        caseAuthenticatedTags?: readonly CaseAuthenticatedTag[];
     }
 
     export interface Config extends CommonConfig {

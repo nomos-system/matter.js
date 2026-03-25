@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { MaybePromise } from "#general";
-import { MicrowaveOvenControl } from "#clusters/microwave-oven-control";
+import { MaybePromise } from "@matter/general";
+import { MicrowaveOvenControl } from "@matter/types/clusters/microwave-oven-control";
 
 export namespace MicrowaveOvenControlInterface {
     export interface Base {
@@ -20,8 +20,9 @@ export namespace MicrowaveOvenControlInterface {
         setCookingParameters(request: MicrowaveOvenControl.SetCookingParametersRequest): MaybePromise;
 
         /**
-         * This command is used to add more time to the CookTime attribute of the server. This command supports these
-         * fields:
+         * This command is used to add more time to the CookTime attribute of the server.
+         *
+         * This command supports these fields:
          *
          * @see {@link MatterSpecification.v142.Cluster} § 8.13.6.3
          */

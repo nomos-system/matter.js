@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -11,8 +11,9 @@ import { Resource } from "#models/Resource.js";
 Resource.add({
     tag: "deviceType", name: "Speaker", xref: "device§10.4",
 
-    details: "This defines conformance to the Speaker device type. This feature controls the speaker volume of the " +
-        "device." +
+    details: "This defines conformance to the Speaker device type." +
+        "\n" +
+        "This feature controls the speaker volume of the device." +
         "\n" +
         "To control unmute/mute, the On/Off cluster shall be used. A value of TRUE for the OnOff attribute " +
         "shall represent the volume on (not muted) state, while a value of FALSE shall represent the volume " +

@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { AbortedError } from "#MatterError.js";
+import { AbortedError, ClosedError } from "#MatterError.js";
 import { Duration } from "#time/Duration.js";
 import { Time, Timer } from "#time/Time.js";
 import { Instant } from "#time/TimeUnit.js";
@@ -23,11 +23,6 @@ export interface WorkSlot extends Disposable {
      * This is called automatically when using `using` syntax.
      */
     close(): void;
-
-    /**
-     * Release the slot automatically when the object is garbage collected.
-     */
-    [Symbol.dispose](): void;
 }
 
 /**
@@ -35,9 +30,15 @@ export interface WorkSlot extends Disposable {
  *
  * Instead of queueing promises or iterators directly, callers get a "work slot"
  * which they hold while doing work. The slot must be released when work is complete.
+ *
+ * An additional parameter "timeout" allows automatically releasing the slot after a defined time.
+ *
+ * If a delay is defined, then this delay time is enforced as a cooldown between consecutive slot grants.
  */
 export class Semaphore {
+    readonly #scope: string;
     readonly #delay: Duration;
+    readonly #timeout?: Duration;
     readonly #queue = new Array<{
         resolve: (slot: WorkSlot) => void;
     }>();
@@ -47,9 +48,11 @@ export class Semaphore {
     #abort = new Abort();
     #closed = false;
 
-    constructor(concurrency = 1, delay = Instant) {
+    constructor(scope: string, concurrency = 1, delay = Instant, timeout?: Duration) {
+        this.#scope = scope;
         this.#concurrency = concurrency;
         this.#delay = delay;
+        this.#timeout = timeout;
         this.#delayTimer = Time.getTimer("Queue delay", this.#delay, () => this.#processNextInQueue());
     }
 
@@ -67,7 +70,7 @@ export class Semaphore {
     async obtainSlot(abort?: Abort.Signal): Promise<WorkSlot> {
         // Check if closed or already aborted before proceeding
         if (this.#closed) {
-            throw new AbortedError("Queue is closed");
+            throw new ClosedError("Queue is closed");
         }
         if (abort) {
             const signal = "signal" in abort ? abort.signal : abort;
@@ -95,7 +98,7 @@ export class Semaphore {
 
         const entry = { resolve: resolver };
 
-        logger.debug("Queueing slot request at position", this.#queue.length + 1);
+        logger.debug(`[${this.#scope}] Queueing slot request at position`, this.#queue.length + 1);
         this.#queue.push(entry);
 
         // Ensure the timer is running to process queue (handles both capacity-wait and delay-wait)
@@ -108,11 +111,15 @@ export class Semaphore {
             const index = this.#queue.indexOf(entry);
             if (index !== -1) {
                 this.#queue.splice(index, 1);
-                logger.debug("Slot request aborted, removed from queue. Remaining:", this.#queue.length);
+                logger.debug(
+                    `[${this.#scope}] Slot request aborted, removed from queue. Remaining:`,
+                    this.#queue.length,
+                );
             }
-            // Throw AbortedError (use reason if it's already an AbortedError)
-            const reason = combinedAbort.reason;
-            throw reason instanceof AbortedError ? reason : new AbortedError();
+            combinedAbort.throwIfAborted();
+
+            // Should not get here
+            throw new AbortedError("Aborted without reason");
         }
 
         return result;
@@ -148,15 +155,31 @@ export class Semaphore {
         }
 
         let released = false;
+        let timeoutTimer: Timer | undefined;
+
+        const release = () => {
+            if (released) {
+                return;
+            }
+            released = true;
+            timeoutTimer?.stop();
+            this.#releaseSlot();
+        };
+
+        // Auto-release after timeout if configured
+        if (this.#timeout !== undefined) {
+            timeoutTimer = Time.getTimer(`Slot ${this.#scope} timeout`, this.#timeout, () => {
+                if (!released) {
+                    logger.debug(
+                        `[${this.#scope}] Slot timed out after ${Duration.format(this.#timeout)}, auto-releasing`,
+                    );
+                    release();
+                }
+            }).start();
+        }
 
         return {
-            close: () => {
-                if (released) {
-                    return;
-                }
-                released = true;
-                this.#releaseSlot();
-            },
+            close: release,
 
             [Symbol.dispose]() {
                 this.close();
@@ -185,6 +208,8 @@ export class Semaphore {
 
         const next = this.#queue.shift()!;
 
+        logger.debug(`[${this.#scope}] Processing next queued slot, queue length now `, this.#queue.length);
+
         // Grant the slot to the next waiter
         const slot = this.#grantSlot();
         next.resolve(slot);
@@ -199,7 +224,7 @@ export class Semaphore {
     clear(): void {
         if (this.#queue.length > 0) {
             // Abort current waiters and create fresh abort for future requests
-            this.#abort.abort(new AbortedError("Queue cleared"));
+            this.#abort.abort(new ClosedError("Queue cleared"));
             this.#abort = new Abort();
         }
         this.#queue.length = 0;
@@ -224,7 +249,7 @@ export class Semaphore {
      */
     close(): void {
         this.#closed = true;
-        this.#abort.abort(new AbortedError("Queue is closed"));
+        this.#abort.abort(new ClosedError("Queue is closed"));
         this.clear();
         this.#delayTimer.stop();
     }

@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -9,14 +9,15 @@ import { NetworkRuntime } from "#behavior/system/network/NetworkRuntime.js";
 import type { ServerNetworkRuntime } from "#behavior/system/network/ServerNetworkRuntime.js";
 import { NetworkCommissioningServer } from "#behaviors/network-commissioning";
 import { TimeSynchronizationBehavior } from "#behaviors/time-synchronization";
-import { GeneralDiagnostics } from "#clusters/general-diagnostics";
 import type { Endpoint } from "#endpoint/Endpoint.js";
+import type { NodeLifecycle } from "#node/NodeLifecycle.js";
 import {
     Bytes,
     Duration,
     Hours,
     ImplementationError,
     ipv4ToBytes,
+    ipv6ToBytes,
     Logger,
     MaybePromise,
     Millis,
@@ -25,11 +26,11 @@ import {
     Time,
     Timer,
     Timespan,
-} from "#general";
-import { FieldElement, Specification } from "#model";
-import type { NodeLifecycle } from "#node/NodeLifecycle.js";
-import { assertRemoteActor, MdnsService, Val } from "#protocol";
-import { CommandId, StatusCode, StatusResponseError, TlvInvokeResponse } from "#types";
+} from "@matter/general";
+import { FieldElement, Specification } from "@matter/model";
+import { assertRemoteActor, MdnsService, Val } from "@matter/protocol";
+import { CommandId, StatusCode, StatusResponseError, TlvInvokeResponse } from "@matter/types";
+import { GeneralDiagnostics } from "@matter/types/clusters/general-diagnostics";
 import { GeneralDiagnosticsBehavior } from "./GeneralDiagnosticsBehavior.js";
 
 const logger = Logger.get("GeneralDiagnosticsServer");
@@ -383,7 +384,7 @@ export class GeneralDiagnosticsServer extends Base {
                 offPremiseServicesReachableIPv6: null, // null means unknown or not supported
                 hardwareAddress: Bytes.fromHex(mac.replace(/[^\da-f]/gi, "")),
                 iPv4Addresses: ipV4.slice(0, 4).map(ip => ipv4ToBytes(ip)),
-                iPv6Addresses: ipV6.slice(0, 8).map(ip => ipv4ToBytes(ip)),
+                iPv6Addresses: ipV6.slice(0, 8).map(ip => ipv6ToBytes(ip)),
                 type: type ?? networkType,
             }));
     }

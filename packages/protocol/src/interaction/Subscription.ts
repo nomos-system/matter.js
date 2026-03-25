@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { hex } from "#general";
 import { Session } from "#session/Session.js";
+import { hex } from "@matter/general";
 
 export type SubscriptionId = number;
 

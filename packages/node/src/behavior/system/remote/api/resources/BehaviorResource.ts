@@ -1,14 +1,14 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Behavior } from "#behavior/Behavior.js";
 import { RootSupervisor } from "#behavior/supervision/RootSupervisor.js";
-import { InternalError } from "#general";
-import { ClusterModel, CommandModel } from "#model";
-import { StatusResponse } from "#types";
+import { InternalError } from "@matter/general";
+import { ClusterModel, CommandModel } from "@matter/model";
+import { StatusResponse } from "@matter/types";
 import { ApiResource } from "../ApiResource.js";
 import { CommandResource } from "./CommandResource.js";
 import { PropertyResource } from "./PropertyResource.js";

@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import type { OfflineEvent, OnlineEvent } from "#behavior/Events.js";
 import type { Endpoint } from "#endpoint/Endpoint.js";
-import type { AttributeModel, EventModel } from "#model";
-import type { ClusterType, TypeFromSchema } from "#types";
+import type { AttributeModel, EventModel } from "@matter/model";
+import type { ClusterType, TypeFromSchema } from "@matter/types";
 import type { Behavior } from "../Behavior.js";
 import type { ActionContext } from "../context/ActionContext.js";
 import type { ClusterOf } from "./cluster-behavior-utils.js";

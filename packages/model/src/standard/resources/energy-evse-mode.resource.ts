@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -86,8 +86,8 @@ Resource.add({
                         "> [!NOTE]" +
                         "\n" +
                         "> being in a mode with this tag set or not does not affect the handling of the EnableDischarging " +
-                        "  command by the Energy EVSE cluster, but once enabled, only modes with this tag enable the " +
-                        "  discharging to actually occur."
+                        "command by the Energy EVSE cluster, but once enabled, only modes with this tag enable the " +
+                        "discharging to actually occur."
                 }
             ]
         }

@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -10,11 +10,11 @@ import { MutableCluster } from "../cluster/mutation/MutableCluster.js";
 import { Attribute, Command, TlvNoResponse, OptionalAttribute } from "../cluster/Cluster.js";
 import { TlvUInt64, TlvEnum } from "../tlv/TlvNumber.js";
 import { TlvNoArguments } from "../tlv/TlvNoArguments.js";
-import { AccessLevel } from "#model";
+import { AccessLevel } from "@matter/model";
 import { BitFlag } from "../schema/BitmapSchema.js";
 import { TlvNullable } from "../tlv/TlvNullable.js";
 import { TlvBoolean } from "../tlv/TlvBoolean.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace EthernetNetworkDiagnostics {
@@ -160,15 +160,15 @@ export namespace EthernetNetworkDiagnostics {
              *
              * Reception of this command shall reset the following attributes to 0:
              *
-             *   • PacketRxCount
+             *   - PacketRxCount
              *
-             *   • PacketTxCount
+             *   - PacketTxCount
              *
-             *   • TxErrCount
+             *   - TxErrCount
              *
-             *   • CollisionCount
+             *   - CollisionCount
              *
-             *   • OverrunCount
+             *   - OverrunCount
              *
              * @see {@link MatterSpecification.v142.Core} § 11.16.7.1
              */

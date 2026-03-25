@@ -1,11 +1,10 @@
 import { BdxSessionConfiguration } from "#bdx/BdxSessionConfiguration.js";
 import { BdxClient, BdxMessage, BdxMessenger, BdxProtocol, BdxStatusMessage, ScopedStorage } from "#bdx/index.js";
 import { Message } from "#codec/MessageCodec.js";
-import { MaybePromise, StorageBackendMemory, StorageManager } from "#general";
 import { ProtocolMocks } from "#protocol/ProtocolMocks.js";
 import { SecureSession } from "#session/index.js";
-import { BDX_PROTOCOL_ID, BdxMessageType, SecureMessageType } from "#types";
-import { createPromise } from "@matter/general";
+import { createPromise, MaybePromise, MemoryStorageDriver, StorageManager } from "@matter/general";
+import { BDX_PROTOCOL_ID, BdxMessageType, SecureMessageType } from "@matter/types";
 
 type MessageRecords = { type: BdxMessageType | SecureMessageType.StatusReport; data: any };
 
@@ -39,7 +38,7 @@ export async function bdxTransfer(params: {
     const serverExchangeData = new Array<MessageRecords>();
 
     // Create a storage manager with an in-memory backend.
-    const storage = new StorageManager(new StorageBackendMemory());
+    const storage = new StorageManager(new MemoryStorageDriver());
     storage.close = () => {};
     await storage.initialize();
     const clientStorage = new ScopedStorage(storage.createContext("Client"), "ota");
@@ -113,6 +112,12 @@ export async function bdxTransfer(params: {
             }),
         ),
     );
+
+    // Clean up exchanges and sessions to prevent lingering timers
+    await sendingExchange.destroy();
+    await receivingExchange.destroy();
+    await sendingExchange.session[Symbol.asyncDispose]();
+    await receivingExchange.session[Symbol.asyncDispose]();
 }
 
 function parseMessage(message: Message): MessageRecords {

@@ -1,13 +1,21 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Behavior } from "#behavior/Behavior.js";
 import { BasicInformationBehavior } from "#behaviors/basic-information";
-import { ConnectionlessTransportSet, ImplementationError, Logger, SharedEnvironmentServices } from "#general";
 import { Node } from "#node/Node.js";
+import { IdentityService } from "#node/server/IdentityService.js";
+import {
+    ConnectionlessTransportSet,
+    Crypto,
+    DnsRecordType,
+    ImplementationError,
+    Logger,
+    SharedEnvironmentServices,
+} from "@matter/general";
 import {
     Ble,
     ClientSubscriptions,
@@ -18,11 +26,13 @@ import {
     MdnsClient,
     MdnsScannerTargetCriteria,
     MdnsService,
+    PeerAddress,
+    PeerSet,
     Scanner,
     ScannerSet,
-} from "#protocol";
-import { CaseAuthenticatedTag, FabricId, NodeId } from "#types";
-import type { CommissioningClient } from "../commissioning/CommissioningClient.js";
+    getFabricQname,
+} from "@matter/protocol";
+import { CaseAuthenticatedTag, FabricId, FabricIndex, NodeId } from "@matter/types";
 import { CommissioningServer } from "../commissioning/CommissioningServer.js";
 import { NetworkServer } from "../network/NetworkServer.js";
 import { ActiveDiscoveries } from "./discovery/ActiveDiscoveries.js";
@@ -91,6 +101,64 @@ export class ControllerBehavior extends Behavior {
             await this.#nodeOnline();
         }
         this.reactTo(node.lifecycle.goingOffline, this.#nodeGoingOffline);
+
+        // Mark addresses in use (or not) based on known peers
+        const identity = this.env.get(IdentityService);
+        const peers = this.env.get(PeerSet);
+        this.reactTo(peers.added, peer => identity.reservePeerAddress(peer.address));
+        this.reactTo(peers.deleted, peer => identity.releasePeerAddress(peer.address));
+    }
+
+    /**
+     * Allocate a new node address in the given fabric.
+     */
+    async allocatePeerAddress(fabricIndex: FabricIndex, nodeId?: NodeId) {
+        const identity = this.env.get(IdentityService);
+        let address: PeerAddress | undefined;
+
+        try {
+            // Allocate address in a separate transaction we can commit as soon as it's reserved
+            return await this.endpoint.act(async function (agent) {
+                const controller = agent.get(ControllerBehavior);
+
+                // Lock early to act as semaphor for address assignment
+                await agent.context.transaction.addResources(controller);
+                await agent.context.transaction.begin();
+
+                const useSequentialIds = controller.state.nodeIdAssignment !== "random";
+                let nextNodeId: NodeId = controller.state.nextNodeId ?? NodeId(1);
+
+                while (nodeId === undefined) {
+                    if (useSequentialIds) {
+                        nodeId = nextNodeId;
+                        nextNodeId++;
+                    } else {
+                        nodeId = NodeId.randomOperationalNodeId(controller.env.get(Crypto));
+                    }
+                    if (identity.peerAddressInUse({ fabricIndex, nodeId })) {
+                        nodeId = undefined;
+                    }
+                }
+
+                address = PeerAddress({ fabricIndex, nodeId });
+
+                // Reserve prior to commit.  We then release below if commit fails
+                identity.reservePeerAddress(address);
+
+                if (useSequentialIds) {
+                    controller.state.nextNodeId = nextNodeId;
+                }
+
+                return address;
+            });
+        } catch (e) {
+            // If there's an error but we have an address, ensure it's not allocated
+            if (address) {
+                identity.releasePeerAddress(address);
+            }
+
+            throw e;
+        }
     }
 
     override async [Symbol.asyncDispose]() {
@@ -144,8 +212,6 @@ export class ControllerBehavior extends Behavior {
                 scanner.targetCriteriaProviders.delete(this.internal.mdnsTargetCriteria);
             }
         }
-        // Clear operational targets
-        this.internal.mdnsTargetCriteria.operationalTargets.length = 0;
 
         const netTransports = this.env.get(ConnectionlessTransportSet);
         if (this.state.ble) {
@@ -154,7 +220,15 @@ export class ControllerBehavior extends Behavior {
     }
 
     #enableScanningForFabric(fabric: Fabric) {
-        this.internal.mdnsTargetCriteria.operationalTargets.push({ fabricId: fabric.globalId });
+        // Send a one-time wildcard query via DnssdNames so existing operational nodes on this fabric respond and
+        // populate IpService for known peers
+        if (this.internal.services) {
+            const names = this.env.get(MdnsService).names;
+            names.solicitor.solicit({
+                name: names.get(getFabricQname(fabric.globalId)),
+                recordTypes: [DnsRecordType.PTR],
+            });
+        }
     }
 
     #enableScanningForScanner(scanner: Scanner) {
@@ -172,7 +246,6 @@ export namespace ControllerBehavior {
          */
         mdnsTargetCriteria: MdnsScannerTargetCriteria = {
             commissionable: true,
-            operationalTargets: [],
         };
 
         services?: SharedEnvironmentServices;
@@ -192,6 +265,21 @@ export namespace ControllerBehavior {
          * By default the controller always scans on IP networks.
          */
         ip?: boolean = undefined;
+
+        /**
+         * Node ID assignment strategy.
+         */
+        nodeIdAssignment: "sequential" | "random" = "sequential";
+
+        /**
+         * Next assigned ID when {@link nodeIdAssignment} is "sequential".
+         *
+         * matter.js increments this value automatically after allocating a new node ID.  This means that the
+         * "sequential" strategy does not reuse IDs from decommissioned nodes.
+         *
+         * If there is a conflict with an existing ID, matter.js increments this value until it identifies a free ID.
+         */
+        nextNodeId?: NodeId;
 
         /**
          * Contains the label of the admin fabric which is set for all commissioned devices

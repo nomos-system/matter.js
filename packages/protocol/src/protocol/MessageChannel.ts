@@ -1,75 +1,53 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Message, MessageCodec } from "#codec/MessageCodec.js";
 import { Mark } from "#common/Mark.js";
+import type { ExchangeLogContext, MessageExchange } from "#protocol/MessageExchange.js";
+import type { Session } from "#session/Session.js";
+import type { SessionParameters } from "#session/SessionParameters.js";
 import {
     Bytes,
     Channel,
     Diagnostic,
     Duration,
     IpNetworkChannel,
+    isIpNetworkChannel,
     Logger,
-    MatterFlowError,
     MaybePromise,
-    Millis,
-    Seconds,
-} from "#general";
-import type { ExchangeLogContext } from "#protocol/MessageExchange.js";
-import type { Session } from "#session/Session.js";
-import type { SessionParameters } from "#session/SessionParameters.js";
+    Observable,
+    sameIpNetworkChannel,
+    ServerAddress,
+    ServerAddressUdp,
+} from "@matter/general";
+import { MRP } from "./MRP.js";
 
 const logger = new Logger("MessageChannel");
 
-/**
- * Default expected processing time for a messages in milliseconds. The value is derived from kExpectedIMProcessingTime
- * from chip implementation. This is basically the default used with different names, also kExpectedLowProcessingTime or
- * kExpectedSigma1ProcessingTime.
- */
-export const DEFAULT_EXPECTED_PROCESSING_TIME = Seconds(2);
-
-/**
- * The buffer time in milliseconds to add to the peer response time to also consider network delays and other factors.
- * TODO: This is a pure guess and should be adjusted in the future.
- */
-const PEER_RESPONSE_TIME_BUFFER = Seconds(5);
-
-export namespace MRP {
-    /**
-     * The maximum number of transmission attempts for a given reliable message. The sender MAY choose this value as it
-     * sees fit.
-     */
-    export const MAX_TRANSMISSIONS = 5;
-
-    /** The base number for the exponential backoff equation. */
-    export const BACKOFF_BASE = 1.6;
-
-    /** The scaler for random jitter in the backoff equation. */
-    export const BACKOFF_JITTER = 0.25;
-
-    /** The scaler margin increase to backoff over the peer sleepy interval. */
-    export const BACKOFF_MARGIN = 1.1;
-
-    /** The number of retransmissions before transitioning from linear to exponential backoff. */
-    export const BACKOFF_THRESHOLD = 1;
-
-    /** @see {@link MatterSpecification.v12.Core}, section 4.11.8 */
-    export const STANDALONE_ACK_TIMEOUT = Millis(200);
-}
-
 export class MessageChannel implements Channel<Message> {
+    #channel: Channel<Bytes>;
+    #networkAddressChanged = Observable<[ServerAddressUdp]>();
+    #isIpNetworkChannel = false;
     public closed = false;
     #onClose?: () => MaybePromise<void>;
     // When the session is supporting MRP and the channel is not reliable, use MRP handling
 
     constructor(
-        readonly channel: Channel<Bytes>,
+        channel: Channel<Bytes>,
         readonly session: Session,
         onClose?: () => MaybePromise<void>,
     ) {
+        this.#channel = channel;
+        if (isIpNetworkChannel(channel)) {
+            this.#isIpNetworkChannel = true;
+            channel.networkAddressChanged.on(networkAddress => {
+                logger.debug(`Network address of UDP Channel changed to ${ServerAddress.urlFor(networkAddress)}`);
+                this.#networkAddressChanged.emit(networkAddress);
+            });
+        }
         this.#onClose = onClose;
     }
 
@@ -79,7 +57,7 @@ export class MessageChannel implements Channel<Message> {
 
     /** Is the underlying transport reliable? */
     get isReliable() {
-        return this.channel.isReliable;
+        return this.#channel.isReliable;
     }
 
     /**
@@ -91,7 +69,7 @@ export class MessageChannel implements Channel<Message> {
     }
 
     get type() {
-        return this.channel.type;
+        return this.#channel.type;
     }
 
     /**
@@ -99,11 +77,19 @@ export class MessageChannel implements Channel<Message> {
      * message payload sent here can be as huge as allowed by the channel.
      */
     get maxPayloadSize() {
-        return this.channel.maxPayloadSize;
+        return this.#channel.maxPayloadSize;
     }
 
-    async send(message: Message, logContext?: ExchangeLogContext) {
-        logger.debug("Message", Mark.OUTBOUND, Message.diagnosticsOf(this.session, message, logContext));
+    async send(message: Message, options?: MessageChannelSendOptions) {
+        const { exchange, addressOverride } = options ?? {};
+        let { logContext } = options ?? {};
+        if (addressOverride && this.#isIpNetworkChannel) {
+            logContext = {
+                ...logContext,
+                address: ServerAddress.urlFor(addressOverride),
+            };
+        }
+        logger.debug("Message", Mark.OUTBOUND, Message.diagnosticsOf(exchange ?? this.session, message, logContext));
         const packet = this.session.encode(message);
         const bytes = MessageCodec.encodePacket(packet);
         if (bytes.byteLength > this.maxPayloadSize) {
@@ -112,21 +98,63 @@ export class MessageChannel implements Channel<Message> {
             );
         }
 
-        return await this.channel.send(bytes);
+        if (addressOverride && this.#isIpNetworkChannel) {
+            return await (this.#channel as IpNetworkChannel<Bytes>).send(bytes, addressOverride);
+        }
+        return await this.#channel.send(bytes);
     }
 
     get name() {
-        return Diagnostic.via(`${this.session.via}@${this.channel.name}`);
+        return Diagnostic.via(`${this.session.via}@${this.#channel.name}`);
     }
 
-    get networkAddress() {
-        return (this.channel as IpNetworkChannel<Bytes> | undefined)?.networkAddress;
+    get networkAddress(): ServerAddressUdp | undefined {
+        if (this.#isIpNetworkChannel) {
+            return (this.#channel as IpNetworkChannel<Bytes>).networkAddress;
+        }
+    }
+
+    set networkAddress(networkAddress: ServerAddressUdp) {
+        if (this.#isIpNetworkChannel) {
+            (this.#channel as IpNetworkChannel<Bytes>).networkAddress = networkAddress;
+        }
+    }
+
+    get networkAddressChanged() {
+        return this.#networkAddressChanged;
+    }
+
+    get channel() {
+        return this.#channel;
+    }
+
+    /**
+     * Sync the addresses for IP network channels and replace channel if the IPs change
+     * If the channel is on a non ip network then the call is basically ignored
+     * We already use a new naming here which will be more used in future, so yes inconsistency in naming is ok for now
+     * TODO refactor this out again and remove the address from the channel
+     */
+    set socket(channel: Channel<Bytes>) {
+        if (
+            this.closed ||
+            !this.#isIpNetworkChannel ||
+            !isIpNetworkChannel(channel) ||
+            channel.type !== "udp" ||
+            this.#channel.type !== "udp"
+        ) {
+            return;
+        }
+        if (!sameIpNetworkChannel(channel, this.#channel as IpNetworkChannel<Bytes>)) {
+            logger.debug(`Updated address of channel to`, this.name);
+            this.#channel = channel;
+            this.#networkAddressChanged.emit(channel.networkAddress);
+        }
     }
 
     async close() {
         const wasAlreadyClosed = this.closed;
         this.closed = true;
-        await this.channel.close();
+        await this.#channel.close();
         if (!wasAlreadyClosed) {
             await this.#onClose?.();
         }
@@ -135,35 +163,17 @@ export class MessageChannel implements Channel<Message> {
     calculateMaximumPeerResponseTime(
         peerSessionParameters: SessionParameters,
         localSessionParameters: SessionParameters,
-        expectedProcessingTime = DEFAULT_EXPECTED_PROCESSING_TIME,
+        expectedProcessingTime?: Duration,
+        includeMaximumSendingTime?: boolean,
     ): Duration {
-        switch (this.channel.type) {
-            case "tcp":
-                // TCP uses 30s timeout according to chip sdk implementation, so do the same
-                return Millis(Seconds(30) + PEER_RESPONSE_TIME_BUFFER);
-
-            case "udp":
-                // UDP normally uses MRP, if not we have Group communication, which normally have no responses
-                if (!this.session.usesMrp) {
-                    throw new MatterFlowError("No response expected for this message exchange because UDP and no MRP.");
-                }
-                // Calculate the maximum time till the peer got our last retry and worst case for the way back
-                return Millis(
-                    this.#calculateMrpMaximumPeerResponseTime(peerSessionParameters) +
-                        this.#calculateMrpMaximumPeerResponseTime(localSessionParameters) +
-                        expectedProcessingTime +
-                        PEER_RESPONSE_TIME_BUFFER,
-                );
-
-            case "ble":
-                // chip sdk uses BTP_ACK_TIMEOUT_MS which is wrong in my eyes, so we use static 30s as like TCP here
-                return Millis(Seconds(30) + PEER_RESPONSE_TIME_BUFFER);
-
-            default:
-                throw new MatterFlowError(
-                    `Can not calculate expected timeout for unknown channel type: ${this.channel.type}`,
-                );
-        }
+        return MRP.maxPeerResponseTimeOf({
+            peerSessionParameters: includeMaximumSendingTime ? peerSessionParameters : undefined,
+            localSessionParameters,
+            channelType: this.#channel.type,
+            isPeerActive: this.session.isPeerActive,
+            usesMrp: this.session.usesMrp,
+            expectedProcessingTime,
+        });
     }
 
     /**
@@ -172,33 +182,33 @@ export class MessageChannel implements Channel<Message> {
      * If session parameters are provided, the method can be used to calculate the maximum backoff time for the other
      * side of the exchange.
      *
+     * When `calculateMaximum` is set to true, we calculate the maximum time without any randomness.
+     *
      * @see {@link MatterSpecification.v10.Core}, section 4.11.2.1
      */
-    getMrpResubmissionBackOffTime(retransmissionCount: number, sessionParameters?: SessionParameters) {
-        const { activeInterval, idleInterval } = sessionParameters ?? this.session.parameters;
-        // For the first message of a new exchange ... SHALL be set according to the idle state of the peer node.
-        // For all subsequent messages of the exchange, ... SHOULD be set according to the active state of the peer node
-        const peerActive = retransmissionCount > 0 && (sessionParameters !== undefined || this.session.isPeerActive);
-        const baseInterval = peerActive ? activeInterval : idleInterval;
-        return Millis.floor(
-            Millis(
-                baseInterval *
-                    MRP.BACKOFF_MARGIN *
-                    Math.pow(MRP.BACKOFF_BASE, Math.max(0, retransmissionCount - MRP.BACKOFF_THRESHOLD)) *
-                    (1 + (sessionParameters !== undefined ? 1 : Math.random()) * MRP.BACKOFF_JITTER),
-            ),
+    getMrpResubmissionBackOffTime(
+        retransmissionCount: number,
+        sessionParameters?: SessionParameters,
+        calculateMaximum = false,
+    ) {
+        return MRP.retransmissionIntervalOf(
+            {
+                transmissionNumber: retransmissionCount,
+                sessionParameters: sessionParameters ?? this.session.parameters,
+                isPeerActive: this.session.isPeerActive,
+            },
+            calculateMaximum,
         );
     }
+}
 
-    /** Calculates the maximum time the peer might take to respond when using MRP for one direction. */
-    #calculateMrpMaximumPeerResponseTime(sessionParameters: SessionParameters) {
-        let finalWaitTime = 0;
+export interface MessageChannelSendOptions {
+    /** The exchange initiating the send, used for diagnostics. */
+    exchange?: MessageExchange;
 
-        // and then add the time the other side needs for a full resubmission cycle under the assumption we are active
-        for (let i = 0; i < MRP.MAX_TRANSMISSIONS; i++) {
-            finalWaitTime = Millis(finalWaitTime + this.getMrpResubmissionBackOffTime(i, sessionParameters));
-        }
+    /** Additional context for logging. */
+    logContext?: ExchangeLogContext;
 
-        return finalWaitTime;
-    }
+    /** Override the destination address for this send without changing the channel's default address. */
+    addressOverride?: ServerAddressUdp;
 }

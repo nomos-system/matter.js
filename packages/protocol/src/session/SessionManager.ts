@@ -1,22 +1,30 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import type { DecodedPacket } from "#codec/MessageCodec.js";
 import { SupportedTransportsSchema } from "#common/SupportedTransportsBitmap.js";
 import { FabricManager } from "#fabric/FabricManager.js";
+import type { Subscription } from "#interaction/Subscription.js";
+import { PeerAddress, PeerAddressMap } from "#peer/PeerAddress.js";
+import { PeerShutdownError } from "#peer/PeerCommunicationError.js";
+import { PeerLossContext } from "#peer/PeerLossContext.js";
+import { SessionClosedError } from "#protocol/errors.js";
+import { GroupSession } from "#session/GroupSession.js";
 import {
     BasicSet,
     Bytes,
     Channel,
-    ConnectionlessTransportSet,
+    ClosedError,
+    ConnectionlessTransport,
     Construction,
     Crypto,
     Duration,
     Environment,
     Environmental,
+    InternalError,
     Lifecycle,
     Logger,
     MatterAggregateError,
@@ -29,13 +37,9 @@ import {
     Time,
     Timestamp,
     toHex,
-} from "#general";
-import type { Subscription } from "#interaction/Subscription.js";
-import { PeerAddress, PeerAddressMap } from "#peer/PeerAddress.js";
-import { SessionClosedError } from "#protocol/errors.js";
-import { GroupSession } from "#session/GroupSession.js";
-import { CaseAuthenticatedTag, FabricId, FabricIndex, GroupId, NodeId } from "#types";
-import { UnexpectedDataError } from "@matter/general";
+    UnexpectedDataError,
+} from "@matter/general";
+import { CaseAuthenticatedTag, FabricId, FabricIndex, GroupId, NodeId } from "@matter/types";
 import type { ExposedFabricInformation, Fabric } from "../fabric/Fabric.js";
 import { MessageCounter } from "../protocol/MessageCounter.js";
 import { NodeSession } from "./NodeSession.js";
@@ -46,13 +50,20 @@ import { UnsecuredSession } from "./UnsecuredSession.js";
 
 const logger = Logger.get("SessionManager");
 
-export interface ResumptionRecord {
+/** Resumption record without a fabric reference but relevant lookup data used internally in SessionManager */
+interface InternalResumptionRecord {
     sharedSecret: Bytes;
     resumptionId: Bytes;
-    fabric: Fabric;
+    fabricId: FabricId;
+    fabricIndex: FabricIndex;
     peerNodeId: NodeId;
     sessionParameters: SessionParameters;
-    caseAuthenticatedTags?: CaseAuthenticatedTag[];
+    caseAuthenticatedTags?: readonly CaseAuthenticatedTag[];
+}
+
+/** Resumption record with Fabric reference. */
+export interface ResumptionRecord extends Omit<InternalResumptionRecord, "fabricId" | "fabricIndex"> {
+    fabric: Fabric;
 }
 
 type ResumptionStorageRecord = {
@@ -73,7 +84,7 @@ type ResumptionStorageRecord = {
         supportedTransports?: number;
         maxTcpMessageSize?: number;
     };
-    caseAuthenticatedTags?: CaseAuthenticatedTag[];
+    caseAuthenticatedTags?: readonly CaseAuthenticatedTag[];
 };
 
 export interface ActiveSessionInformation {
@@ -111,6 +122,15 @@ export interface SessionManagerContext {
 const ID_SPACE_UPPER_BOUND = 0xffff;
 
 /**
+ * Thrown when communication terminates due node shutdown.
+ */
+export class ShutdownError extends ClosedError {
+    constructor(message = "Local node shutdown", options?: ErrorOptions) {
+        super(message, options);
+    }
+}
+
+/**
  * Manages Matter sessions associated with peer connections.
  */
 export class SessionManager {
@@ -119,7 +139,7 @@ export class SessionManager {
     readonly #sessions = new BasicSet<NodeSession>();
     readonly #groupSessions = new Map<NodeId, BasicSet<GroupSession>>();
     #nextSessionId: number;
-    #resumptionRecords = new PeerAddressMap<ResumptionRecord>();
+    #resumptionRecords = new PeerAddressMap<InternalResumptionRecord>();
     readonly #globalUnencryptedMessageCounter;
     #sessionParameters: SessionParameters;
     readonly #construction: Construction<SessionManager>;
@@ -263,9 +283,11 @@ export class SessionManager {
         const { channel, initiatorNodeId, sessionParameters, isInitiator } = options;
         if (initiatorNodeId !== undefined) {
             if (this.#unsecuredSessions.has(initiatorNodeId)) {
-                throw new MatterFlowError(`UnsecuredSession with NodeId ${initiatorNodeId} already exists.`);
+                throw new MatterFlowError(`UnsecuredSession with NodeId ${initiatorNodeId} already exists`);
             }
         }
+
+        let tries = 0;
         while (true) {
             const session = new UnsecuredSession({
                 crypto: this.#context.fabrics.crypto,
@@ -278,7 +300,13 @@ export class SessionManager {
             });
 
             const ephemeralNodeId = session.nodeId;
-            if (this.#unsecuredSessions.has(ephemeralNodeId)) continue;
+            if (this.#unsecuredSessions.has(ephemeralNodeId)) {
+                if (++tries > 4) {
+                    throw new InternalError("Unable to allocate unique ephemeral node ID; entropy source is broken");
+                }
+
+                continue;
+            }
 
             this.#unsecuredSessions.set(ephemeralNodeId, session);
             session.activate();
@@ -401,14 +429,15 @@ export class SessionManager {
     maybeSessionFor(address: PeerAddress) {
         this.#construction.assert();
 
-        // Prefer the most recently used session.  Older ones may not work with broken peers (e.g. CHIP test harness)
+        // Prefer the most recently active session (i.e. the one we last heard from the peer on).  Older ones may not
+        // work with broken peers (e.g. CHIP test harness).
         let found: NodeSession | undefined;
         for (const session of this.#sessions) {
             if (!session.peerIs(address) || session.isClosing) {
                 continue;
             }
 
-            if (!found || found.timestamp < session.timestamp) {
+            if (!found || found.activeTimestamp < session.activeTimestamp) {
                 found = session;
             }
         }
@@ -430,20 +459,29 @@ export class SessionManager {
      * device supports persistent subscriptions.
      */
     handlePeerShutdown(address: PeerAddress, asOf?: Timestamp) {
-        return this.#handlePeerLoss({ address, asOf: asOf ?? Time.nowMs, keepSubscriptions: true });
+        return this.#handlePeerLoss({
+            address,
+            cause: new PeerShutdownError(),
+            asOf: asOf ?? Time.nowMs,
+            keepSubscriptions: true,
+        });
     }
 
     /**
      * Removes all Peer sessions and closes subscriptions.
      */
-    handlePeerLoss(address: PeerAddress, asOf?: Timestamp) {
-        return this.#handlePeerLoss({ address, asOf: asOf ?? Time.nowMs });
+    async handlePeerLoss(address: PeerAddress, cause: Error, asOf?: Timestamp) {
+        return await this.#handlePeerLoss({ address, asOf: asOf ?? Time.nowMs, cause });
     }
 
-    async #handlePeerLoss(options: { address: PeerAddress; asOf?: Timestamp; keepSubscriptions?: boolean }) {
+    async #handlePeerLoss(
+        context: {
+            address: PeerAddress;
+        } & PeerLossContext,
+    ) {
         await this.#construction;
 
-        const { address, asOf, keepSubscriptions } = options;
+        const { address, asOf } = context;
         for (const session of this.#sessions) {
             if (!session.peerIs(address)) {
                 continue;
@@ -453,7 +491,7 @@ export class SessionManager {
                 continue;
             }
 
-            await session.handlePeerLoss({ keepSubscriptions });
+            await session.handlePeerLoss(context);
         }
     }
 
@@ -471,7 +509,7 @@ export class SessionManager {
      *
      * Returns the session for the current group epoch key.  The source is this node and the peer is the group.
      */
-    async groupSessionForAddress(address: PeerAddress, transports: ConnectionlessTransportSet) {
+    async groupSessionForAddress(address: PeerAddress, transports: ConnectionlessTransport.Provider) {
         const groupId = GroupId.fromNodeId(address.nodeId);
         GroupId.assertGroupId(groupId);
 
@@ -553,19 +591,38 @@ export class SessionManager {
         }
     }
 
+    #asExposedResumptionRecord(record: InternalResumptionRecord): ResumptionRecord {
+        return { ...record, fabric: this.#fabricForId(record.fabricId, record.fabricIndex) };
+    }
+
     findResumptionRecordById(resumptionId: Bytes) {
         this.#construction.assert();
-        return [...this.#resumptionRecords.values()].find(record => Bytes.areEqual(record.resumptionId, resumptionId));
+        const record = [...this.#resumptionRecords.values()].find(record =>
+            Bytes.areEqual(record.resumptionId, resumptionId),
+        );
+        if (record !== undefined) {
+            return this.#asExposedResumptionRecord(record);
+        }
     }
 
     findResumptionRecordByAddress(address: PeerAddress) {
         this.#construction.assert();
-        return this.#resumptionRecords.get(address);
+        const record = this.#resumptionRecords.get(address);
+        if (record !== undefined) {
+            return this.#asExposedResumptionRecord(record);
+        }
     }
 
     async saveResumptionRecord(resumptionRecord: ResumptionRecord) {
         await this.#construction;
-        this.#resumptionRecords.set(resumptionRecord.fabric.addressOf(resumptionRecord.peerNodeId), resumptionRecord);
+        const { fabric, ...rest } = resumptionRecord;
+
+        const record = {
+            ...rest,
+            fabricId: fabric.fabricId,
+            fabricIndex: fabric.fabricIndex,
+        };
+        this.#resumptionRecords.set(fabric.addressOf(resumptionRecord.peerNodeId), record);
         await this.#storeResumptionRecords();
     }
 
@@ -576,14 +633,22 @@ export class SessionManager {
             [...this.#resumptionRecords].map(
                 ([
                     address,
-                    { sharedSecret, resumptionId, peerNodeId, fabric, sessionParameters, caseAuthenticatedTags },
+                    {
+                        sharedSecret,
+                        resumptionId,
+                        peerNodeId,
+                        fabricId,
+                        fabricIndex,
+                        sessionParameters,
+                        caseAuthenticatedTags,
+                    },
                 ]): ResumptionStorageRecord => ({
                     nodeId: address.nodeId,
                     sharedSecret,
                     resumptionId,
-                    fabricId: fabric.fabricId,
-                    fabricIndex: fabric.fabricIndex,
-                    peerNodeId: peerNodeId,
+                    fabricId,
+                    fabricIndex,
+                    peerNodeId,
                     sessionParameters: {
                         ...sessionParameters,
                         supportedTransports: sessionParameters.supportedTransports
@@ -594,6 +659,23 @@ export class SessionManager {
                 }),
             ),
         );
+    }
+
+    #maybeFabricForId(fabricId: FabricId, fabricIndex?: FabricIndex) {
+        return this.#context.fabrics.find(
+            fabric =>
+                fabric.fabricId === fabricId &&
+                // Backward compatibility logic: fabricIndex was added later (0.15.5), so it might be undefined in older records
+                (fabricIndex === undefined || fabric.fabricIndex === fabricIndex),
+        );
+    }
+
+    #fabricForId(fabricId: FabricId, fabricIndex?: FabricIndex) {
+        const fabric = this.#maybeFabricForId(fabricId, fabricIndex);
+        if (fabric === undefined) {
+            throw new InternalError(`Fabric not found for ID=${fabricId}, index=${fabricIndex}`);
+        }
+        return fabric;
     }
 
     async #initialize() {
@@ -615,12 +697,7 @@ export class SessionManager {
                 sessionParameters,
                 caseAuthenticatedTags,
             }) => {
-                const fabric = this.#context.fabrics.find(
-                    fabric =>
-                        fabric.fabricId === fabricId &&
-                        // Backward compatibility logic: fabricIndex was added later (0.15.5), so it might be undefined in older records
-                        (fabricIndex === undefined || fabric.fabricIndex === fabricIndex),
-                );
+                const fabric = this.#maybeFabricForId(fabricId, fabricIndex);
                 if (!fabric) {
                     logger.warn(
                         `Ignoring resumption record for fabric 0x${toHex(fabricId)} and index ${fabricIndex} because we cannot find a matching fabric`,
@@ -639,7 +716,8 @@ export class SessionManager {
                 this.#resumptionRecords.set(fabric.addressOf(nodeId), {
                     sharedSecret,
                     resumptionId,
-                    fabric,
+                    fabricId,
+                    fabricIndex: fabric.fabricIndex,
                     peerNodeId,
                     // Make sure to initialize default values when restoring an older resumption record
                     sessionParameters: SessionParameters(sessionParameters),
@@ -654,7 +732,7 @@ export class SessionManager {
         return [...this.#sessions]
             .filter(session => session.isSecure && !session.isPase)
             .map(session => ({
-                name: session.via,
+                name: `${session.via}`,
                 nodeId: session.nodeId,
                 peerNodeId: session.peerNodeId,
                 fabric: session instanceof SecureSession ? session.fabric?.externalInformation : undefined,
@@ -672,7 +750,6 @@ export class SessionManager {
         }
 
         this.#observers.close();
-        await this.#storeResumptionRecords();
 
         await this.closeAllSessions();
     }
@@ -683,7 +760,7 @@ export class SessionManager {
         }
 
         await this.closeAllSessions();
-        await this.#context.storage.clear();
+        await this.#context.storage.clearAll();
         this.#resumptionRecords.clear();
     }
 
@@ -694,24 +771,26 @@ export class SessionManager {
 
         await this.#subscriptionUpdateMutex;
 
+        const context: PeerLossContext = { cause: new ShutdownError("Session closed by node shutdown") };
+
         const closePromises = this.#sessions.map(async session => {
             await session.closeSubscriptions(true);
 
             // TODO - some CHIP tests (CASERecovery for one) expect us to exit without closing the session and will fail
             // if we end gracefully.  Not clear why this behavior would be desirable as it leads to a timeout when the
             // node attempts contact even if we've already restarted
-            await session.initiateForceClose();
+            await session.initiateForceClose(context);
 
             this.#sessions.delete(session);
         });
 
         for (const session of this.#unsecuredSessions.values()) {
-            closePromises.push(session.initiateForceClose());
+            closePromises.push(session.initiateForceClose(context));
         }
 
         for (const sessions of this.#groupSessions.values()) {
             for (const session of sessions) {
-                closePromises.push(session.initiateForceClose());
+                closePromises.push(session.initiateForceClose(context));
             }
         }
         await MatterAggregateError.allSettled(closePromises, "Error closing sessions").catch(error =>

@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -9,10 +9,9 @@ import { ClusterBehavior } from "#behavior/cluster/ClusterBehavior.js";
 import type { ClusterState } from "#behavior/cluster/ClusterState.js";
 import { ActionContext } from "#behavior/context/ActionContext.js";
 import { ValueSupervisor } from "#behavior/supervision/ValueSupervisor.js";
-import { Thermostat } from "#clusters/thermostat";
 import { Endpoint } from "#endpoint/Endpoint.js";
-import { BasicSet, Environment, Environmental, InternalError, Logger, ObserverGroup, serialize } from "#general";
-import { DataModelPath } from "#model";
+import { BasicSet, Environment, Environmental, InternalError, Logger, ObserverGroup, serialize } from "@matter/general";
+import { DataModelPath } from "@matter/model";
 import {
     AccessControl,
     assertRemoteActor,
@@ -22,8 +21,9 @@ import {
     PeerAddress,
     Subject,
     Val,
-} from "#protocol";
-import { AttributeId, NodeId, Status, StatusResponse, StatusResponseError } from "#types";
+} from "@matter/protocol";
+import { AttributeId, NodeId, Status, StatusResponse, StatusResponseError } from "@matter/types";
+import { Thermostat } from "@matter/types/clusters/thermostat";
 import { AtomicWriteState } from "./AtomicWriteState.js";
 
 const logger = Logger.get("AtomicWriteHandler");
@@ -174,7 +174,7 @@ export class AtomicWriteHandler {
         let commandStatusCode = Status.Success;
         const attributeStatus = request.attributeRequests.map(attr => {
             let statusCode = Status.Success;
-            const attributeModel = cluster.schema.conformant.attributes.for(attr);
+            const attributeModel = cluster.schema.conformant.attributes(attr);
             if (!attributeModel?.quality.atomic) {
                 statusCode = Status.InvalidAction;
             } else if (this.#pendingWriteStateForAttribute(endpoint, cluster, attr) !== undefined) {
@@ -268,7 +268,7 @@ export class AtomicWriteHandler {
             } catch (error) {
                 await context.transaction?.rollback();
                 logger.info(`Failed to write attribute ${attr} during atomic write commit: ${error}`);
-                statusCode = error instanceof StatusResponseError ? error.code : Status.Failure;
+                statusCode = StatusResponseError.of(error)?.code ?? Status.Failure;
                 // If one fails with ConstraintError, the whole command should return ConstraintError, otherwise Failure
                 commandStatusCode =
                     commandStatusCode === Status.Failure

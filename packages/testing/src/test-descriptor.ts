@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { FilesystemSync } from "#tools";
+import type { FilesystemSync } from "@matter/tools";
 import { readFile, writeFile } from "node:fs/promises";
 import { PicsExpression } from "./chip/pics/expression.js";
 import type { PicsFile } from "./chip/pics/file.js";

@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Progress, ansi, std } from "#tools";
+import { Progress, ansi, std } from "@matter/tools";
 import { FailureDetail } from "./failure-detail.js";
 import { FailureReporter } from "./failure-reporter.js";
 import { Failure, Reporter, Stats } from "./reporter.js";
@@ -32,7 +32,7 @@ export abstract class NodejsReporter implements Reporter {
         }
     }
 
-    beginSuite(name: string[]): void {
+    beginSuite(name: string[], _stats?: Stats, _file?: string): void {
         this.#suite = name;
     }
 
@@ -61,6 +61,10 @@ export abstract class NodejsReporter implements Reporter {
         }
         this.#lastTitle = title;
         this.progress.update(this.#summarize(this.#stats), title);
+    }
+
+    passTest(_name: string): void {
+        // No-op for NodejsReporter — pass results shown via progress bar
     }
 
     failTest(name: string, detail: FailureDetail) {

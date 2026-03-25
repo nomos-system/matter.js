@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Domain, DomainContext } from "#domain.js";
-import { Environment, LogFormat, MatterError } from "#general";
 import { CommandInput } from "#parser.js";
 import { repl } from "#repl.js";
+import { Environment, LogFormat, MatterError } from "@matter/general";
 import "@matter/nodejs";
 import colors from "ansi-colors";
 import { stdout } from "node:process";

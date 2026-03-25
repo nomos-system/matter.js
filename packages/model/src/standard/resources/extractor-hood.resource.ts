@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -18,17 +18,17 @@ Resource.add({
         "\n" +
         "Extractor Hoods may also be known by the following names:" +
         "\n" +
-        "  • Hoods" +
+        "  - Hoods" +
         "\n" +
-        "  • Extractor Fans" +
+        "  - Extractor Fans" +
         "\n" +
-        "  • Extractors" +
+        "  - Extractors" +
         "\n" +
-        "  • Range Hoods" +
+        "  - Range Hoods" +
         "\n" +
-        "  • Telescoping Hoods" +
+        "  - Telescoping Hoods" +
         "\n" +
-        "  • Telescoping Extractors",
+        "  - Telescoping Extractors",
 
     children: [
         { tag: "requirement", name: "Identify", xref: "device§13.10.5" },

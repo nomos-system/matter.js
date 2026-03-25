@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { ExpandedStatus } from "#common/ExpandedStatus.js";
-import { camelize, capitalize, decamelize, MatterAggregateError } from "#general";
-import { DataModelPath } from "#model";
-import { StatusResponseError } from "#types";
+import { camelize, capitalize, decamelize, MatterAggregateError } from "@matter/general";
+import { DataModelPath } from "@matter/model";
+import { StatusResponseError } from "@matter/types";
 
 /**
  * A protocol error associated with a specific data model path.

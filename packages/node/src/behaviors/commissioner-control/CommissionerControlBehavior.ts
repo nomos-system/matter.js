@@ -1,15 +1,15 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { CommissionerControl } from "#clusters/commissioner-control";
+import { CommissionerControl } from "@matter/types/clusters/commissioner-control";
 import { ClusterBehavior } from "../../behavior/cluster/ClusterBehavior.js";
 import { CommissionerControlInterface } from "./CommissionerControlInterface.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 
 /**
  * CommissionerControlBehavior is the base class for objects that support interaction with

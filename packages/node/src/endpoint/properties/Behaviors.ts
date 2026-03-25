@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -12,6 +12,7 @@ import { LocalActorContext } from "#behavior/context/server/LocalActorContext.js
 import { Events } from "#behavior/Events.js";
 import { BehaviorBacking } from "#behavior/internal/BehaviorBacking.js";
 import { Datasource } from "#behavior/state/managed/Datasource.js";
+import { ProtocolService } from "#node/integration/ProtocolService.js";
 import {
     BasicObservable,
     camelize,
@@ -26,14 +27,12 @@ import {
     Logger,
     MaybePromise,
     Transaction,
-} from "#general";
-import { FeatureSet } from "#model";
-import { ProtocolService } from "#node/integration/ProtocolService.js";
-import { ClusterTypeProtocol, Val } from "#protocol";
-import { ClusterType, VoidSchema } from "#types";
+} from "@matter/general";
+import { FeatureSet } from "@matter/model";
+import { ClusterTypeProtocol, Val } from "@matter/protocol";
+import { ClusterType, VoidSchema } from "@matter/types";
 import type { Agent } from "../Agent.js";
 import type { Endpoint } from "../Endpoint.js";
-import { EndpointVariableService } from "../EndpointVariableService.js";
 import { BehaviorInitializationError, EndpointBehaviorsError } from "../errors.js";
 import { EndpointInitializer } from "./EndpointInitializer.js";
 import { EndpointLifecycle } from "./EndpointLifecycle.js";
@@ -132,16 +131,18 @@ export class Behaviors {
                 const behaviorData = new Array<unknown>();
                 for (const attributeName of elements.attributes) {
                     const attr = cluster.attributes[attributeName];
-                    behaviorData.push([
-                        attributeName,
-                        Diagnostic.dict({
-                            id: Diagnostic.hex(attr.id),
-                            val: (backing?.stateView as Val.Struct)[attributeName],
-                            flags: Diagnostic.asFlags({
-                                fabricScoped: attr.fabricScoped,
+                    if (attr) {
+                        behaviorData.push([
+                            attributeName,
+                            Diagnostic.dict({
+                                id: Diagnostic.hex(attr.id),
+                                val: (backing?.stateView as Val.Struct | undefined)?.[attributeName],
+                                flags: Diagnostic.asFlags({
+                                    fabricScoped: attr.fabricScoped,
+                                }),
                             }),
-                        }),
-                    ]);
+                        ]);
+                    }
                 }
                 elementDiagnostic.push([Diagnostic.strong("attributes"), Diagnostic.list(behaviorData)]);
             }
@@ -437,6 +438,11 @@ export class Behaviors {
                 destroyNow = new Set(Object.keys(this.#backings));
             }
 
+            // Dispose cached event emitters so they cancel deferred-emit timers
+            for (const emitter of Object.values(this.#events)) {
+                emitter[Symbol.dispose]?.();
+            }
+
             // Commit any state changes that occurred during destruction
             const transaction = agent.context.transaction;
             if (transaction.status === Transaction.Status.Exclusive) {
@@ -464,6 +470,15 @@ export class Behaviors {
      * injected once the endpoint is initialized.
      */
     inject(type: Behavior.Type, options?: Behavior.Options, notify = true) {
+        if (typeof type.id !== "string") {
+            throw new ImplementationError("Behavior type has no ID");
+        }
+        if (!/^[a-z]/.test(type.id)) {
+            throw new ImplementationError(
+                `Behavior ID "${type.id}" must start with a lowercase letter (for example "${camelize(type.id)}")`,
+            );
+        }
+
         if (options) {
             this.#options[type.id] = options;
         }
@@ -504,12 +519,13 @@ export class Behaviors {
             return;
         }
 
+        const type = this.#supported[id];
         delete this.#supported[id];
 
         let promise: undefined | MaybePromise<void>;
         const backing = this.#backings[id];
         if (backing) {
-            logger.warn(`Removing ${backing} from active endpoint`);
+            logger.info(`Removing ${backing} from active endpoint`);
             promise = backing.close();
             delete this.#backings[id];
         }
@@ -534,7 +550,16 @@ export class Behaviors {
             if (detachedObservers) {
                 (this.#detachedObservers ??= {})[id] = detachedObservers;
             }
+
+            delete this.#events[id];
         }
+
+        delete (this.#endpoint.state as Record<string, Val.Struct>)[id];
+        if (type.schema.id !== undefined) {
+            delete (this.#endpoint.state as Record<string, Val.Struct>)[type.schema.id];
+        }
+
+        delete (this.#endpoint.events as Record<string, SupportedBehaviors.EventsOf<any>>)[id];
 
         return promise;
     }
@@ -599,10 +624,12 @@ export class Behaviors {
         }
 
         // Set defaults from environmental configuration
-        const varService = this.#endpoint.env.get(EndpointVariableService);
-        const vars = varService.forBehaviorInstance(this.#endpoint, type);
-        if (vars !== undefined) {
-            defaults = { ...defaults, ...(type.supervisor.cast(vars) as Val.Struct) };
+        const { variableService } = this.#endpoint.env.get(EndpointInitializer);
+        if (variableService) {
+            const vars = variableService.forBehaviorInstance(this.#endpoint, type);
+            if (vars !== undefined) {
+                defaults = { ...defaults, ...(type.supervisor.cast(vars) as Val.Struct) };
+            }
         }
 
         return defaults;
@@ -618,7 +645,7 @@ export class Behaviors {
     /**
      * Access internal state for a {@link Behavior}.
      *
-     * Internal state is not stable API and not intended for consumption outside of the behavior.  However it is not
+     * Internal state is not a stable API and not intended for consumption outside the behavior.  However, it is not
      * truly private and may be accessed by tightly coupled implementation.
      *
      * As this API is intended for use by "friendly" code, it does not perform the same initialization assertions as
@@ -716,7 +743,7 @@ export class Behaviors {
     }
 
     /**
-     * Obtain a backing for a behavior.
+     * Get backing for a behavior.
      */
     #backingFor(type: Behavior.Type) {
         // Crash if endpoint is not initialized
@@ -790,7 +817,7 @@ export class Behaviors {
             Object.defineProperty(this.#endpoint.state, type.schema.id, { get, configurable: true });
         }
 
-        // When replacing a behavior, transplant listeners from previous incarnation if present
+        // When replacing a behavior, transplant listeners from the previous incarnation if present
         const detachedObservers = this.#detachedObservers?.[type.id];
         if (detachedObservers) {
             delete this.#detachedObservers![type.id];

@@ -1,16 +1,16 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { StorageContext, Transaction } from "#general";
 import { EndpointStore } from "#storage/EndpointStore.js";
 import { DatasourceStore } from "#storage/server/DatasourceStore.js";
-import type { EndpointNumber } from "#types";
+import { StorageContext } from "@matter/general";
+import { PeerAddress } from "@matter/protocol";
+import type { EndpointNumber } from "@matter/types";
 import type { ClientNodeStore } from "./ClientNodeStore.js";
 import { DatasourceCache } from "./DatasourceCache.js";
-import { RemoteWriteParticipant } from "./RemoteWriteParticipant.js";
 
 export class ClientEndpointStore extends EndpointStore {
     #owner: ClientNodeStore;
@@ -20,6 +20,14 @@ export class ClientEndpointStore extends EndpointStore {
         super(storage);
         this.#owner = owner;
         this.#number = number;
+
+        // Upgrade peerAddress to a PeerAddress
+        if (!this.#number) {
+            const commissioning = this.initialValues.get("commissioning");
+            if (commissioning?.peerAddress) {
+                commissioning.peerAddress = PeerAddress(commissioning.peerAddress as PeerAddress);
+            }
+        }
     }
 
     get number() {
@@ -33,21 +41,18 @@ export class ClientEndpointStore extends EndpointStore {
         return this.initialValues.get("commissioning")?.["peerAddress"];
     }
 
-    participantFor(transaction: Transaction) {
-        let participant = transaction.getParticipant(this.#owner);
-        if (participant === undefined) {
-            participant = new RemoteWriteParticipant(this.#owner);
-            transaction.addParticipants(participant);
-        }
-        return participant;
-    }
-
     /**
      * Create a {@link Datasource.ExternallyMutableStore} for a behavior.
      */
     createStoreForBehavior(behaviorId: string) {
         const initialValues = this.consumeInitialValues(behaviorId);
-        return DatasourceCache(this, behaviorId, initialValues);
+        return DatasourceCache({
+            writer: this.#owner.write,
+            endpointNumber: this.#number,
+            behaviorId,
+            initialValues,
+            localWriter: this.#owner.localWriter,
+        });
     }
 
     /**

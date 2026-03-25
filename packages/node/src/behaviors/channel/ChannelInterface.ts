@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { MaybePromise } from "#general";
-import { Channel } from "#clusters/channel";
+import { MaybePromise } from "@matter/general";
+import { Channel } from "@matter/types/clusters/channel";
 
 export namespace ChannelInterface {
     export interface Base {

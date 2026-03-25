@@ -1,23 +1,25 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { AccessControl } from "#clusters";
 import {
+    deepCopy,
     Diagnostic,
     Duration,
     ImplementationError,
+    MatterError,
     MatterFlowError,
     Millis,
     Seconds,
+    Semaphore,
     ServerAddressUdp,
     UnexpectedDataError,
-} from "#general";
-import { Specification } from "#model";
-import type { ServerNode } from "#node";
-import { ClientNodeInteraction } from "#node";
+} from "@matter/general";
+import { Specification } from "@matter/model";
+import type { ServerNode } from "@matter/node";
+import { ClientNodeInteraction } from "@matter/node";
 import {
     ClientInteraction,
     DecodedAttributeReportStatus,
@@ -26,25 +28,27 @@ import {
     DecodedEventData,
     DecodedEventReportStatus,
     DecodedEventReportValue,
+    DedicatedChannelExchangeProvider,
+    DiscoveryData,
+    ExchangeManager,
     ExchangeProvider,
     Interactable,
     Invoke,
     PeerAddress,
     PeerAddressMap,
-    PeerConnectionOptions,
     PeerSet,
     Read,
     ReadResult,
-    ReconnectableExchangeProvider,
     SecureSession,
     Subscribe,
     Write,
-} from "#protocol";
+} from "@matter/protocol";
 import {
     ArraySchema,
     Attribute,
     AttributeId,
     AttributeJsType,
+    CaseAuthenticatedTag,
     ClusterId,
     Command,
     EndpointNumber,
@@ -63,7 +67,8 @@ import {
     StatusResponseError,
     TlvEventFilter,
     TypeFromSchema,
-} from "#types";
+} from "@matter/types";
+import { AccessControl } from "@matter/types/clusters/access-control";
 
 const REQUEST_ALL = [{}];
 const DEFAULT_TIMED_REQUEST_TIMEOUT = Seconds(10);
@@ -72,6 +77,60 @@ const DEFAULT_MINIMUM_RESPONSE_TIMEOUT_WITH_FAILSAFE = Seconds(30);
 const AclClusterId = AccessControl.Complete.id;
 const AclAttributeId = AccessControl.Complete.attributes.acl.id;
 const AclExtensionAttributeId = AccessControl.Complete.attributes.extension.id;
+
+/**
+ * Types of discovery that may be performed when connecting operationally.
+ *
+ * @deprecated node discovery is now continuous with MDNS queries sent as needed
+ */
+export enum NodeDiscoveryType {
+    /** No discovery is done, in calls means that only known addresses are tried. */
+    None = 0,
+
+    /** Retransmission discovery means that we ignore known addresses and start a query for 5s. */
+    RetransmissionDiscovery = 1,
+
+    /** Timed discovery means that the device is discovered for a defined timeframe, including known addresses. */
+    TimedDiscovery = 2,
+
+    /** Full discovery means that the device is discovered until it is found, excluding known addresses. */
+    FullDiscovery = 3,
+}
+
+/**
+ * Error when an unknown node is tried to be connected or any other action done with it.
+ */
+export class UnknownNodeError extends MatterError {}
+
+/**
+ * Configuration for discovering when establishing a peer connection.
+ *
+ * @deprecated discovery occurs automatically based on node state
+ */
+export interface DiscoveryOptions {
+    discoveryType?: NodeDiscoveryType;
+    timeout?: Duration;
+    discoveryData?: DiscoveryData;
+}
+
+/**
+ * Extended discovery options that include case authenticated tags for peer connections.
+ *
+ * @deprecated these options are ignored
+ */
+export interface PeerConnectionOptions {
+    discoveryOptions?: DiscoveryOptions;
+
+    /**
+     * @deprecated set CATs on CommissioningBehavior#state
+     */
+    caseAuthenticatedTags?: CaseAuthenticatedTag[];
+
+    /**
+     * @deprected configure queuing using the NetworkProfiles environmental service
+     */
+    queue?: Semaphore;
+}
 
 function isAclOrExtensionPath(path: { clusterId: ClusterId; attributeId: AttributeId }) {
     const { clusterId, attributeId } = path;
@@ -136,22 +195,28 @@ export class InteractionClientProvider {
 
     async connect(
         address: PeerAddress,
-        options: PeerConnectionOptions & {
+        _options: PeerConnectionOptions & {
             allowUnknownPeer?: boolean;
             operationalAddress?: ServerAddressUdp;
         },
     ): Promise<InteractionClient> {
-        await this.#peers.connect(address, options);
-
         return this.getNodeInteractionClient(address);
     }
 
+    #exchangeProviderFor(sessionOrAddress: SecureSession | PeerAddress) {
+        if (sessionOrAddress instanceof SecureSession) {
+            return new DedicatedChannelExchangeProvider(this.#owner.env.get(ExchangeManager), sessionOrAddress);
+        }
+
+        return this.#peers.for(sessionOrAddress).exchangeProvider;
+    }
+
     /**
-     * Returns an InteractionClient  for a session or PeerAddress which is not bound to a ClientNode Interactable
+     * Returns an InteractionClient for a session or PeerAddress which is not bound to a ClientNode Interactable
      * This should only be used for special cases.
      */
     async interactionClientFor(sessionOrAddress: SecureSession | PeerAddress): Promise<InteractionClient> {
-        const exchangeProvider = await this.#peers.exchangeProviderFor(sessionOrAddress);
+        const exchangeProvider = this.#exchangeProviderFor(sessionOrAddress);
         return new InteractionClient(
             new ClientInteraction({
                 environment: this.#owner.env,
@@ -164,7 +229,7 @@ export class InteractionClientProvider {
     /**
      * Returns an InteractionClient for a specific peer address and ensures that also a peer node exists.
      */
-    async getNodeInteractionClient(address: PeerAddress, options: PeerConnectionOptions = {}) {
+    async getNodeInteractionClient(address: PeerAddress, _options: PeerConnectionOptions = {}) {
         let client = this.#clients.get(address);
         if (client !== undefined) {
             return client;
@@ -173,7 +238,7 @@ export class InteractionClientProvider {
         const peerNode = await this.#owner.peers.forAddress(address);
 
         // We potentially override the ExchangeManager
-        const exchangeProvider = await this.#peers.exchangeProviderFor(address, options);
+        const exchangeProvider = this.#exchangeProviderFor(address);
         peerNode.env.set(ExchangeProvider, exchangeProvider);
 
         const interaction = peerNode.interaction as ClientNodeInteraction;
@@ -216,26 +281,21 @@ export class InteractionClient {
         return this.#address;
     }
 
+    get maybeAddress() {
+        return this.#address;
+    }
+
     get isReconnectable() {
-        return this.#exchanges instanceof ReconnectableExchangeProvider;
+        return false;
     }
 
-    get channelUpdated() {
-        if (this.#exchanges instanceof ReconnectableExchangeProvider) {
-            return this.#exchanges.channelUpdated;
-        }
+    get channelUpdated(): never {
         throw new ImplementationError("ExchangeProvider does not support channelUpdated");
-    }
-
-    /** Calculates the current maximum response time for a message use in additional logic like timers. */
-    maximumPeerResponseTime(expectedProcessingTime?: Duration) {
-        return this.#exchanges.maximumPeerResponseTime(expectedProcessingTime);
     }
 
     async getAllAttributes(
         options: {
             dataVersionFilters?: { endpointId: EndpointNumber; clusterId: ClusterId; dataVersion: number }[];
-            enrichCachedAttributeData?: boolean;
             isFabricFiltered?: boolean;
             attributeChangeListener?: (
                 data: DecodedAttributeReportValue<any>,
@@ -273,7 +333,6 @@ export class InteractionClient {
                 clusterId: ClusterId;
                 dataVersion: number;
             }[];
-            enrichCachedAttributeData?: boolean;
             eventFilters?: TypeFromSchema<typeof TlvEventFilter>[];
             isFabricFiltered?: boolean;
             attributeChangeListener?: (
@@ -297,7 +356,6 @@ export class InteractionClient {
         options: {
             attributes?: { endpointId?: EndpointNumber; clusterId?: ClusterId; attributeId?: AttributeId }[];
             dataVersionFilters?: { endpointId: EndpointNumber; clusterId: ClusterId; dataVersion: number }[];
-            enrichCachedAttributeData?: boolean;
             isFabricFiltered?: boolean;
             attributeChangeListener?: (
                 data: DecodedAttributeReportValue<any>,
@@ -313,7 +371,6 @@ export class InteractionClient {
         options: {
             attributes?: { endpointId?: EndpointNumber; clusterId?: ClusterId; attributeId?: AttributeId }[];
             dataVersionFilters?: { endpointId: EndpointNumber; clusterId: ClusterId; dataVersion: number }[];
-            enrichCachedAttributeData?: boolean;
             isFabricFiltered?: boolean;
             attributeChangeListener?: (
                 data: DecodedAttributeReportValue<any>,
@@ -373,7 +430,7 @@ export class InteractionClient {
             attributeChangeListener: attributeListener,
         } = options;
 
-        const read = this.#interaction.read({
+        const read = (this.#interaction as ClientNodeInteraction).read({
             ...Read({
                 attributes: attributeRequests,
                 events: eventRequests,
@@ -385,6 +442,7 @@ export class InteractionClient {
                 fabricFilter: isFabricFiltered,
                 interactionModelRevision: Specification.INTERACTION_MODEL_REVISION,
             }),
+            includeKnownVersions: !dataVersionFilters,
             [Diagnostic.value]: () =>
                 Diagnostic.dict({
                     attributes: attributeRequests?.length
@@ -523,7 +581,7 @@ export class InteractionClient {
         const { id: attributeId } = attribute;
 
         if (this.#interaction instanceof ClientNodeInteraction) {
-            return this.#interaction.localStateFor(endpointId)?.[clusterId]?.[attributeId] as
+            return deepCopy(this.#interaction.localStateFor(endpointId)?.[clusterId]?.[attributeId]) as
                 | AttributeJsType<A>
                 | undefined;
         }
@@ -659,7 +717,6 @@ export class InteractionClient {
             }
         }
 
-        // TODO Add multi message write handling with streamed encoding
         const writeRequests = attributes.flatMap(
             ({ endpointId, clusterId, attribute: { id, schema }, value, dataVersion }) => {
                 if (
@@ -1019,8 +1076,7 @@ export class InteractionClient {
         } = options;
         const { timed } = command;
         let { suppressResponse } = options;
-        const timedRequest =
-            (timed && !skipValidation) || asTimedRequest === true || options.timedRequestTimeout !== undefined;
+        const timedRequest = (timed && !skipValidation) || asTimedRequest === true || !!options.timedRequestTimeout;
 
         if (this.isGroupAddress) {
             if (endpointId !== undefined) {
@@ -1102,10 +1158,6 @@ export class InteractionClient {
         skipValidation?: boolean;
     }): Promise<void> {
         return this.#invoke<C>({ ...options, suppressResponse: true });
-    }
-
-    get session() {
-        return this.#exchanges.session;
     }
 
     get channelType() {

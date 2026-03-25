@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -13,6 +13,7 @@ export * from "./MessageChannel.js";
 export * from "./MessageCounter.js";
 export * from "./MessageExchange.js";
 export * from "./MessageReceptionState.js";
+export * from "./MRP.js";
 export * from "./ProtocolHandler.js";
 export * from "./ProtocolMocks.js";
 export * from "./ProtocolStatusMessage.js";

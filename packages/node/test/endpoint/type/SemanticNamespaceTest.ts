@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { SemanticNamespace } from "#endpoint/type/SemanticNamespace.js";
 import { RefrigeratorTag } from "#tags/RefrigeratorTag.js";
-import { Semtag } from "#types";
+import { Semtag } from "@matter/types";
 
 describe("SemanticNamespace", () => {
     it("defines tags", () => {

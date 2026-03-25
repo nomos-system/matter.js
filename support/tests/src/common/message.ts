@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -13,6 +13,11 @@ import { NodeId } from "@matter/types";
  * TODO - temporary protocol; convert to standard controller messaging/RPC once implemented
  */
 export type Message = Message.Commission | Message.Subscribe | Message.Reset;
+
+/**
+ * Messages sent to the device process.
+ */
+export type DeviceMessage = DeviceMessage.Start | DeviceMessage.AwaitOnline | DeviceMessage.Stop;
 
 export function Message(definition: Message) {
     return definition;
@@ -54,5 +59,50 @@ export namespace Message {
         kind: "log";
         level: LogLevel;
         message: string;
+    }
+}
+
+export namespace DeviceMessage {
+    export interface Start extends Message.Acknowledged {
+        kind: "start";
+    }
+
+    export interface AwaitOnline extends Message.Acknowledged {
+        kind: "await-online";
+    }
+
+    export interface Stop extends Message.Acknowledged {
+        kind: "stop";
+    }
+}
+
+/**
+ * Messages sent to the controller heap-profiling process.
+ */
+export type ControllerMessage =
+    | ControllerMessage.Start
+    | ControllerMessage.Commission
+    | ControllerMessage.Snapshot
+    | ControllerMessage.Stop;
+
+export namespace ControllerMessage {
+    export interface Start extends Message.Acknowledged {
+        kind: "start";
+    }
+
+    export interface Commission extends Message.Acknowledged {
+        kind: "commission";
+        discriminator: number;
+        passcode: number;
+        nodeId: number;
+    }
+
+    export interface Snapshot extends Message.Acknowledged {
+        kind: "snapshot";
+        path: string;
+    }
+
+    export interface Stop extends Message.Acknowledged {
+        kind: "stop";
     }
 }

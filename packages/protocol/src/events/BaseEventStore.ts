@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { InternalError, Logger, MaybePromise, StorageContext } from "#general";
-import { EventNumber } from "#types";
+import { InternalError, Logger, MaybePromise, StorageContext } from "@matter/general";
+import { EventNumber } from "@matter/types";
 import { EventStore, OccurrenceSummary } from "./EventStore.js";
 import { Occurrence } from "./Occurrence.js";
 
@@ -37,8 +37,8 @@ export abstract class BaseEventStore implements EventStore {
 
     clear() {
         return MaybePromise.then(this.close(), () =>
-            MaybePromise.then(this.#storage.clear(), () =>
-                MaybePromise.then(this.#eventStorage.clear(), () => {
+            MaybePromise.then(this.#storage.clearAll(), () =>
+                MaybePromise.then(this.#eventStorage.clearAll(), () => {
                     this.#nextNumber = 1n;
                 }),
             ),

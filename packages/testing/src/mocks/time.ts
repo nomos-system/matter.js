@@ -1,15 +1,35 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Boot } from "./boot.js";
 
+export class TestTimeoutError extends Error {
+    diagnostics;
+
+    constructor(message: string) {
+        super(`Test timeout: ${message}`);
+
+        try {
+            this.diagnostics = MatterHooks?.generateDiagnostics?.();
+        } catch (e) {
+            this.diagnostics = `(diagnostics generation failed: ${(e as Error).message}`;
+        }
+    }
+
+    code?: number | string;
+    timeout?: number;
+    file?: string;
+}
+
 type TimerCallback = () => any;
 
 type MockTimeLike = typeof MockTime;
 export interface MockTime extends MockTimeLike {}
+
+const macrotaskDependents = new Set<Promise<unknown>>();
 
 const registry = {
     timers: new Set<MockTimer>(),
@@ -84,11 +104,26 @@ function isAsync(fn: (...args: any) => any): fn is (...args: any) => Promise<any
     return fn.constructor.name === "AsyncFunction";
 }
 
+interface TimeLike {
+    macrotask: Promise<void>;
+    sleep(name: string, duration: number): Promise<unknown>;
+}
+
+interface StaticTimeLike {
+    startup: { systemMs: number; processMs: number };
+    default: TimeLike;
+    register(timer: MockTimer): void;
+    unregister(timer: MockTimer): void;
+    timers: Set<MockTimer>;
+}
+
 let callbacks = new Array<{ atMs: number; callback: TimerCallback }>();
 let nowMs = 0;
-let real = undefined as unknown;
+let real = undefined as undefined | TimeLike;
 let enabled = false;
 let defaultToMacrotasks = false;
+
+const instrumentedImplementations = new WeakSet<TimeLike>();
 
 /**
  * An arbitrary start for our mock timeline.  Starting at zero causes problems with Matter dates that cannot encode back
@@ -100,7 +135,7 @@ const epoch = new Date("2025-01-01 12:34:56Z");
 export const MockTime = {
     epoch,
 
-    get activeImplementation(): unknown {
+    get activeImplementation(): TimeLike {
         return enabled ? this : (real ?? this);
     },
 
@@ -145,8 +180,20 @@ export const MockTime = {
      * Microtasks are the default and are more efficient.  Macrotasks are required for e.g. most of node's crypto.subtle
      * methods to resolve.
      */
-    set macrotasks(value: boolean) {
+    get forceMacrotasks() {
+        return defaultToMacrotasks;
+    },
+
+    set forceMacrotasks(value: boolean) {
         defaultToMacrotasks = value;
+    },
+
+    requireMacrotasks<T>(dependent: Promise<T>) {
+        dependent = dependent.finally(() => {
+            macrotaskDependents.delete(dependent);
+        });
+        macrotaskDependents.add(dependent);
+        return dependent;
     },
 
     atTime<T>(time: number | Date, actor: () => T): T {
@@ -186,14 +233,62 @@ export const MockTime = {
     },
 
     /**
+     * Time compatible sleep.
+     *
+     * This passes the sleep call through to the (possibly mocked) underlying time implementation.
+     */
+    sleep(name: string, duration: number) {
+        if (real === undefined) {
+            throw new Error("Cannot sleep because time implementation is not present");
+        }
+        return real.sleep(name, duration);
+    },
+
+    /**
+     * Use the installed time implementation to yield to the next macrotask.
+     *
+     * We do not mock macrotasks because it keeps tests truer to life and unlike timers it does not have a meaningful
+     * impact on test execution.
+     */
+    get macrotask() {
+        if (real === undefined) {
+            throw new Error("Cannot create macrotask because time implementation is not present");
+        }
+        return real.macrotask;
+    },
+
+    /**
+     * Wait for all registered macrotask dependencies to complete.
+     */
+    get macrotasks() {
+        return (async () => {
+            while (macrotaskDependents.size) {
+                await MockTime.resolve(this.macrotask);
+            }
+        })();
+    },
+
+    /**
      * Resolve a promise with time dependency.
      *
      * Moves time forward until the promise resolves.
      */
-    async resolve<T>(promise: PromiseLike<T>, { stepMs, macrotasks }: { stepMs?: number; macrotasks?: boolean } = {}) {
+    async resolve<T>(
+        promise: PromiseLike<T> | T,
+        { stepMs, macrotasks }: { stepMs?: number; macrotasks?: boolean } = {},
+    ) {
         let resolved = false;
         let result: T | undefined;
         let error: any;
+
+        if (
+            typeof promise !== "object" ||
+            promise === null ||
+            !("then" in promise) ||
+            typeof promise.then !== "function"
+        ) {
+            return promise;
+        }
 
         promise.then(
             r => {
@@ -207,13 +302,12 @@ export const MockTime = {
         );
 
         let timeAdvanced = 0;
+
         while (!resolved) {
-            // Interestingly, a Time.yield() works in almost every case.  However, on Node SubtleCrypto.deriveBits hangs
-            // if you only yield via microtask.  It seems to require yielding via macrotask.  So we optionally use
-            // setTimeout here. Probably related to entropy collection but I think it's safe to classify as a Node bug.
-            // Tested on version 20.11.0
-            if (macrotasks ?? defaultToMacrotasks) {
-                await new Promise<void>(resolve => setTimeout(() => resolve(), 0));
+            // Use macrotask yields when required explicitly or when async operations needing macrotasks (e.g.
+            // crypto) are pending
+            if ((macrotasks ?? defaultToMacrotasks) || macrotaskDependents.size) {
+                await MockTime.macrotask;
             } else {
                 await MockTime.yield();
             }
@@ -224,8 +318,8 @@ export const MockTime = {
 
             // If we've advanced more than one hour, assume we've hung
             if (timeAdvanced > 60 * 60 * 1000) {
-                throw new Error(
-                    "Mock timeout: Promise did not resolve within one (virtual) hour, probably not going to happen",
+                throw new TestTimeoutError(
+                    "Promise did not resolve within one (virtual) hour, probably not going to happen",
                 );
             }
 
@@ -233,13 +327,10 @@ export const MockTime = {
                 await this.advance(stepMs);
                 timeAdvanced += stepMs;
             } else {
-                // Advance time exponentially, trying for granularity but also OK performance.  Note that we are not only
-                // advancing time but also yielding event loop.  So it's possible if we run out of time it's just because
-                // there were too few yields in one virtual hour.  As designed currently it's 360 macrotasks and 360
-                // microtasks (360 loops w/ 1 macro- and 1 micro-yield)
-                // TODO - this isn't exponential, fix comment or fix code
-                await this.advance(1000);
-                timeAdvanced += 1000;
+                // 100ms steps give ~200 yields before a 10-second mock timeout fires, sufficient for realistic
+                // async chains
+                await this.advance(100);
+                timeAdvanced += 100;
             }
 
             if (resolved) {
@@ -383,26 +474,51 @@ export const MockTime = {
 
 let installActiveImplementation: undefined | (() => void);
 
-export function timeSetup(Time: {
-    startup: { systemMs: number; processMs: number };
-    default: unknown;
-    register(timer: MockTimer): void;
-    unregister(timer: MockTimer): void;
-    timers: Set<MockTimer>;
-}) {
+export function timeSetup(Time: StaticTimeLike) {
     registry.register = Time.register;
     registry.unregister = Time.unregister;
     registry.timers = Time.timers;
     Time.startup.systemMs = Time.startup.processMs = 0;
     real = Time.default;
-    (MockTime as any).sleep = (real as any).sleep;
+    instrumentImplementation(real);
     installActiveImplementation = () => (Time.default = MockTime.activeImplementation);
     installActiveImplementation();
 }
 
+function instrumentImplementation(time: TimeLike) {
+    if (instrumentedImplementations.has(time)) {
+        return;
+    }
+
+    let get;
+    let obj = time;
+    while (obj) {
+        get = Object.getOwnPropertyDescriptor(obj.constructor.prototype, "macrotask")?.get;
+        if (get) {
+            break;
+        }
+        obj = Object.getPrototypeOf(obj);
+    }
+    if (!get) {
+        throw new Error("Time instance does not define macrotask getter");
+    }
+
+    Object.defineProperty(time, "macrotask", {
+        get() {
+            return MockTime.requireMacrotasks(get.apply(time));
+        },
+    });
+
+    instrumentedImplementations.add(time);
+}
+
 Object.assign(globalThis, { MockTime });
 
-Boot.init(() => {
+Boot.init(kind => {
+    if (kind === "state") {
+        return;
+    }
+
     MockTime.reset();
     MockTime.disable();
 });

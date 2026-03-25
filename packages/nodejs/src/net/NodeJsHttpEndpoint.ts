@@ -1,14 +1,16 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { AppAddress, asError, HttpEndpoint, HttpEndpointFactory, Logger, NetworkError } from "#general";
+import { AppAddress, asError, HttpEndpoint, HttpEndpointFactory, Logger, NetworkError } from "@matter/general";
 import { existsSync, ReadStream, rmSync, statSync } from "node:fs";
-import { createServer, IncomingMessage, Server, ServerResponse } from "node:http";
+import type { Server, ServerResponse } from "node:http";
+import { createServer as createHttpServer, IncomingMessage } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import { ListenOptions } from "node:net";
-import { normalize, resolve } from "node:path";
+import { normalize } from "node:path";
 import { Duplex } from "node:stream";
 
 // Node's ReadableStream type definition do not exactly match the standard version so we need to import to support casts
@@ -37,8 +39,8 @@ export class NodeJsHttpEndpoint implements HttpEndpoint {
     #wsAdapter?: WsAdapter;
     #wsAdapterFactory?: WsAdapter.Factory;
 
-    static async create(options: NodeJsHttpEndpoint.Options): Promise<NodeJsHttpEndpoint> {
-        const endpoint = new NodeJsHttpEndpoint(options);
+    static async create(config: HttpEndpoint.Configuration): Promise<NodeJsHttpEndpoint> {
+        const endpoint = new NodeJsHttpEndpoint(config);
         await endpoint.ready;
         return endpoint;
     }
@@ -46,16 +48,16 @@ export class NodeJsHttpEndpoint implements HttpEndpoint {
     /**
      * Create a new endpoint.
      *
-     * You may pass an existing {@link Server} or pass {@link NodeJsHttpEndpoint.Options} to create a server dedicated
+     * You may pass an existing {@link Server} or pass {@link HttpEndpoint.Configuration} to create a server dedicated
      * to this endpoint.
      */
-    constructor(optionsOrServer: Server | NodeJsHttpEndpoint.Options) {
+    constructor(config: Server | HttpEndpoint.Configuration) {
         let close, ready, server, notFound;
 
-        if ("on" in optionsOrServer) {
-            ({ close, ready, server, notFound } = this.#bindToServer(optionsOrServer));
+        if ("on" in config) {
+            ({ close, ready, server, notFound } = this.#bindToServer(config));
         } else {
-            ({ close, ready, server, notFound } = this.#createDedicatedServer(optionsOrServer));
+            ({ close, ready, server, notFound } = this.#createDedicatedServer(config));
         }
 
         this.#server = server;
@@ -80,17 +82,32 @@ export class NodeJsHttpEndpoint implements HttpEndpoint {
         };
     }
 
-    #createDedicatedServer(options: NodeJsHttpEndpoint.Options) {
-        const server = createServer({ keepAlive: true });
+    #createDedicatedServer(options: HttpEndpoint.Configuration) {
+        const address = AppAddress.for(options.address);
+
+        let server;
+        if (address.isTls) {
+            if (options.certificate === undefined || options.key === undefined) {
+                throw new NetworkError(
+                    `Cannot create HTTPS endpoint for ${address} because no certificate and/or key is present`,
+                );
+            }
+            server = createHttpsServer({
+                keepAlive: true,
+                cert: options.certificate,
+                key: options.key,
+            });
+        } else {
+            server = createHttpServer({ keepAlive: true });
+        }
 
         const opts = {} as ListenOptions;
 
-        const address = AppAddress.for(options.address);
         const { transport } = address;
         switch (transport.kind) {
             case "ip":
                 if (!address.isWildcardHost) {
-                    opts.host = address.host;
+                    opts.host = address.hostname;
                 }
                 if (!address.isWildcardPort) {
                     opts.port = address.portNum;
@@ -98,12 +115,7 @@ export class NodeJsHttpEndpoint implements HttpEndpoint {
                 break;
 
             case "unix":
-                const path = decodeURIComponent(address.hostname);
-                if (options.basePathForUnixSockets) {
-                    opts.path = resolve(options.basePathForUnixSockets, normalize(path));
-                } else {
-                    opts.path = normalize(path);
-                }
+                opts.path = normalize(decodeURIComponent(address.hostname));
                 if (existsSync(opts.path)) {
                     if (statSync(opts.path).isSocket()) {
                         try {
@@ -310,7 +322,7 @@ class NodeJsHttpRequest extends Request {
         } as RequestInit;
 
         if (method !== "GET" && method !== "HEAD") {
-            init.body = IncomingMessage.toWeb(message) as ReadableStream;
+            init.body = IncomingMessage.toWeb(message) as unknown as ReadableStream;
         }
 
         super(url, init);
@@ -336,23 +348,9 @@ function respondError(res: ServerResponse, code: number) {
 }
 
 export namespace NodeJsHttpEndpoint {
-    export interface Options extends HttpEndpoint.Options {
-        basePathForUnixSockets?: string;
-    }
-
     export class Factory extends HttpEndpointFactory {
-        #basePathForUnixSockets?: string;
-
-        constructor(basePathForUnixSockets?: string) {
-            super();
-            this.#basePathForUnixSockets = basePathForUnixSockets;
-        }
-
-        async create(options: HttpEndpoint.Options) {
-            return NodeJsHttpEndpoint.create({
-                basePathForUnixSockets: this.#basePathForUnixSockets,
-                ...options,
-            });
+        async create(config: HttpEndpoint.Configuration) {
+            return NodeJsHttpEndpoint.create(config);
         }
     }
 }

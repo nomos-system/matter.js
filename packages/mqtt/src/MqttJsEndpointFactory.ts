@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { AppAddress, ImplementationError, MqttEndpoint, MqttEndpointFactory, StorageService } from "#general";
+import { AppAddress, ImplementationError, MqttEndpoint, MqttEndpointFactory } from "@matter/general";
 import { connectAsync, IClientOptions } from "mqtt";
 import { MqttJsEndpoint } from "./MqttJsEndpoint.js";
 import { MqttJsMessage } from "./MqttJsMessage.js";
@@ -45,10 +45,6 @@ export class MqttJsEndpointFactory extends MqttEndpointFactory {
                 opts.protocol += "+unix";
                 opts.unixSocket = true;
                 opts.path = decodeURIComponent(addr.hostname);
-                const storage = options.environment?.get(StorageService);
-                if (storage) {
-                    opts.path = storage.resolve(opts.path);
-                }
                 break;
 
             default:
@@ -67,6 +63,9 @@ export class MqttJsEndpointFactory extends MqttEndpointFactory {
         if (options.will) {
             opts.will = MqttJsMessage.encode(options.will);
         }
+
+        opts.cert = options.certificate;
+        opts.key = options.key;
 
         const client = await connectAsync(opts);
 

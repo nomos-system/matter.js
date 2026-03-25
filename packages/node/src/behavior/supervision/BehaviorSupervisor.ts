@@ -1,12 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { camelize } from "#general";
-import { Access, FieldModel, Schema, Scope } from "#model";
-import type { Val } from "#protocol";
+import { Access, FieldModel, Schema, Scope } from "@matter/model";
+import type { Val } from "@matter/protocol";
 import type { Behavior } from "../Behavior.js";
 import type { StateType } from "../state/StateType.js";
 import { RootSupervisor } from "./RootSupervisor.js";
@@ -62,7 +61,7 @@ function addExtensionFields(schema: Schema, defaultState: Val.Struct) {
     const props = new Set<string>();
     const scope = Scope(schema, { forceOwner: true });
     for (const field of scope.membersOf(schema, { conformance: "deconflicted" })) {
-        props.add(camelize(field.name));
+        props.add(field.propertyName);
     }
 
     let newProperties: Record<string, boolean> | undefined;

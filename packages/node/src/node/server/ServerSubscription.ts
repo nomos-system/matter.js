@@ -1,13 +1,15 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { NodeActivity } from "#behavior/context/NodeActivity.js";
 import { RemoteActorContext } from "#behavior/context/server/RemoteActorContext.js";
+import type { ServerNode } from "#node/ServerNode.js";
 import {
     AsyncObservable,
+    ClosedError,
     Diagnostic,
     Duration,
     hex,
@@ -25,10 +27,9 @@ import {
     Time,
     Timer,
     Timestamp,
-} from "#general";
-import { Specification } from "#model";
-import type { ServerNode } from "#node/ServerNode.js";
-import type { DirtyState, MessageExchange, NodeSession, Session, SubscriptionId } from "#protocol";
+} from "@matter/general";
+import { Specification } from "@matter/model";
+import type { DirtyState, MessageExchange, NodeSession, Session, SubscriptionId } from "@matter/protocol";
 import {
     AttributeReadResponse,
     AttributeSubscriptionResponse,
@@ -40,7 +41,7 @@ import {
     ReadResult,
     SessionClosedError,
     Subscription,
-} from "#protocol";
+} from "@matter/protocol";
 import {
     AttributeId,
     ClusterId,
@@ -50,7 +51,7 @@ import {
     StatusCode,
     StatusResponseError,
     SubscribeRequest,
-} from "#types";
+} from "@matter/types";
 
 const logger = Logger.get("ServerSubscription");
 
@@ -149,6 +150,7 @@ export class ServerSubscription implements Subscription {
     #sendNextUpdateImmediately = false;
     #sendUpdateErrorCounter = 0;
     #currentUpdatePromise?: Promise<void>;
+    #currentSendExchange?: MessageExchange;
 
     constructor(options: {
         id: number;
@@ -243,7 +245,15 @@ export class ServerSubscription implements Subscription {
 
     async handlePeerCancel() {
         this.#isCanceledByPeer = true;
-        await this.close();
+        // Force-close any in-flight send exchange so MRP retransmissions stop immediately.
+        // Use try/finally so this.close() always runs even if the exchange close throws.
+        try {
+            await this.#currentSendExchange?.close(new ClosedError("Subscription cancelled by peer"));
+        } catch (error) {
+            logger.debug("Error closing in-flight send exchange on peer cancel:", error);
+        } finally {
+            await this.close();
+        }
     }
 
     #determineSendingIntervals(
@@ -311,11 +321,13 @@ export class ServerSubscription implements Subscription {
             return;
         }
 
-        // Change received while we are seeding this subscription
+        // Change received while we are seeding this subscription.  If the cluster was already included in the initial
+        // report at the same version, the subscriber already has this data so we skip it.  If the cluster was not
+        // included (seededVersion is undefined), the subscriber may already be up-to-date due to data version filtering,
+        // so we accept the change and queue it for delivery after activation
         if (this.#seededClusterDetails !== undefined) {
             const seededVersion = this.#seededClusterDetails.get(`${endpointId}-${clusterId}`);
-            if (seededVersion === undefined || seededVersion === version) {
-                // We do not seed this cluster, or we seeded with the same version, so no change or yet to come in seed
+            if (seededVersion !== undefined && seededVersion === version) {
                 return;
             }
         }
@@ -451,9 +463,8 @@ export class ServerSubscription implements Subscription {
                     this.#sendUpdateErrorCounter = 0;
                 }
             } catch (error) {
-                if (this.#isClosed) {
-                    // No need to care about resubmissions when the server is closing
-                    // TODO - implement proper abort so we don't need to ignore errors
+                if (this.#isClosed || this.#isCanceledByPeer) {
+                    // No need to care about resubmissions when the server is closing or peer cancelled us
                     return;
                 }
 
@@ -751,8 +762,11 @@ export class ServerSubscription implements Subscription {
         session?: Session,
     ) {
         const exchange = this.#context.initiateExchange(session ?? this.#peerAddress, INTERACTION_PROTOCOL_ID);
-        if (exchange === undefined) return false;
+        if (exchange === undefined) {
+            return false;
+        }
 
+        this.#currentSendExchange = exchange;
         const messenger = new InteractionServerMessenger(exchange);
 
         try {
@@ -796,6 +810,7 @@ export class ServerSubscription implements Subscription {
             using _canceling = lifetime?.join("canceling");
             await this.#cancel();
         } finally {
+            this.#currentSendExchange = undefined;
             using _closing = lifetime?.join("closing messenger");
             await messenger.close();
         }

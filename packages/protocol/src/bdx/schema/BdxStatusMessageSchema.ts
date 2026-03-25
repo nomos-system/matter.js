@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { ProtocolStatusMessage, ProtocolStatusMessageSchema } from "#protocol/ProtocolStatusMessage.js";
-import { BDX_PROTOCOL_ID, BdxStatusCode } from "#types";
+import { BDX_PROTOCOL_ID, BdxStatusCode } from "@matter/types";
 
 export type BdxStatus = Omit<ProtocolStatusMessage<BdxStatusCode>, "protocolData">;
 

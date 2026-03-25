@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { NotADirectoryError, NotFoundError } from "#errors.js";
-import { Bytes, decamelize, MaybePromise } from "#general";
 import { Stat } from "#stat.js";
+import { Bytes, decamelize, MaybePromise } from "@matter/general";
 
 /**
  * Returned during location search to indicate "yes this exists but value is undefined".

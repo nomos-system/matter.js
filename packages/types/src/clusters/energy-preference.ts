@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -14,7 +14,7 @@ import { TlvPercent, TlvUInt8, TlvEnum } from "../tlv/TlvNumber.js";
 import { TlvString } from "../tlv/TlvString.js";
 import { TypeFromSchema } from "../tlv/TlvSchema.js";
 import { BitFlag } from "../schema/BitmapSchema.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace EnergyPreference {
@@ -182,7 +182,9 @@ export namespace EnergyPreference {
         attributes: {
             /**
              * Indicates a list of BalanceStructs, each representing a condition or set of conditions for the device to
-             * enter a low power mode. This shall contain at least two BalanceStructs.
+             * enter a low power mode.
+             *
+             * This shall contain at least two BalanceStructs.
              *
              * Each BalanceStruct shall have a Step field larger than the Step field on the previous BalanceStruct in
              * the list.
@@ -255,7 +257,9 @@ export namespace EnergyPreference {
     /**
      * This cluster provides an interface to specify preferences for how devices should consume energy.
      *
-     * NOTE Support for Energy Preference cluster is provisional.
+     * > [!NOTE]
+     *
+     * > Support for Energy Preference cluster is provisional.
      *
      * Per the Matter specification you cannot use {@link EnergyPreferenceCluster} without enabling certain feature
      * combinations. You must use the {@link with} factory method to obtain a working cluster.

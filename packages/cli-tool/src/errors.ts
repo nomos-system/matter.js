@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { MatterError } from "#general";
+import { MatterError } from "@matter/general";
 
 export class CliError extends MatterError {
     // Error class won't be the same across vm contexts so make detection easier

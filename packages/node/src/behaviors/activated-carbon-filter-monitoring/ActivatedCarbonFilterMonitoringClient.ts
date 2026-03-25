@@ -1,14 +1,14 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { ActivatedCarbonFilterMonitoring } from "#clusters/activated-carbon-filter-monitoring";
+import { ActivatedCarbonFilterMonitoring } from "@matter/types/clusters/activated-carbon-filter-monitoring";
 import { ClientBehavior } from "../../behavior/cluster/ClientBehavior.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 
 export const ActivatedCarbonFilterMonitoringClientConstructor = ClientBehavior(ActivatedCarbonFilterMonitoring.Complete);
 export interface ActivatedCarbonFilterMonitoringClient extends InstanceType<typeof ActivatedCarbonFilterMonitoringClientConstructor> {}

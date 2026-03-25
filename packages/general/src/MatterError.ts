@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { NodeJsStyleInspectable } from "#log/NodeJsStyleInspectable.js";
 import type { MaybePromise } from "#util/Promises.js";
 import { decamelize } from "#util/identifier-case.js";
-import { errorOf } from "./util/Error.js";
+import { asError, errorOf } from "./util/Error.js";
 
 const codes = new WeakMap<{}, string>();
 
@@ -101,6 +101,30 @@ export class MatterError extends Error {
     }
 
     /**
+     * Replace the message in an error.
+     *
+     * In addition to setting the message, updates the message in the stack.
+     */
+    static replaceMessage(error: Error, message: string) {
+        const oldMessage = error.message;
+        error.message = message;
+
+        const stack = error.stack?.split("\n");
+        const messagePos = stack?.findIndex(line => {
+            if (line.startsWith("Error: ")) {
+                line = line.slice(7);
+            }
+            if (line === oldMessage) {
+                return true;
+            }
+        });
+        if (messagePos !== undefined && messagePos !== -1) {
+            stack![messagePos] = message;
+            error.stack = stack!.join("\n");
+        }
+    }
+
+    /**
      * The fallback formatter factory.  This produces a limited plaintext formatter.
      */
     static defaultFormatterFactory = () => fallbackFormatter;
@@ -110,6 +134,36 @@ export class MatterError extends Error {
      */
     static formatterFor: (formatName: string) => (value: unknown, indents?: number) => unknown =
         MatterError.defaultFormatterFactory;
+
+    /**
+     * If the causal chain of an error includes an error of type {@link T}, returns the first such error encountered.
+     */
+    static of<T extends MatterError>(
+        this: { new (...args: any[]): T; of: typeof MatterError.of },
+        error: unknown,
+    ): T | undefined {
+        if (error instanceof this) {
+            return error;
+        }
+
+        const e = asError(error);
+
+        if (e.cause) {
+            const sre = this.of(e.cause);
+            if (sre) {
+                return sre;
+            }
+        }
+
+        if (e instanceof AggregateError && e.errors) {
+            for (const e2 of e.errors) {
+                const sre = this.of(e2);
+                if (sre) {
+                    return sre;
+                }
+            }
+        }
+    }
 
     // TODO - this is probably correct; MatterAggregateError should be typeof MatterError.  Need to diagnose some test
     // breakage before enabling though
@@ -291,10 +345,10 @@ export class TimeoutError extends MatterError {
 }
 
 /**
- * Thrown on abort when there is not an underlying error.
+ * Thrown as the primary cause when an {@link AbortController} aborts.
  */
 export class AbortedError extends CanceledError {
-    constructor(message = "This operation was aborted", options?: ErrorOptions) {
+    constructor(message = "Operation aborted", options?: ErrorOptions) {
         super(message, options);
     }
 
@@ -317,6 +371,15 @@ export class AbortedError extends CanceledError {
         }
 
         return super.accept(cause);
+    }
+}
+
+/**
+ * Thrown when an operation can't complete because a resource is closed.
+ */
+export class ClosedError extends CanceledError {
+    constructor(message = "Component closed", options?: ErrorOptions) {
+        super(message, options);
     }
 }
 

@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -25,8 +25,9 @@ export class StatusResponseError extends MatterError {
         return this.message.replace(/ \(code .+\)$/, "");
     }
 
-    static is(error: unknown, ...codes: Status[]): error is StatusResponseError {
-        return error instanceof StatusResponseError && (!codes.length || codes.includes(error.code));
+    static is(error: unknown, ...codes: Status[]) {
+        const sre = StatusResponseError.of(error);
+        return !!sre && (!codes.length || codes.includes(sre.code));
     }
 
     override get id() {

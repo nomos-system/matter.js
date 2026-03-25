@@ -1,5 +1,5 @@
 # @license
-# Copyright 2022-2025 Matter.js Authors
+# Copyright 2022-2026 Matter.js Authors
 # SPDX-License-Identifier: Apache-2.0
 
 # Builds an image capable of running chip-tool and CHIP tests.
@@ -28,7 +28,7 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 RUN --mount=type=cache,sharing=locked,target=/var/cache/apt \
     --mount=type=cache,sharing=locked,target=/var/lib/apt \
     apt-get -qq update && \
-    apt-get -qq -y install python3 python-is-python3 libavahi-client3 libglib2.0-0 libpcsclite1
+    apt-get -qq -y install python3 python-is-python3 libavahi-client3 libglib2.0-0 libpcsclite1 libevent-dev
 
 ################################################################################
 #
@@ -64,7 +64,7 @@ RUN --mount=type=cache,sharing=locked,target=/var/cache/apt \
     apt-get -qq -y install --no-install-recommends \
         git clang pkg-config libssl-dev libdbus-1-dev libavahi-client-dev clang pkg-config \
         ninja-build python3-venv python3-dev unzip libreadline-dev python3-pip \
-        g++ libglib2.0-dev libglib2.0-dev-bin libpcsclite-dev
+        g++ libglib2.0-dev libglib2.0-dev-bin libpcsclite-dev libevent-dev
 EOF
     # apt-get -qq -y install git gcc g++ clang pkg-config libssl-dev libdbus-1-dev libglib2.0-dev libavahi-client-dev \
     #     ninja-build python3-venv python3-dev unzip libgirepository1.0-dev libcairo2-dev libreadline-dev python3-pip

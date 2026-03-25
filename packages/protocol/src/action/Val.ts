@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -16,6 +16,13 @@ export namespace Val {
      * Type for Matter structs.  In JS this is an object with string keys.
      */
     export type Struct = Record<string, Val>;
+
+    /**
+     * An ordered map representation of {@link Struct} that preserves insertion order of keys.
+     *
+     * Used when attribute-change ordering must be maintained across the processing pipeline.
+     */
+    export type StructMap = Map<string | number, Val>;
 
     /**
      * Type for Matter structs encoded using protocol semantics.  In JS this is an object with "numeric" keys.

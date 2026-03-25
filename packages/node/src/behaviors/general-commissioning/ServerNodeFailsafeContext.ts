@@ -1,14 +1,14 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { NetworkCommissioningBehavior } from "#behaviors/network-commissioning";
 import { Endpoint } from "#endpoint/Endpoint.js";
-import { Immutable, Lifecycle, UnsupportedDependencyError } from "#general";
 import type { ServerNode } from "#node/ServerNode.js";
-import { FabricManager, FailsafeContext, MessageExchange } from "#protocol";
+import { Immutable, Lifecycle, UnsupportedDependencyError } from "@matter/general";
+import { FabricManager, FailsafeContext, MessageExchange } from "@matter/protocol";
 
 /**
  * {@link FailsafeContext} for {@link ServerNode} API.

@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { AsyncObservable, ClassExtends, Diagnostic, Logger, Observable } from "#general";
 import { SecureSession } from "#session/SecureSession.js";
-import { BdxMessageType, BdxStatusCode } from "#types";
+import { AsyncObservable, ClassExtends, Diagnostic, Logger, Observable } from "@matter/general";
+import { BdxMessageType, BdxStatusCode } from "@matter/types";
 import { bdxSessionInitiator } from "./bdx-session-initiator.js";
 import { BdxError } from "./BdxError.js";
 import { BdxMessenger } from "./BdxMessenger.js";
@@ -40,6 +40,7 @@ export class BdxSession {
     #transferFlow?: Flow;
     #progressInfo = Observable<[bytesTransferred: number, totalBytesLength: number | undefined]>();
     #progressFinished = Observable<[totalBytesTransferred: number]>();
+    #progressCancelled = Observable();
 
     /** Initializes a BdxSession as a sender, means that we upload data to the peer. */
     static asSender(messenger: BdxMessenger, options: BdxSessionConfiguration.SenderInitiatorOptions): BdxSession {
@@ -97,6 +98,10 @@ export class BdxSession {
         return this.#progressFinished;
     }
 
+    get progressCancelled() {
+        return this.#progressCancelled;
+    }
+
     /** Method called to start the session. It will end with a successful Transfer or with an error */
     async processTransfer() {
         if (this.#started) {
@@ -118,6 +123,7 @@ export class BdxSession {
         );
 
         this.#started = true;
+        let transferError: unknown;
         try {
             this.#transferFlow = this.#initializeFlow(await bdxSessionInitiator(this.#messenger, this.#config));
             this.#transferFlow.progressInfo.on((bytesTransferred, totalBytesLength) =>
@@ -126,21 +132,24 @@ export class BdxSession {
             this.#transferFlow.progressFinished.on(totalBytesTransferred =>
                 this.#progressFinished.emit(totalBytesTransferred),
             );
+            this.#transferFlow.progressCancelled.on(() => this.#progressCancelled.emit());
 
             await this.#transferFlow.processTransfer();
-
-            await this.close();
         } catch (error) {
-            BdxError.accept(error);
-            await this.#messenger.sendError(error.code);
+            transferError = error;
+            if (BdxError.is(error)) {
+                await this.#messenger.sendError(error.code).catch(sendError => {
+                    logger.info(`Failed to send BDX error status to peer:`, Diagnostic.errorMessage(sendError));
+                });
 
-            logger.warn(`BDX session failed with error:`, error);
+                logger.warn(`BDX session failed with error:`, error);
 
-            await this.close(error);
-
-            error.bytesTransferred = this.#transferFlow?.transferredBytes ?? 0;
-            error.totalBytesLength = this.#transferFlow?.dataLength;
+                error.bytesTransferred = this.#transferFlow?.transferredBytes ?? 0;
+                error.totalBytesLength = this.#transferFlow?.dataLength;
+            }
             throw error;
+        } finally {
+            await this.close(transferError);
         }
     }
 
@@ -181,6 +190,11 @@ export class BdxSession {
     get peerAddress() {
         SecureSession.assert(this.#messenger.exchange.session);
         return this.#messenger.exchange.session.peerAddress;
+    }
+
+    get session() {
+        SecureSession.assert(this.#messenger.exchange.session);
+        return this.#messenger.exchange.session;
     }
 
     async close(error?: unknown) {

@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Behavior } from "#behavior/Behavior.js";
 import { ValueSupervisor } from "#behavior/supervision/ValueSupervisor.js";
-import { camelize, decamelize, ImplementationError, NotImplementedError } from "#general";
-import { CommandModel } from "#model";
+import { camelize, decamelize, ImplementationError, NotImplementedError } from "@matter/general";
+import { CommandModel } from "@matter/model";
 import { ApiResource } from "../ApiResource.js";
 import { Envelope } from "../Envelope.js";
 

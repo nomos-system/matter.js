@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Bytes } from "#general";
 import { InteractionClientMessenger, MessageType } from "#interaction/InteractionMessenger.js";
-import { ExchangeProvider } from "#protocol/ExchangeProvider.js";
 import { MessageExchange } from "#protocol/MessageExchange.js";
+import { Bytes, DataReadQueue } from "@matter/general";
+import { Specification } from "@matter/model";
 import {
     EndpointNumber,
     ReadRequest,
@@ -18,8 +18,7 @@ import {
     TlvStatusResponse,
     TlvSubscribeRequest,
     TlvSubscribeResponse,
-} from "#types";
-import { Specification } from "@matter/model";
+} from "@matter/types";
 import { createDummyMessageExchange } from "./interaction-utils.js";
 
 function handleReadRequest(exchange: MessageExchange, messageType: number, payload: Bytes) {
@@ -88,7 +87,7 @@ describe("InteractionClientMessenger", () => {
             }
             return response;
         });
-        const messenger = new InteractionClientMessenger(exchange, {} as ExchangeProvider);
+        const messenger = new InteractionClientMessenger(exchange);
 
         const requestData = {
             interactionModelRevision: Specification.INTERACTION_MODEL_REVISION,
@@ -112,7 +111,7 @@ describe("InteractionClientMessenger", () => {
             }
             return response;
         });
-        const messenger = new InteractionClientMessenger(exchange, {} as ExchangeProvider);
+        const messenger = new InteractionClientMessenger(exchange);
 
         const dataVersionFilters = [];
         for (let i = 0; i < 70; i++) {
@@ -159,7 +158,7 @@ describe("InteractionClientMessenger", () => {
             }
             return response;
         });
-        const messenger = new InteractionClientMessenger(exchange, {} as ExchangeProvider);
+        const messenger = new InteractionClientMessenger(exchange);
 
         const requestData = {
             interactionModelRevision: Specification.INTERACTION_MODEL_REVISION,
@@ -199,7 +198,7 @@ describe("InteractionClientMessenger", () => {
             }
             return response;
         });
-        const messenger = new InteractionClientMessenger(exchange, {} as ExchangeProvider);
+        const messenger = new InteractionClientMessenger(exchange);
 
         const dataVersionFilters = [];
         for (let i = 0; i < 70; i++) {
@@ -226,5 +225,67 @@ describe("InteractionClientMessenger", () => {
         requestData.dataVersionFilters!.length = 67;
         expect(request).to.deep.equal(requestData);
         expect(subscriptionFinalized).to.be.true;
+    });
+
+    it("does not block report iteration on final status ack and waits on close", async () => {
+        let resolveStatusSend: (() => void) | undefined;
+        let exchangeClosed = false;
+
+        const queue = new DataReadQueue<any>();
+        queue.write({
+            packetHeader: {},
+            payloadHeader: { messageType: MessageType.ReportData },
+            payload: TlvDataReport.encode({
+                interactionModelRevision: Specification.INTERACTION_MODEL_REVISION,
+                suppressResponse: false,
+                moreChunkedMessages: false,
+                subscriptionId: 1,
+            }),
+        });
+
+        const exchange = {
+            maxPayloadSize: 1200,
+            send: (messageType: number) => {
+                if (messageType === MessageType.StatusResponse) {
+                    return new Promise<void>(resolve => {
+                        resolveStatusSend = resolve;
+                    });
+                }
+            },
+            nextMessage: () => queue.read(),
+            close: async () => {
+                exchangeClosed = true;
+            },
+        } as unknown as MessageExchange;
+
+        const messenger = new InteractionClientMessenger(exchange);
+        const reports = messenger.readDataReports();
+
+        const first = await reports.next();
+        expect(first.done).to.be.false;
+
+        let iterationFinished = false;
+        const donePromise = reports.next().then(result => {
+            iterationFinished = true;
+            return result;
+        });
+        await Promise.resolve();
+        expect(iterationFinished).to.be.true;
+        expect((await donePromise).done).to.be.true;
+
+        let closeFinished = false;
+        const closePromise = messenger.close().then(() => {
+            closeFinished = true;
+        });
+        await Promise.resolve();
+        expect(closeFinished).to.be.false;
+        expect(exchangeClosed).to.be.false;
+
+        expect(resolveStatusSend, "StatusResponse send was never initiated").to.be.a("function");
+        resolveStatusSend!();
+        await closePromise;
+
+        expect(closeFinished).to.be.true;
+        expect(exchangeClosed).to.be.true;
     });
 });

@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Abort, Construction, ImplementationError } from "#general";
 import type { Node } from "#node/Node.js";
+import { Abort, Construction, ImplementationError } from "@matter/general";
 import { NodeActivity } from "../../context/NodeActivity.js";
 import { NetworkBehavior } from "./NetworkBehavior.js";
 
@@ -51,7 +51,10 @@ export abstract class NetworkRuntime {
         } finally {
             this.#owner.behaviors.internalsOf(NetworkBehavior).runtime = undefined;
         }
-        await this.#owner.act(agent => this.owner.lifecycle.offline.emit(agent.context));
+
+        if (this.#owner.lifecycle.isOnline) {
+            await this.#owner.act(agent => this.owner.lifecycle.offline.emit(agent.context));
+        }
     }
 
     async close() {

@@ -1,16 +1,16 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { IndexBehavior } from "#behavior/system/index/IndexBehavior.js";
-import { Descriptor } from "#clusters/descriptor";
 import { Endpoint } from "#endpoint/Endpoint.js";
 import { EndpointLifecycle } from "#endpoint/properties/EndpointLifecycle.js";
-import { ImplementationError, isDeepEqual } from "#general";
-import { DeviceTypeModel, MatterModel } from "#model";
-import { ClusterId, DeviceTypeId, EndpointNumber, Semtag, TypeFromSchema } from "#types";
+import { ImplementationError, isDeepEqual } from "@matter/general";
+import { Matter } from "@matter/model";
+import { ClusterId, DeviceTypeId, EndpointNumber, Semtag, TypeFromSchema } from "@matter/types";
+import { Descriptor } from "@matter/types/clusters/descriptor";
 import { DescriptorBehavior } from "./DescriptorBehavior.js";
 
 /**
@@ -56,7 +56,7 @@ export class DescriptorServer extends DescriptorBehavior {
             // For complete semantics it would be better to include all inherited device types.  However there is
             // typical spec-level confusion that makes this of questionable practical utility so omitting for now
             // for (
-            //     let base = MatterModel.standard.get(DeviceTypeModel, partType.deviceType)?.base;
+            //     let base = Matter.get(DeviceTypeModel, partType.deviceType)?.base;
             //     base;
             //     { base } = base
             // ) {
@@ -75,7 +75,7 @@ export class DescriptorServer extends DescriptorBehavior {
     /**
      * Extend device type metadata.  This is a shortcut for deduped insert into the deviceTypeList cluster attribute.
      *
-     * @param deviceTypes an array of objects or named device types as defined in {@link MatterModel.standard}
+     * @param deviceTypes an array of objects or named device types as defined in {@link Matter}
      */
     addDeviceTypes(...deviceTypes: (DescriptorServer.DeviceType | string)[]) {
         this.#initializeDeviceTypeList(); // Initialize if not already done
@@ -83,7 +83,7 @@ export class DescriptorServer extends DescriptorBehavior {
 
         nextInput: for (let newDeviceType of deviceTypes) {
             if (typeof newDeviceType === "string") {
-                const dt = MatterModel.standard.get(DeviceTypeModel, newDeviceType);
+                const dt = Matter.deviceTypes(newDeviceType);
                 if (dt === undefined) {
                     throw new ImplementationError(`Device type ${newDeviceType} not found`);
                 }

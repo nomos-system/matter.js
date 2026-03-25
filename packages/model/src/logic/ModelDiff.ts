@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { ElementTag } from "#common/ElementTag.js";
 import { Specification } from "#common/Specification.js";
-import { Diagnostic } from "#general";
 import { Model } from "#models/Model.js";
+import { Diagnostic } from "@matter/general";
 import { ModelVariantTraversal, VariantDetail } from "./ModelVariantTraversal.js";
 
 /**

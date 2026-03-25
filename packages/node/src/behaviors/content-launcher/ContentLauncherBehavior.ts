@@ -1,15 +1,15 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { ContentLauncher } from "#clusters/content-launcher";
+import { ContentLauncher } from "@matter/types/clusters/content-launcher";
 import { ClusterBehavior } from "../../behavior/cluster/ClusterBehavior.js";
 import { ContentLauncherInterface } from "./ContentLauncherInterface.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 
 /**
  * ContentLauncherBehavior is the base class for objects that support interaction with {@link ContentLauncher.Cluster}.

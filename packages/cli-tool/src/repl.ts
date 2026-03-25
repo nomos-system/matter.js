@@ -1,16 +1,15 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Domain } from "#domain.js";
 import { IncompleteError } from "#errors.js";
-import { Environment, InternalError, Millis, Observable, RuntimeService, StorageService, Time } from "#general";
 import { isCommand } from "#parser.js";
+import { Environment, Filesystem, InternalError, Millis, Observable, RuntimeService, Time } from "@matter/general";
 import colors from "ansi-colors";
 import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { exit, stderr, stdout } from "node:process";
 import { AsyncCompleter, CompleterResult, Key } from "node:readline";
@@ -361,12 +360,7 @@ function installEvaluationInputBuffer(repl: AugmentedRepl) {
 function configureHistory(repl: AugmentedRepl) {
     let historyPath = repl.mdomain.env.vars.string("history.path");
     if (historyPath === undefined) {
-        const storagePath = repl.mdomain.env.get(StorageService).location;
-        if (storagePath === undefined) {
-            historyPath = join(homedir(), ".matter-cli-history");
-        } else {
-            historyPath = join(storagePath, "cli-history");
-        }
+        historyPath = join(repl.mdomain.env.get(Filesystem).path, "cli-history");
     }
 
     repl.setupHistory(historyPath, error => {

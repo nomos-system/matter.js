@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Bytes, Diagnostic, Logger, LogLevel, Millis } from "@matter/general";
+import { Bytes, causedBy, Diagnostic, Logger, LogLevel, Millis } from "@matter/general";
 import {
     AttributeId,
     camelize,
@@ -40,7 +40,11 @@ import {
     MatterModel,
     ValueModel,
 } from "@matter/model";
-import { CommissionableDeviceIdentifiers, RetransmissionLimitReachedError } from "@matter/protocol";
+import {
+    CommissionableDeviceIdentifiers,
+    RetransmissionLimitReachedError,
+    TransientPeerCommunicationError,
+} from "@matter/protocol";
 import { NodeNotConnectedError } from "@project-chip/matter.js/device";
 import { WebSocketServer } from "ws";
 import { log } from "./GenericTestApp.js";
@@ -104,7 +108,7 @@ MatterModel.standard.clusters.forEach(cluster => {
 
 /** Mapping of Loglevels between Matter,js and the testrunner understanding */
 const LogLevelMap: { [key: number]: string } = {
-    [LogLevel.FATAL]: "Fatal",
+    [LogLevel.FATAL]: "Error",
     [LogLevel.ERROR]: "Error",
     [LogLevel.WARN]: "Error",
     [LogLevel.INFO]: "Info",
@@ -158,7 +162,7 @@ function convertMatterToWebSocketTagBased(value: unknown, model: ValueModel, clu
         return null;
     }
     if (Array.isArray(value) && model.type === "list") {
-        return value.map(v => convertMatterToWebSocketTagBased(v, model.members[0], clusterModel));
+        return value.map(v => convertMatterToWebSocketTagBased(v, model.members.at(0)!, clusterModel));
     }
     if (isObject(value) && model.metabase?.name === "struct") {
         const valueKeys = Object.keys(value);
@@ -245,7 +249,7 @@ function convertWebsocketDataToMatter(value: any, model: ValueModel): any {
             value = parseChipJSON(value);
         }
         if (Array.isArray(value)) {
-            return value.map(v => convertWebsocketDataToMatter(v, model.members[0]));
+            return value.map(v => convertWebsocketDataToMatter(v, model.members.at(0)!));
         }
     }
 
@@ -860,6 +864,7 @@ export class ChipToolWebSocketHandler {
                     this.#subscriptionData.push(data);
                 },
             });
+            this.#subscriptionData.length = 0;
             this.#subscriptionUpdated = updated;
             return {
                 results: values.map(entry => entry),
@@ -1086,6 +1091,7 @@ export class ChipToolWebSocketHandler {
                     });
                 },
             });
+            this.#subscriptionData.length = 0;
             this.#subscriptionUpdated = updated;
             return {
                 results: values.map(entry => ({
@@ -1136,6 +1142,7 @@ export class ChipToolWebSocketHandler {
                     });
                 },
             });
+            this.#subscriptionData.length = 0;
             this.#subscriptionUpdated = updated;
             return {
                 results: values.map(entry => ({
@@ -1270,15 +1277,16 @@ export class ChipToolWebSocketHandler {
             arguments: { "destination-id": destinationId, "commissioner-name": commissionerName },
             command_specifier: commandSpecifier,
         } = data;
-        if (error instanceof StatusResponseError) {
+        const sre = StatusResponseError.of(error);
+        if (sre) {
             return {
                 results: [
-                    { error: decamelize(StatusCode[error.code], "_").toUpperCase(), clusterError: error.clusterCode },
+                    { error: decamelize(StatusCode[sre.code], "_").toUpperCase(), clusterError: sre.clusterCode },
                     { error: "FAILURE" },
                 ],
             };
         }
-        if (error instanceof RetransmissionLimitReachedError || error instanceof NodeNotConnectedError) {
+        if (causedBy(error, TransientPeerCommunicationError, NodeNotConnectedError, RetransmissionLimitReachedError)) {
             // Needed because Chip tests expect a failure and not an automatic reconnection
             await (await this.#commandHandlerFor(commissionerName)).disconnectNode(NodeId(parseNumber(destinationId)));
         }

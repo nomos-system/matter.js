@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { camelize, GeneratedClass, isObject } from "#general";
-import type { FieldModel, Schema } from "#model";
-import { DataModelPath, FeatureMap, ValueModel } from "#model";
-import { ConstraintError, PhantomReferenceError, SchemaImplementationError, Val } from "#protocol";
+import { camelize, GeneratedClass, isObject } from "@matter/general";
+import type { FieldModel, Schema } from "@matter/model";
+import { DataModelPath, FeatureMap, ValueModel } from "@matter/model";
+import { ConstraintError, PhantomReferenceError, SchemaImplementationError, Val } from "@matter/protocol";
 import { RootSupervisor } from "../../../supervision/RootSupervisor.js";
 import { ValueSupervisor } from "../../../supervision/ValueSupervisor.js";
 import { assertBoolean, assertNumber } from "../../validation/assertions.js";
@@ -36,7 +36,7 @@ export function BitmapManager(owner: RootSupervisor, schema: Schema): ValueSuper
 
     const byteSize = (schema as ValueModel).metabase?.byteSize;
     if (byteSize === undefined) {
-        throw new SchemaImplementationError(DataModelPath(schema.path), `Base bitmap type has no byteSize defined`);
+        throw new SchemaImplementationError(new DataModelPath(schema.path), `Base bitmap type has no byteSize defined`);
     }
     const maxBit = byteSize * 8;
 
@@ -47,7 +47,7 @@ export function BitmapManager(owner: RootSupervisor, schema: Schema): ValueSuper
             // and model uses "code".  The model should probably be inverted but we just special case for now
             name = camelize((member as FieldModel).title ?? member.name);
         } else {
-            name = camelize(member.name);
+            name = member.propertyName;
         }
 
         const descriptor = configureProperty(name, maxBit, member);
@@ -105,12 +105,12 @@ function configureProperty(name: string, maxBit: number, schema: ValueModel) {
             stopBit = temp;
         }
     } else {
-        throw new SchemaImplementationError(DataModelPath(schema.path), `Bitfield is not properly constrained`);
+        throw new SchemaImplementationError(new DataModelPath(schema.path), `Bitfield is not properly constrained`);
     }
 
     if (stopBit > maxBit) {
         throw new SchemaImplementationError(
-            DataModelPath(schema.path),
+            new DataModelPath(schema.path),
             `Bitfield range end ${stopBit} is too large for a ${maxBit}-bit bitmap`,
         );
     }

@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -19,7 +19,7 @@ import {
     Timer,
     asError,
     createPromise,
-} from "#general";
+} from "@matter/general";
 import {
     BLE_MATTER_C1_CHARACTERISTIC_UUID,
     BLE_MATTER_C2_CHARACTERISTIC_UUID,
@@ -30,11 +30,12 @@ import {
     BTP_MAXIMUM_WINDOW_SIZE,
     BTP_SUPPORTED_VERSIONS,
     BleChannel,
+    BleDisconnectedError,
     BleError,
     BtpCodec,
     BtpFlowError,
     BtpSessionHandler,
-} from "#protocol";
+} from "@matter/protocol";
 import type { Characteristic, Peripheral } from "@stoprocent/noble";
 import { BleScanner } from "./BleScanner.js";
 
@@ -156,7 +157,7 @@ export class NobleBleCentralInterface implements ConnectionlessTransport {
                 // because a re-discovery is the best option to get teh device into a good state again
                 connectTimeout: Time.getTimer("BLE connect timeout", Minutes(2), () => {
                     logger.debug(`Timeout while connecting to peripheral ${peripheralAddress}`);
-                    // eslint-disable-next-line @typescript-eslint/no-misused-promises
+                    // oxlint-disable-next-line @typescript-eslint/no-misused-promises
                     peripheral.removeListener("connect", connectHandler);
                     peripheral.removeListener("disconnect", reTryHandler);
                     clearConnectionGuard();
@@ -199,7 +200,7 @@ export class NobleBleCentralInterface implements ConnectionlessTransport {
                 // Cancel tracking states because we are done in this context
                 clearConnectionGuard();
                 this.#connectionsInProgress.delete(address);
-                // eslint-disable-next-line @typescript-eslint/no-misused-promises
+                // oxlint-disable-next-line @typescript-eslint/no-misused-promises
                 peripheral.removeListener("connect", connectHandler);
                 peripheral.removeListener("disconnect", reTryHandler);
 
@@ -324,6 +325,7 @@ export class NobleBleCentralInterface implements ConnectionlessTransport {
                             );
                             clearConnectionGuard();
                             this.#connectionsInProgress.delete(address);
+                            return;
                         } catch (error) {
                             this.#connectionsInProgress.delete(address);
                             this.#openChannels.delete(address);
@@ -344,6 +346,15 @@ export class NobleBleCentralInterface implements ConnectionlessTransport {
                             return;
                         }
                     }
+                } catch (error) {
+                    // Noble operations (discoverServicesAsync, discoverCharacteristicsAsync, readAsync)
+                    // are wrapped in noble's _withDisconnectHandler, which rejects the promise when the
+                    // peripheral disconnects. If reTryHandler was already called from the disconnect event,
+                    // the connectionGuard is already cleared. Otherwise, handle the error.
+                    if (this.#connectionGuards.has(connectionGuard)) {
+                        reTryHandler(error);
+                    }
+                    return;
                 } finally {
                     this.#connectionsInProgress.delete(address);
                     clearConnectionGuard();
@@ -369,7 +380,7 @@ export class NobleBleCentralInterface implements ConnectionlessTransport {
                 }
                 // connecting, disconnected
                 connectionGuard.connectTimeout.start();
-                // eslint-disable-next-line @typescript-eslint/no-misused-promises
+                // oxlint-disable-next-line @typescript-eslint/no-misused-promises
                 peripheral.once("connect", connectHandler);
                 peripheral.once("disconnect", reTryHandler);
                 logger.debug(`Peripheral ${peripheralAddress}: Connect to Peripheral now (try ${tryCount})`);
@@ -474,33 +485,58 @@ export class NobleBleChannel extends BleChannel<Bytes> {
         logger.debug(
             `Peripheral ${peripheralAddress}: Sending BTP handshake request: ${Diagnostic.json(btpHandshakeRequest)}`,
         );
-        await characteristicC1ForWrite.writeAsync(Buffer.from(Bytes.of(btpHandshakeRequest)), false);
 
-        characteristicC2ForSubscribe.once("data", handshakeHandler);
+        try {
+            await characteristicC1ForWrite.writeAsync(Buffer.from(Bytes.of(btpHandshakeRequest)), false);
 
-        logger.debug(`Peripheral ${peripheralAddress}: Subscribing to C2 characteristic`);
-        await characteristicC2ForSubscribe.subscribeAsync();
+            characteristicC2ForSubscribe.once("data", handshakeHandler);
+
+            logger.debug(`Peripheral ${peripheralAddress}: Subscribing to C2 characteristic`);
+            await characteristicC2ForSubscribe.subscribeAsync();
+        } catch (error) {
+            btpHandshakeTimeout.stop();
+            characteristicC2ForSubscribe.removeListener("data", handshakeHandler);
+            throw error;
+        }
 
         const handshakeResponse = await handshakeResponseReceivedPromise;
 
         const btpSession = await BtpSessionHandler.createAsCentral(
             new Uint8Array(handshakeResponse),
-            // callback to write data to characteristic C1
+            // callback to write data to characteristic C1; translates noble's generic disconnect
+            // error into BleDisconnectedError so BtpSessionHandler can handle it specifically
             async (data: Bytes) => {
-                return await characteristicC1ForWrite.writeAsync(Buffer.from(Bytes.of(data)), false);
+                try {
+                    return await characteristicC1ForWrite.writeAsync(Buffer.from(Bytes.of(data)), false);
+                } catch (error) {
+                    if (error instanceof Error && error.message.startsWith("Disconnected")) {
+                        throw new BleDisconnectedError(error.message, { cause: error });
+                    }
+                    throw error;
+                }
             },
             // callback to disconnect the BLE connection
             async () => {
                 if (peripheral.state !== "connected" || !nobleChannel.connected) return;
                 logger.debug(`Peripheral ${peripheralAddress}: Disconnect from peripheral because btp session closed`);
-                characteristicC2ForSubscribe.unsubscribeAsync().then(
-                    () =>
-                        peripheral.disconnectAsync().then(
+                // Unsubscribe from C2 notifications, then disconnect.  If unsubscribe fails (e.g. the
+                // peripheral already started disconnecting and Noble's _withDisconnectHandler rejected the
+                // pending operation with "Disconnected unknown"), proceed to disconnectAsync anyway.
+                characteristicC2ForSubscribe
+                    .unsubscribeAsync()
+                    .catch(error =>
+                        logger.debug(`Peripheral ${peripheralAddress}: Error while unsubscribing from C2`, error),
+                    )
+                    .then(() => {
+                        if (peripheral.state !== "connected") {
+                            return;
+                        }
+                        return peripheral.disconnectAsync().then(
                             () => logger.debug(`Peripheral ${peripheralAddress}: Disconnected from peripheral`),
-                            error => logger.debug(`Peripheral ${peripheralAddress}: Error while unsubscribing`, error),
-                        ),
-                    error => logger.debug(`Peripheral ${peripheralAddress}: Error while disconnecting`, error),
-                );
+                            error => logger.debug(`Peripheral ${peripheralAddress}: Error while disconnecting`, error),
+                        );
+                    })
+                    .catch(() => {});
             },
 
             // callback to forward decoded and de-assembled Matter messages to ExchangeManager

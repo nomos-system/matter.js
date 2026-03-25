@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Behavior } from "#behavior/Behavior.js";
-import { Schema } from "#model";
-import { ClusterType } from "#types";
+import { Schema } from "@matter/model";
+import { ClusterType } from "@matter/types";
 import type { ClusterBehavior } from "./ClusterBehavior.js";
 
 const behaviorCache = new WeakMap<

@@ -1,68 +1,98 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Behavior } from "#behavior/Behavior.js";
 import { ClusterBehavior } from "#behavior/cluster/ClusterBehavior.js";
+import type { ClusterBehaviorType } from "#behavior/cluster/ClusterBehaviorType.js";
 import { Datasource } from "#behavior/state/managed/Datasource.js";
-import { Descriptor } from "#clusters/descriptor";
 import { Endpoint } from "#endpoint/Endpoint.js";
 import { EndpointType } from "#endpoint/type/EndpointType.js";
 import { RootEndpoint } from "#endpoints/root";
-import { Diagnostic, InternalError, isDeepEqual, Logger, Observable } from "#general";
+import type { Node } from "#node/Node.js";
+import type { StateStream } from "#node/integration/StateStream.js";
+import { DatasourceCache } from "#storage/client/DatasourceCache.js";
+import {
+    capitalize,
+    Diagnostic,
+    hex,
+    InternalError,
+    isDeepEqual,
+    Lifecycle,
+    Logger,
+    MaybePromise,
+    Observable,
+} from "@matter/general";
 import {
     AcceptedCommandList,
     AttributeList,
     ClusterRevision,
     DeviceClassification,
-    DeviceTypeModel,
     FeatureMap,
     GeneratedCommandList,
     Matter,
     type FeatureBitmap,
-} from "#model";
-import type { ClientNode } from "#node/ClientNode.js";
-import type { Node } from "#node/Node.js";
-import { ReadScope, type Read, type ReadResult } from "#protocol";
-import { ClientNodeStore } from "#storage/client/ClientNodeStore.js";
-import { DatasourceCache } from "#storage/client/DatasourceCache.js";
-import type { AttributeId, ClusterId, ClusterType, CommandId, EndpointNumber } from "#types";
-import { Status } from "#types";
-import { ClientEventEmitter } from "./ClientEventEmitter.js";
+} from "@matter/model";
+import { ReadScope, Val, type Read, type ReadResult } from "@matter/protocol";
+import type { AttributeId, ClusterId, ClusterType, CommandId, EndpointNumber } from "@matter/types";
+import { Status } from "@matter/types";
+import { Descriptor } from "@matter/types/clusters/descriptor";
+import type { ClientEventEmitter } from "./ClientEventEmitter.js";
 import { ClientStructureEvents } from "./ClientStructureEvents.js";
 import { PeerBehavior } from "./PeerBehavior.js";
 
 const logger = Logger.get("ClientStructure");
 
+const DESCRIPTOR_ID = Descriptor.Cluster.id;
 const DEVICE_TYPE_LIST_ATTR_ID = Descriptor.Cluster.attributes.deviceTypeList.id;
 const SERVER_LIST_ATTR_ID = Descriptor.Cluster.attributes.serverList.id;
 const PARTS_LIST_ATTR_ID = Descriptor.Cluster.attributes.partsList.id;
 
+const DEVICE_TYPE_LIST_ATTR_NAME = "deviceTypeList";
+const SERVER_LIST_ATTR_NAME = "serverList";
+const PARTS_LIST_ATTR_NAME = "partsList";
+
 /**
- * Manages endpoint and behavior structure for a single client node.
+ * Read a value from store initial values using either numeric attribute ID or property name.
+ */
+function getStoreValue(values: Record<string | number, unknown> | undefined, id: number, name: string): unknown {
+    if (values === undefined) {
+        return undefined;
+    }
+    return id in values ? values[id] : values[name];
+}
+
+/**
+ * Manages endpoint and behavior structure for the local representation of a local node.
+ *
+ * This class supports update via data sourced from the Matter protocol or from matter.js's remote APIs.
  */
 export class ClientStructure {
-    #nodeStore: ClientNodeStore;
+    #storeFactory: ClientStructure.StoreFactory;
     #endpoints = new Map<EndpointNumber, EndpointStructure>();
-    #eventEmitter: ClientEventEmitter;
-    #node: ClientNode;
+    #node: Node;
     #subscribedFabricFiltered?: boolean;
     #pendingChanges = new Map<EndpointStructure, PendingChange>();
     #pendingStructureEvents = Array<PendingEvent>();
     #delayedClusterEvents = new Array<ReadResult.EventValue>();
     #events: ClientStructureEvents;
     #changed = Observable<[void]>();
+    #commandFactory?: ClusterBehaviorType.CommandFactory;
 
-    constructor(node: ClientNode) {
+    /**
+     * Optional event emitter for Matter protocol events.  Set after construction.
+     */
+    eventEmitter?: ClientEventEmitter;
+
+    constructor(node: Node, storeFactory: ClientStructure.StoreFactory, options?: ClientStructure.Options) {
         this.#node = node;
-        this.#nodeStore = node.env.get(ClientNodeStore);
+        this.#storeFactory = storeFactory;
+        this.#commandFactory = options?.commandFactory;
         this.#endpoints.set(node.number, {
             endpoint: node,
             clusters: new Map(),
         });
-        this.#eventEmitter = ClientEventEmitter(node, this);
         this.#events = this.#node.env.get(ClientStructureEvents);
     }
 
@@ -71,10 +101,20 @@ export class ClientStructure {
     }
 
     /**
-     * Load initial structure from cache.
+     * The node this structure manages.
      */
-    loadCache() {
-        for (const store of this.#nodeStore.endpointStores) {
+    get node() {
+        return this.#node;
+    }
+
+    /**
+     * Load initial structure from cached endpoint stores.
+     *
+     * Each entry in {@link endpointStores} must expose an `id` (stringified endpoint number) and `knownBehaviors`
+     * (iterable of stringified cluster IDs).
+     */
+    loadCache(endpointStores: Iterable<{ id: string; knownBehaviors: Iterable<string> }>) {
+        for (const store of endpointStores) {
             const id = store.id;
 
             // Client storage uses the endpoint number as the key for the endpoint
@@ -85,15 +125,21 @@ export class ClientStructure {
 
             const endpoint = this.#endpointFor(number as EndpointNumber);
 
-            // Load state for each behavior
-            for (const idStr of store.knownBehaviors) {
-                const id = Number.parseInt(idStr) as ClusterId;
-                if (!Number.isFinite(id)) {
-                    continue;
-                }
+            const knownBehaviors = [...store.knownBehaviors]
+                .map(idStr => Number.parseInt(idStr) as ClusterId)
+                .filter(id => Number.isFinite(id));
 
-                const cluster = this.#clusterFor(endpoint, id);
-                this.#synchronizeCluster(endpoint, cluster);
+            // Ensure we process Descriptor cluster first because we trust our storage and extraneous cluster data were
+            // there before too, so we simply load them also if they might not be contained in indices
+            const descriptorIndex = knownBehaviors.indexOf(DESCRIPTOR_ID);
+            if (descriptorIndex !== -1) {
+                knownBehaviors.splice(descriptorIndex, 1);
+                knownBehaviors.unshift(DESCRIPTOR_ID);
+            }
+
+            // Load state for each behavior
+            for (const id of knownBehaviors) {
+                this.#synchronizeCluster(endpoint, this.#clusterFor(endpoint, id));
             }
         }
 
@@ -122,15 +168,6 @@ export class ClientStructure {
         const clusterStructure = this.#clusterFor(endpointStructure, type.cluster.id);
 
         return clusterStructure.store;
-    }
-
-    /**
-     * Obtain the store for a non-cluster behavior.
-     *
-     * The data for these behaviors is managed locally and not synced from the peer.
-     */
-    storeForLocal(endpoint: Endpoint, type: Behavior.Type) {
-        return this.#nodeStore.storeForEndpoint(endpoint).createStoreForLocalBehavior(type.id);
     }
 
     /**
@@ -172,7 +209,7 @@ export class ClientStructure {
     }
 
     /**
-     * Update the node structure by applying attribute changes.
+     * Update the node structure by applying attribute changes from a Matter protocol interaction.
      */
     async *mutate(request: Read, changes: ReadResult) {
         // We collect updates and only apply when we transition clusters
@@ -237,21 +274,94 @@ export class ClientStructure {
         await this.#emitPendingEvents();
     }
 
-    /** Determines if the subscription is fabric filtered */
+    /**
+     * Apply {@link StateStream.WireChange}s to the structure.
+     *
+     * Values are keyed by property name (not attribute ID).
+     */
+    async applyWireChanges(changes: StateStream.WireChange[]) {
+        for (const change of changes) {
+            switch (change.kind) {
+                case "update": {
+                    const endpointNumber = change.endpoint as EndpointNumber;
+                    const endpoint = this.#endpointFor(endpointNumber);
+                    const cluster = this.#clusterForBehavior(endpoint, change.behavior);
+
+                    // Include version in externalSet values so DatasourceCache can update it
+                    const values = new Map(Object.entries(change.changes as Record<string, unknown>)) as Val.StructMap;
+                    if (typeof change.version === "number") {
+                        values.set(DatasourceCache.VERSION_KEY, change.version);
+                    }
+
+                    await cluster.store.externalSet(values);
+                    this.#synchronizeCluster(endpoint, cluster);
+                    break;
+                }
+
+                case "delete": {
+                    const endpointNumber = change.endpoint as EndpointNumber;
+                    const endpoint = this.#endpoints.get(endpointNumber);
+                    if (endpoint) {
+                        this.#scheduleStructureChange(endpoint, "erase");
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Apply pending structural changes
+        for (const [endpoint, change] of this.#pendingChanges.entries()) {
+            this.#pendingChanges.delete(endpoint);
+
+            if (change.erase) {
+                await this.#erase(endpoint);
+                continue;
+            }
+
+            if (change.rebuild) {
+                await this.#rebuild(endpoint);
+            }
+
+            if (change.install) {
+                this.#install(endpoint);
+            }
+        }
+
+        this.#emitPendingStructureEvents();
+    }
+
+    /**
+     * Determines if the subscription is fabric filtered.
+     */
     protected get subscribedFabricFiltered(): boolean {
         if (this.#subscribedFabricFiltered === undefined) {
-            const defaultSubscription =
-                this.#node.state.network.defaultSubscription ??
-                ({} as { isFabricFiltered?: boolean; fabricFiltered?: boolean }); // Either Subscribe or Options
-            this.#subscribedFabricFiltered =
-                ("isFabricFiltered" in defaultSubscription
-                    ? defaultSubscription.isFabricFiltered
-                    : "fabricFiltered" in defaultSubscription
-                      ? defaultSubscription.fabricFiltered
-                      : true) ?? true;
-            this.#node.events.network.defaultSubscription$Changed.on(newSubscription => {
-                this.#subscribedFabricFiltered = newSubscription?.isFabricFiltered ?? true;
-            });
+            this.#subscribedFabricFiltered = true;
+
+            // Attempt to read from network behavior if available
+            try {
+                const state = this.#node.state as Record<string, unknown>;
+                const network = state?.network as undefined | Record<string, unknown>;
+                const defaultSubscription = network?.defaultSubscription as
+                    | undefined
+                    | { isFabricFiltered?: boolean; fabricFiltered?: boolean };
+                if (defaultSubscription) {
+                    this.#subscribedFabricFiltered =
+                        ("isFabricFiltered" in defaultSubscription
+                            ? defaultSubscription.isFabricFiltered
+                            : "fabricFiltered" in defaultSubscription
+                              ? defaultSubscription.fabricFiltered
+                              : true) ?? true;
+                }
+
+                const events = this.#node.events as Record<string, unknown>;
+                const networkEvents = events?.network as undefined | Record<string, unknown>;
+                const changedEvent = networkEvents?.defaultSubscription$Changed as undefined | Observable;
+                changedEvent?.on((newSubscription: undefined | { isFabricFiltered?: boolean }) => {
+                    this.#subscribedFabricFiltered = newSubscription?.isFabricFiltered ?? true;
+                });
+            } catch {
+                // Not a ClientNode or network behavior not available; default to true
+            }
         }
         return this.#subscribedFabricFiltered;
     }
@@ -280,24 +390,26 @@ export class ClientStructure {
             currentUpdates = {
                 endpointId,
                 clusterId,
-                values: {
-                    [attributeId]: change.value,
-                },
+                values: new Map([[attributeId, change.value]]),
             };
 
             // Update version but only if this was a wildcard read
             if (scope.isWildcard(endpointId, clusterId)) {
-                currentUpdates.values[DatasourceCache.VERSION_KEY] = change.version;
+                currentUpdates.values.set(DatasourceCache.VERSION_KEY, change.version);
             }
         } else {
             // Add value to change set for current endpoint/cluster
-            currentUpdates.values[attributeId] = change.value;
+            currentUpdates.values.set(attributeId, change.value);
         }
 
         return currentUpdates;
     }
 
     async #emitEvent(occurrence: ReadResult.EventValue, currentUpdates?: AttributeUpdates) {
+        if (!this.eventEmitter) {
+            return;
+        }
+
         const { endpointId, clusterId } = occurrence.path;
 
         const endpoint = this.#endpoints.get(endpointId);
@@ -308,7 +420,7 @@ export class ClientStructure {
         ) {
             this.#delayedClusterEvents.push(occurrence);
         } else {
-            await this.#eventEmitter(occurrence);
+            await this.eventEmitter(occurrence);
         }
     }
 
@@ -332,7 +444,7 @@ export class ClientStructure {
     }
 
     /**
-     * Apply new attribute values for specific endpoint/cluster.
+     * Apply new attribute values for a specific endpoint / cluster.
      *
      * This is invoked in a batch when we've collected all sequential values for the current endpoint/cluster.
      */
@@ -340,14 +452,14 @@ export class ClientStructure {
         const endpoint = this.#endpointFor(attrs.endpointId);
         const cluster = this.#clusterFor(endpoint, attrs.clusterId);
 
-        if (cluster.behavior && FeatureMap.id in attrs.values) {
-            if (!isDeepEqual(cluster.features, attrs.values[FeatureMap.id])) {
+        if (cluster.behavior && attrs.values.has(FeatureMap.id)) {
+            if (!isDeepEqual(cluster.features, attrs.values.get(FeatureMap.id))) {
                 cluster.behavior = undefined;
             }
         }
 
-        if (cluster.behavior && AttributeList.id in attrs.values) {
-            const attributeList = attrs.values[AttributeList.id];
+        if (cluster.behavior && attrs.values.has(AttributeList.id)) {
+            const attributeList = attrs.values.get(AttributeList.id);
             if (
                 Array.isArray(attributeList) &&
                 !isDeepEqual(
@@ -359,8 +471,8 @@ export class ClientStructure {
             }
         }
 
-        if (cluster.behavior && AcceptedCommandList.id in attrs.values) {
-            const acceptedCommands = attrs.values[AcceptedCommandList.id];
+        if (cluster.behavior && attrs.values.has(AcceptedCommandList.id)) {
+            const acceptedCommands = attrs.values.get(AcceptedCommandList.id);
             if (
                 Array.isArray(acceptedCommands) &&
                 !isDeepEqual(
@@ -377,7 +489,7 @@ export class ClientStructure {
     }
 
     /**
-     * If enough attributes are present, installs a behavior on an endpoint
+     * If enough attributes are present, installs a behavior on an endpoint.
      *
      * If the cluster is Descriptor, performs additional {@link Endpoint} configuration such as installing parts and
      * device types.
@@ -387,16 +499,16 @@ export class ClientStructure {
     #synchronizeCluster(structure: EndpointStructure, cluster: ClusterStructure) {
         const { endpoint } = structure;
 
-        // Generate a behavior if enough             information is available
+        // Generate a behavior if enough information is available
         if (cluster.behavior === undefined) {
             if (cluster.store.initialValues) {
-                const {
-                    [ClusterRevision.id]: clusterRevision,
-                    [FeatureMap.id]: features,
-                    [AttributeList.id]: attributeList,
-                    [AcceptedCommandList.id]: commandList,
-                    [GeneratedCommandList.id]: generatedCommandList,
-                } = cluster.store.initialValues;
+                const values = cluster.store.initialValues;
+
+                const clusterRevision = getStoreValue(values, ClusterRevision.id, "clusterRevision");
+                const features = getStoreValue(values, FeatureMap.id, "featureMap");
+                const attributeList = getStoreValue(values, AttributeList.id, "attributeList");
+                const commandList = getStoreValue(values, AcceptedCommandList.id, "acceptedCommandList");
+                const generatedCommandList = getStoreValue(values, GeneratedCommandList.id, "generatedCommandList");
 
                 if (typeof clusterRevision === "number") {
                     cluster.revision = clusterRevision;
@@ -426,17 +538,30 @@ export class ClientStructure {
             }
 
             if (
-                // All global attributes have fallbacks so we can't wait until we're sure we have them all.  Instead
+                // All global attributes have fallbacks, so we can't wait until we're sure we have them all.  Instead,
                 // wait until we are sure there is something useful.  We therefore rely on unspecified behavior that all
                 // attributes travel consecutively to ensure we initialize fully as we have no other choice
                 cluster.attributes?.length ||
                 cluster.commands?.length ||
                 cluster.generatedCommands?.length
             ) {
-                const behaviorType = PeerBehavior(cluster as PeerBehavior.ClusterShape);
+                const shape = cluster as PeerBehavior.DiscoveredClusterShape;
+                if (this.#commandFactory) {
+                    shape.commandFactory = this.#commandFactory;
+                }
+                const behaviorType = PeerBehavior(shape);
 
                 if (endpoint.lifecycle.isInstalled) {
                     cluster.pendingBehavior = behaviorType;
+                    if (cluster.pendingDelete) {
+                        // Peer sent data for a cluster absent from its descriptor server list; the device is buggy, but
+                        // we tolerate it by cancelling the pending deletion, aka "Schrödinger's cluster".
+                        logger.warn(
+                            `Cluster 0x${hex.fixed(cluster.id, 8)} on ${endpoint} is absent from` +
+                                " descriptor server list but peer sent attribute data for it; keeping cluster",
+                        );
+                        delete cluster.pendingDelete;
+                    }
                     this.#scheduleStructureChange(
                         structure,
                         endpoint.behaviors.supported[behaviorType.id] ? "rebuild" : "install",
@@ -460,10 +585,12 @@ export class ClientStructure {
         }
     }
 
-    #synchronizeDescriptor(structure: EndpointStructure, attrs: Record<number, unknown>) {
+    #synchronizeDescriptor(structure: EndpointStructure, attrs: Record<string | number, unknown>) {
         const { endpoint } = structure;
 
-        const deviceTypeList = attrs[DEVICE_TYPE_LIST_ATTR_ID] as Descriptor.DeviceType[];
+        const deviceTypeList = getStoreValue(attrs, DEVICE_TYPE_LIST_ATTR_ID, DEVICE_TYPE_LIST_ATTR_NAME) as
+            | Descriptor.DeviceType[]
+            | undefined;
         if (Array.isArray(deviceTypeList)) {
             const endpointType = endpoint.type;
             for (const dt of deviceTypeList) {
@@ -472,7 +599,7 @@ export class ClientStructure {
                 }
 
                 let isApp = false;
-                const model = Matter.get(DeviceTypeModel, dt.deviceType);
+                const model = Matter.deviceTypes(dt.deviceType);
                 if (model !== undefined) {
                     isApp = DeviceClassification.isApplication(model.classification);
                 }
@@ -491,8 +618,9 @@ export class ClientStructure {
                 endpointType.deviceType = dt.deviceType;
                 endpointType.deviceRevision = dt.revision;
                 endpointType.deviceClass = model?.classification ?? DeviceClassification.Simple;
+                endpointType.name = model?.name ?? `Unknown#${hex.word(dt.deviceType)}`;
 
-                // If we found a known application device type we stop because this is the classification we want to
+                // If we found a known application device type, we stop because this is the classification we want to
                 // report
                 if (isApp) {
                     break;
@@ -500,7 +628,7 @@ export class ClientStructure {
             }
         }
 
-        const serverList = attrs[SERVER_LIST_ATTR_ID];
+        const serverList = getStoreValue(attrs, SERVER_LIST_ATTR_ID, SERVER_LIST_ATTR_NAME);
         if (Array.isArray(serverList)) {
             const currentlySupported = new Set(
                 Object.values(endpoint.behaviors.supported)
@@ -516,15 +644,25 @@ export class ClientStructure {
             }
 
             if (currentlySupported.size) {
+                let anyPendingDelete = false;
                 for (const id of currentlySupported) {
-                    this.#clusterFor(structure, id).pendingDelete = true;
+                    const clusterStructure = this.#clusterFor(structure, id);
+                    // Only delete it when peer did not sent attribute data for this cluster in the same interaction
+                    // despite it not being in the server list; a device is buggy but we tolerate it by skipping the
+                    // deletion, aka "Schrödinger's cluster"
+                    if (!clusterStructure.pendingBehavior) {
+                        clusterStructure.pendingDelete = true;
+                        anyPendingDelete = true;
+                    }
                 }
-                this.#scheduleStructureChange(structure, "rebuild");
+                if (anyPendingDelete) {
+                    this.#scheduleStructureChange(structure, "rebuild");
+                }
             }
         }
 
         // The remaining logic deals with the parts list
-        const partsList = attrs[PARTS_LIST_ATTR_ID];
+        const partsList = getStoreValue(attrs, PARTS_LIST_ATTR_ID, PARTS_LIST_ATTR_NAME);
         if (!Array.isArray(partsList)) {
             return;
         }
@@ -550,6 +688,8 @@ export class ClientStructure {
             }
 
             part.pendingOwner = structure;
+            // TODO Should we somehow validate that against descriptor serverList because we might load data not in
+            // there
             this.#scheduleStructureChange(part, "install");
         }
 
@@ -605,7 +745,7 @@ export class ClientStructure {
         cluster = {
             kind: "discovered",
             id,
-            store: this.#nodeStore.storeForEndpoint(endpoint.endpoint).createStoreForBehavior(id.toString()),
+            store: this.#storeFactory(endpoint.endpoint, id.toString(), "id"),
             behavior: undefined,
             pendingBehavior: undefined,
             pendingDelete: undefined,
@@ -615,12 +755,63 @@ export class ClientStructure {
         return cluster;
     }
 
+    /**
+     * Look up or create a cluster structure for a behavior identified by name (for {@link StateStream.WireChange}s).
+     *
+     * If the behavior name matches a known cluster by camelized name, we map to the cluster ID. Otherwise this creates
+     * a name-keyed cluster entry.
+     */
+    #clusterForBehavior(endpoint: EndpointStructure, behaviorId: string): ClusterStructure {
+        // Check if this behavior is already installed on the endpoint — use its cluster ID if so
+        const supported = endpoint.endpoint.behaviors.supported[behaviorId] as ClusterBehavior.Type | undefined;
+        if (supported?.cluster) {
+            return this.#clusterFor(endpoint, supported.cluster.id);
+        }
+
+        // Try to find an existing cluster by scanning; the behavior ID might correspond to a cluster name
+        for (const cluster of endpoint.clusters.values()) {
+            if (cluster.behavior?.id === behaviorId) {
+                return cluster;
+            }
+        }
+
+        // Try to resolve by parsing as a numeric cluster ID
+        const numericId = Number.parseInt(behaviorId);
+        if (Number.isFinite(numericId)) {
+            return this.#clusterFor(endpoint, numericId as ClusterId);
+        }
+
+        // Try to resolve by looking up the cluster model by capitalized behavior name (e.g. "onOff" → "OnOff")
+        const clusterModel = Matter.clusters(capitalize(behaviorId));
+        if (clusterModel) {
+            return this.#clusterFor(endpoint, clusterModel.id as ClusterId);
+        }
+
+        // This is a new behavior delivered via wire changes; key by name directly
+        const existing = endpoint.clusters.get(behaviorId);
+        if (existing) {
+            return existing;
+        }
+
+        const cluster: ClusterStructure = {
+            kind: "discovered",
+            id: 0 as ClusterId,
+            store: this.#storeFactory(endpoint.endpoint, behaviorId, "name"),
+            behavior: undefined,
+            pendingBehavior: undefined,
+            pendingDelete: undefined,
+        };
+        endpoint.clusters.set(behaviorId, cluster);
+
+        return cluster;
+    }
+
     #ownerOf(endpoint: EndpointStructure) {
         if (endpoint.pendingOwner) {
             return endpoint.pendingOwner;
         }
 
-        // Do not return the ServerNode if this is the ClientNode
+        // Do not return the owner node if this is the root endpoint
         if (endpoint.endpoint.number === 0) {
             return;
         }
@@ -644,6 +835,13 @@ export class ClientStructure {
         );
 
         this.#endpoints.delete(endpoint.number);
+
+        // Skip deletion if the endpoint was already destroyed, e.g. because a parent endpoint was erased first and
+        // recursively closed its children
+        if (endpoint.construction.status === Lifecycle.Status.Destroyed) {
+            return;
+        }
+
         try {
             await endpoint.delete();
         } catch (e) {
@@ -656,7 +854,7 @@ export class ClientStructure {
      *
      * Currently, we apply granular updates to clusters.  This will possibly result in subtle errors if peers change in
      * incompatible ways, but the backings are designed to be fairly resilient to this.  This is simpler for API users
-     * to deal with in the common case where they can just ignore. If it becomes problematic we can revert to replacing
+     * to deal with in the common case where they can just ignore. If it becomes problematic, we can revert to replacing
      * entire endpoints or behaviors when there are structural changes.
      */
     async #rebuild(structure: EndpointStructure) {
@@ -672,7 +870,11 @@ export class ClientStructure {
 
                 await endpoint.behaviors.drop(behavior.id);
                 try {
-                    await cluster.store.erase();
+                    await MaybePromise.then(
+                        (
+                            cluster.store as Datasource.ExternallyMutableStore & { erase?(): MaybePromise<void> }
+                        ).erase?.(),
+                    );
                 } catch (e) {
                     logger.error("Error clearing cluster storage:", e);
                 }
@@ -817,26 +1019,46 @@ export class ClientStructure {
     }
 
     async #emitPendingEvents() {
+        if (!this.eventEmitter) {
+            return;
+        }
+
         const clusterEvents = this.#delayedClusterEvents;
         this.#delayedClusterEvents = [];
         for (const occurrence of clusterEvents) {
-            await this.#eventEmitter(occurrence);
+            await this.eventEmitter(occurrence);
         }
+    }
+}
+
+export namespace ClientStructure {
+    /**
+     * Creates a {@link Datasource.ExternallyMutableStore} for a behavior on an endpoint.
+     */
+    export type StoreFactory = (
+        endpoint: Endpoint,
+        behaviorId: string,
+        primaryKey: "id" | "name",
+    ) => Datasource.ExternallyMutableStore;
+
+    export interface Options {
+        /**
+         * Factory for command implementations used when generating peer behaviors.
+         */
+        commandFactory?: ClusterBehaviorType.CommandFactory;
     }
 }
 
 interface AttributeUpdates {
     endpointId: EndpointNumber;
     clusterId: ClusterId;
-    values: {
-        [K in number | typeof DatasourceCache.VERSION_KEY]?: unknown;
-    };
+    values: Val.StructMap;
 }
 
 interface EndpointStructure {
     pendingOwner?: EndpointStructure;
     endpoint: Endpoint;
-    clusters: Map<ClusterId, ClusterStructure>;
+    clusters: Map<ClusterId | string, ClusterStructure>;
 }
 
 interface ClusterStructure extends Partial<PeerBehavior.DiscoveredClusterShape> {
@@ -845,7 +1067,7 @@ interface ClusterStructure extends Partial<PeerBehavior.DiscoveredClusterShape> 
     behavior?: ClusterBehavior.Type;
     pendingBehavior?: ClusterBehavior.Type;
     pendingDelete?: boolean;
-    store: DatasourceCache;
+    store: Datasource.ExternallyMutableStore;
 }
 
 /**

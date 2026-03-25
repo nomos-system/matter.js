@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -11,7 +11,7 @@ import { Attribute, OptionalAttribute, FixedAttribute } from "../cluster/Cluster
 import { TlvFloat, TlvEnum, TlvUInt32 } from "../tlv/TlvNumber.js";
 import { TlvNullable } from "../tlv/TlvNullable.js";
 import { BitFlag } from "../schema/BitmapSchema.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 
 export namespace ConcentrationMeasurement {
     /**
@@ -64,48 +64,48 @@ export namespace ConcentrationMeasurement {
     }
 
     /**
-     * Where mentioned, Billion refers to 10, Trillion refers to 1012 (short scale).
+     * Where mentioned, Billion refers to 10^9, Trillion refers to 10^12 (short scale).
      *
      * @see {@link MatterSpecification.v142.Cluster} § 2.10.5.1
      */
     export enum MeasurementUnit {
         /**
-         * Parts per Million (10)
+         * Parts per Million (10^6)
          */
         Ppm = 0,
 
         /**
-         * Parts per Billion (10)
+         * Parts per Billion (10^9)
          */
         Ppb = 1,
 
         /**
-         * Parts per Trillion (1012)
+         * Parts per Trillion (10^12)
          */
         Ppt = 2,
 
         /**
-         * Milligram per m
+         * Milligram per m^3
          */
         Mgm3 = 3,
 
         /**
-         * Microgram per m
+         * Microgram per m^3
          */
         Ugm3 = 4,
 
         /**
-         * Nanogram per m
+         * Nanogram per m^3
          */
         Ngm3 = 5,
 
         /**
-         * Particles per m
+         * Particles per m^3
          */
         Pm3 = 6,
 
         /**
-         * Becquerel per m
+         * Becquerel per m^3
          */
         Bqm3 = 7
     }
@@ -169,8 +169,9 @@ export namespace ConcentrationMeasurement {
              * Indicates the most recent measurement as a single-precision floating-point number. MeasuredValue’s unit
              * is represented by MeasurementUnit.
              *
-             * A value of null indicates that the measurement is unknown or outside the valid range. MinMeasuredValue
-             * and MaxMeasuredValue define the valid range for MeasuredValue.
+             * A value of null indicates that the measurement is unknown or outside the valid range.
+             *
+             * MinMeasuredValue and MaxMeasuredValue define the valid range for MeasuredValue.
              *
              * @see {@link MatterSpecification.v142.Cluster} § 2.10.6.1
              */

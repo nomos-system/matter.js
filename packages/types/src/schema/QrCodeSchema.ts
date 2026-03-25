@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { NotImplementedError, ReedSolomon, UnexpectedDataError } from "#general";
+import { NotImplementedError, ReedSolomon, UnexpectedDataError } from "@matter/general";
 import { Schema } from "./Schema.js";
 
 const QR_MASK = [

@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { TlvByteString, TlvField, TlvObject, TlvOptionalField, TlvUInt32 } from "#types";
+import { TlvByteString, TlvField, TlvObject, TlvOptionalField, TlvUInt32 } from "@matter/types";
 
 /** @see {@link MatterSpecification.v11.Core} § 11.17.5.4 */
 export const TlvAttestation = TlvObject({

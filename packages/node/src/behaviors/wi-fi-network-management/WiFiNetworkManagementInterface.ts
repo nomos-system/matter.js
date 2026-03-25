@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { MaybePromise } from "#general";
-import { WiFiNetworkManagement } from "#clusters/wi-fi-network-management";
+import { MaybePromise } from "@matter/general";
+import { WiFiNetworkManagement } from "@matter/types/clusters/wi-fi-network-management";
 
 export namespace WiFiNetworkManagementInterface {
     export interface Base {

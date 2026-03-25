@@ -1,24 +1,25 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
-import { Environment, ImplementationError, Logger, Minutes, SharedEnvironmentServices } from "#general";
+import { Environment, ImplementationError, Logger, Minutes, SharedEnvironmentServices } from "@matter/general";
+import { ContinuousDiscovery, ServerNode } from "@matter/node";
 import {
     CertificateAuthority,
     CommissionableDevice,
     CommissionableDeviceIdentifiers,
-    ControllerDiscovery,
     DiscoveryData,
     Fabric,
     MdnsService,
-    Scanner,
-} from "#protocol";
-import { DiscoveryCapabilitiesBitmap, NodeId, TypeFromPartialBitSchema } from "#types";
+} from "@matter/protocol";
+import { DiscoveryCapabilitiesBitmap, NodeId, TypeFromPartialBitSchema } from "@matter/types";
 import {
+    cancelDiscoverCommissionableDevices,
     CommissioningControllerOptions,
     ControllerEnvironmentOptions,
     NodeCommissioningOptions,
+    runDiscoverCommissionableDevices,
 } from "./CommissioningController.js";
 import { MatterController } from "./MatterController.js";
 
@@ -44,6 +45,8 @@ export class PaseCommissioner {
     readonly #environment: Environment;
     #controllerInstance?: MatterController;
     #services?: SharedEnvironmentServices;
+    // Keyed by JSON-stringified identifier so cancelCommissionableDeviceDiscovery() can look up active discoveries.
+    readonly #activeDiscoveries = new Map<string, ContinuousDiscovery>();
 
     /**
      * Creates a new CommissioningController instance
@@ -77,7 +80,7 @@ export class PaseCommissioner {
             return this.#controllerInstance;
         }
 
-        const { certificateAuthorityConfig: rootCertificateData, fabricConfig: fabricConfig } = this.options;
+        const { certificateAuthorityConfig: rootCertificateData, fabricConfig } = this.options;
 
         this.#services = this.#environment.asDependent();
         try {
@@ -131,12 +134,7 @@ export class PaseCommissioner {
         identifierData: CommissionableDeviceIdentifiers,
         discoveryCapabilities?: TypeFromPartialBitSchema<typeof DiscoveryCapabilitiesBitmap>,
     ) {
-        const controller = this.assertControllerIsStarted();
-        controller
-            .collectScanners(discoveryCapabilities)
-            .forEach((scanner: Scanner) =>
-                ControllerDiscovery.cancelCommissionableDeviceDiscovery(scanner, identifierData),
-            );
+        cancelDiscoverCommissionableDevices(identifierData, discoveryCapabilities, this.#activeDiscoveries);
     }
 
     async discoverCommissionableDevices(
@@ -145,12 +143,13 @@ export class PaseCommissioner {
         discoveredCallback?: (device: CommissionableDevice) => void,
         timeout = Minutes(15),
     ) {
-        const controller = this.assertControllerIsStarted();
-        return await ControllerDiscovery.discoverCommissionableDevices(
-            controller.collectScanners(discoveryCapabilities),
-            timeout,
+        return runDiscoverCommissionableDevices(
+            this.assertControllerIsStarted().node as ServerNode,
             identifierData,
+            discoveryCapabilities,
             discoveredCallback,
+            timeout,
+            this.#activeDiscoveries,
         );
     }
 }

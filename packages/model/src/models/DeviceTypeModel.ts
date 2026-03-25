@@ -1,11 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { DeviceClassification } from "../common/DeviceClassification.js";
 import { DeviceTypeElement } from "../elements/index.js";
+import { ConditionModel } from "./ConditionModel.js";
 import { FieldModel } from "./FieldModel.js";
 import { Model } from "./Model.js";
 import { RequirementModel } from "./RequirementModel.js";
@@ -51,5 +52,5 @@ export class DeviceTypeModel extends Model<DeviceTypeElement, DeviceTypeModel.Ch
 DeviceTypeModel.register();
 
 export namespace DeviceTypeModel {
-    export type Child = RequirementModel | FieldModel;
+    export type Child = RequirementModel | FieldModel | ConditionModel;
 }

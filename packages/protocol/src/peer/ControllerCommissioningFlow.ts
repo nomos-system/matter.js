@@ -1,24 +1,20 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { ClientInteraction } from "#action/client/ClientInteraction.js";
 import { ClientRead } from "#action/client/ClientRead.js";
+import { WriteResult } from "#action/index.js";
 import { Invoke } from "#action/request/Invoke.js";
 import { Read } from "#action/request/Read.js";
 import { Write } from "#action/request/Write.js";
 import { Certificate } from "#certificate/kinds/Certificate.js";
-import { BasicInformation } from "#clusters/basic-information";
-import { Descriptor } from "#clusters/descriptor";
-import { GeneralCommissioning } from "#clusters/general-commissioning";
-import { NetworkCommissioning } from "#clusters/network-commissioning";
-import { OperationalCredentials } from "#clusters/operational-credentials";
-import { OtaSoftwareUpdateRequestor } from "#clusters/ota-software-update-requestor";
-import { TimeSynchronizationCluster } from "#clusters/time-synchronization";
 import {
+    asError,
     Bytes,
+    causedBy,
     ChannelType,
     Diagnostic,
     Duration,
@@ -33,7 +29,7 @@ import {
     Timespan,
     Timestamp,
     UnexpectedDataError,
-} from "#general";
+} from "@matter/general";
 import {
     ClusterId,
     ClusterType,
@@ -45,7 +41,14 @@ import {
     TypeFromPartialBitSchema,
     TypeFromSchema,
     VendorId,
-} from "#types";
+} from "@matter/types";
+import { BasicInformation } from "@matter/types/clusters/basic-information";
+import { Descriptor } from "@matter/types/clusters/descriptor";
+import { GeneralCommissioning } from "@matter/types/clusters/general-commissioning";
+import { NetworkCommissioning } from "@matter/types/clusters/network-commissioning";
+import { OperationalCredentials } from "@matter/types/clusters/operational-credentials";
+import { OtaSoftwareUpdateRequestor } from "@matter/types/clusters/ota-software-update-requestor";
+import { TimeSynchronizationCluster } from "@matter/types/clusters/time-synchronization";
 import { CertificateAuthority } from "../certificate/CertificateAuthority.js";
 import { ClusterClientObj } from "../cluster/client/ClusterClientTypes.js";
 import { TlvCertSigningRequest } from "../common/OperationalCredentialsTypes.js";
@@ -91,7 +94,7 @@ export type ControllerCommissioningFlowOptions = {
      * If the device should connect to a thread network.
      */
     threadNetwork?: {
-        networkName: string;
+        networkName?: string;
         operationalDataset: string;
     };
 
@@ -253,6 +256,10 @@ export class ControllerCommissioningFlow {
         this.#initializeCommissioningSteps();
     }
 
+    async [Symbol.asyncDispose]() {
+        await this.interaction.close();
+    }
+
     /**
      * Execute the commissioning process in the defined order. The steps are sorted before execution based on the step
      * number and sub step number.
@@ -310,14 +317,19 @@ export class ControllerCommissioningFlow {
                 if (result.code === CommissioningStepResultCode.Stop) {
                     break;
                 }
-            } catch (error) {
+            } catch (e) {
+                const error = asError(e);
                 if (error instanceof RecoverableCommissioningError) {
                     logger.warn(
-                        `Commissioning step ${step.stepNumber}.${step.subStepNumber}: ${step.name} failed with recoverable error: ${error.message} ... Continuing with process`,
+                        `Commissioning step ${step.stepNumber}.${step.subStepNumber}: ${step.name} failed with recoverable error:`,
+                        Diagnostic.errorMessage(error),
+                        Diagnostic.weak("(continuing commissioning)"),
                     );
-                } else if (error instanceof CommissioningError || error instanceof StatusResponseError) {
+                } else if (causedBy(error, CommissioningError, StatusResponseError)) {
                     logger.error(
-                        `Commissioning step ${step.stepNumber}.${step.subStepNumber}: ${step.name} failed with error: ${error.message} ... Aborting commissioning`,
+                        `Commissioning step ${step.stepNumber}.${step.subStepNumber}: ${step.name} failed with error:`,
+                        Diagnostic.errorMessage(error),
+                        Diagnostic.weak("(terminating commissioning)"),
                     );
                     // TODO In concurrent connection commissioning flow, the failure of any of the steps 2 through 10
                     //  SHALL result in the Commissioner and Commissionee returning to step 2 (device discovery and
@@ -507,7 +519,6 @@ export class ControllerCommissioningFlow {
             stepNumber: 18, // includes step 19 (CASE connection)
             subStepNumber: 1,
             name: "Reconnect",
-            reArmFailsafe: true,
             stepLogic: () => this.#reconnectWithDevice(),
         });
 
@@ -765,7 +776,7 @@ export class ControllerCommissioningFlow {
     }
 
     async #ensureFailsafeTimerFor(maxProcessingTime: Duration) {
-        const minFailsafeTime = this.interaction.maximumPeerResponseTime(maxProcessingTime);
+        const minFailsafeTime = this.interaction.maximumPeerResponseTime(maxProcessingTime, true);
 
         if (this.interaction.channelType === ChannelType.BLE) {
             this.#armFailsafeInterval?.stop();
@@ -1178,7 +1189,6 @@ export class ControllerCommissioningFlow {
                 !this.commissioningOptions.wifiNetwork.wifiSsid ||
                 !this.commissioningOptions.wifiNetwork.wifiCredentials) &&
             (this.commissioningOptions.threadNetwork === undefined ||
-                !this.commissioningOptions.threadNetwork.networkName ||
                 !this.commissioningOptions.threadNetwork.operationalDataset)
         ) {
             // Check if we have no networkCommissioning cluster or an Ethernet one
@@ -1501,13 +1511,15 @@ export class ControllerCommissioningFlow {
         );
 
         if (addNetworkingStatus !== NetworkCommissioning.NetworkCommissioningStatus.Success) {
-            throw new ThreadNetworkSetupFailedError(`Commissionee failed to add Thread network: ${addDebugText}`);
+            throw new ThreadNetworkSetupFailedError(
+                `Commissionee failed to add Thread network: status=${NetworkCommissioning.NetworkCommissioningStatus[addNetworkingStatus]} (${addNetworkingStatus})${addDebugText ? ` ${addDebugText}` : ""}`,
+            );
         }
         if (networkIndex === undefined) {
             throw new ThreadNetworkSetupFailedError(`Commissionee did not return network index`);
         }
         logger.debug(
-            `Commissionee added Thread network ${this.commissioningOptions.threadNetwork.networkName} with network index ${networkIndex}`,
+            `Commissionee added Thread network ${this.commissioningOptions.threadNetwork.networkName ?? "via operational dataset"} with network index ${networkIndex}`,
         );
 
         const [updatedNetworks] = await this.#readConcreteAttributeValues(
@@ -1527,7 +1539,7 @@ export class ControllerCommissioningFlow {
         if (connected) {
             logger.debug(
                 `Commissionee is already connected to Thread network ${
-                    this.commissioningOptions.threadNetwork.networkName
+                    this.commissioningOptions.threadNetwork.networkName ?? "via operational dataset"
                 } (networkId ${Bytes.toHex(networkId)})`,
             );
             return {
@@ -1538,7 +1550,7 @@ export class ControllerCommissioningFlow {
 
         await this.#ensureFailsafeTimerFor(Seconds(connectMaxTimeSeconds));
 
-        const connectResult = await this.#invokeCommand(
+        const { networkingStatus, debugText } = await this.#invokeCommand(
             {
                 endpoint: RootEndpointNumber,
                 cluster: NetworkCommissioning.Complete,
@@ -1553,14 +1565,14 @@ export class ControllerCommissioningFlow {
             },
         );
 
-        if (connectResult.networkingStatus !== NetworkCommissioning.NetworkCommissioningStatus.Success) {
+        if (networkingStatus !== NetworkCommissioning.NetworkCommissioningStatus.Success) {
             throw new ThreadNetworkSetupFailedError(
-                `Commissionee failed to connect to Thread network: ${connectResult.debugText}`,
+                `Commissionee failed to connect to Thread network: status=${NetworkCommissioning.NetworkCommissioningStatus[networkingStatus]} (${networkingStatus})${debugText ? ` ${debugText}` : ""}`,
             );
         }
         logger.debug(
             `Commissionee successfully connected to Thread network ${
-                this.commissioningOptions.threadNetwork.networkName
+                this.commissioningOptions.threadNetwork.networkName ?? "via operational dataset"
             } (networkId ${Bytes.toHex(networkId)})`,
         );
 
@@ -1612,7 +1624,9 @@ export class ControllerCommissioningFlow {
             };
         }
 
+        await this.interaction.close();
         this.interaction = transitionResult;
+
         this.#clusterClients.clear();
 
         logger.debug("Successfully reconnected with device ...");
@@ -1674,7 +1688,7 @@ export class ControllerCommissioningFlow {
         for (const requestorEndpoint of this.collectedCommissioningData.otaRequestorList) {
             try {
                 // Fabric scoped attribute, so we just overwrite our value
-                await this.interaction.write(
+                const writeResult = await this.interaction.write(
                     Write(
                         Write.Attribute({
                             endpoint: requestorEndpoint,
@@ -1690,6 +1704,9 @@ export class ControllerCommissioningFlow {
                         }),
                     ),
                 );
+
+                WriteResult.assertSuccess(writeResult);
+
                 success = true;
                 logger.debug(`Added default OTA provider on endpoint ${endpoint}`);
             } catch (error) {

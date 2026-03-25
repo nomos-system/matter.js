@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { RootSupervisor } from "#behavior/supervision/RootSupervisor.js";
 import type { ValueSupervisor } from "#behavior/supervision/ValueSupervisor.js";
-import { Abort, MaybePromise, NotImplementedError } from "#general";
-import { any, DataModelPath, Schema } from "#model";
+import { Abort, MaybePromise, NotImplementedError } from "@matter/general";
+import { any, DataModelPath, Schema } from "@matter/model";
 import { Envelope } from "./Envelope.js";
 import { LocalResponse } from "./LocalResponse.js";
 
@@ -134,7 +134,7 @@ export abstract class ApiResource {
     /**
      * Subscribe to events.
      */
-    // eslint-disable-next-line require-yield
+    // oxlint-disable-next-line require-yield
     async *subscribe(
         _abort: Abort.Signal,
         _request?: Envelope.Data,

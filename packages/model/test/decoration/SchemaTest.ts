@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { ClassSemantics, cluster, field, FieldModel, Schema, uint8 } from "#index.js";
+import { ClassSemantics, cluster, field, Schema, uint8 } from "#index.js";
 
 describe("Schema", () => {
     it("doesn't exist without decoration", () => {
@@ -25,7 +25,7 @@ describe("Schema", () => {
             bar = 4;
         }
 
-        expect(Schema(Foo)?.get(FieldModel, "bar")?.operationalBase).equals(uint8);
+        expect(Schema(Foo)?.fields("bar")?.operationalBase).equals(uint8);
     });
 
     it("exists with extend", () => {
@@ -55,7 +55,7 @@ describe("Schema", () => {
 
         class Bar extends Foo {}
 
-        expect(Schema(Bar)?.get(FieldModel, "bar")?.operationalBase).equals(uint8);
+        expect(Schema(Bar)?.fields("bar")?.operationalBase).equals(uint8);
     });
 
     it("exists with extend on base", () => {

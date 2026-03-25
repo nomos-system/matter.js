@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { ColorControlServer } from "#behaviors/color-control";
-import { ColorControl } from "#clusters/color-control";
 import { ExtendedColorLightDevice } from "#devices/extended-color-light";
-import { Duration, Time, Timespan } from "#general";
+import { Duration, Time, Timespan } from "@matter/general";
+import { ColorControl } from "@matter/types/clusters/color-control";
 import { MockServerNode } from "../../node/mock-server-node.js";
 
 describe("ColorControlServer", () => {

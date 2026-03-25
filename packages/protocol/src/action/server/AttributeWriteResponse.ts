@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -10,8 +10,8 @@ import { Write } from "#action/request/Write.js";
 import { WriteResult } from "#action/response/WriteResult.js";
 import { AccessControl, hasRemoteActor } from "#action/server/AccessControl.js";
 import { DataResponse, FallbackLimits } from "#action/server/DataResponse.js";
-import { Diagnostic, InternalError, Logger, serialize, toHex } from "#general";
-import { AttributeModel, DataModelPath, ElementTag, FabricIndex as FabricIndexField } from "#model";
+import { Diagnostic, InternalError, Logger, serialize, toHex } from "@matter/general";
+import { AttributeModel, DataModelPath, ElementTag, FabricIndex as FabricIndexField } from "@matter/model";
 import {
     ArraySchema,
     AttributePath,
@@ -22,7 +22,7 @@ import {
     StatusResponseError,
     TlvSchema,
     TlvStream,
-} from "#types";
+} from "@matter/types";
 import { Subject } from "./Subject.js";
 
 const logger = Logger.get("AttributeWriteResponse");
@@ -40,7 +40,6 @@ export class AttributeWriteResponse<
     // a cache between producers that touch the same endpoint and/or cluster
     #currentEndpoint?: EndpointProtocol;
     #currentCluster?: ClusterProtocol;
-    #previousProcessedAttributePath?: WriteResult.ConcreteAttributePath;
 
     // Count how many attribute status (on error) and attribute values (on success) we have emitted
     #statusCount = 0;
@@ -52,7 +51,7 @@ export class AttributeWriteResponse<
         this.#fabricIndex = session.fabric ?? FabricIndex.NO_FABRIC;
     }
 
-    async process<T extends Write>({ writeRequests, suppressResponse }: T): WriteResult<T> {
+    async process({ writeRequests, suppressResponse }: Write): Promise<WriteResult.AttributeStatus[] | undefined> {
         using _writing = this.join("writing");
 
         const writeResponses = new Array<WriteResult.AttributeStatus>();
@@ -75,9 +74,9 @@ export class AttributeWriteResponse<
         }
 
         if (!suppressResponse) {
-            return writeResponses as Awaited<WriteResult<T>>;
+            return writeResponses;
         }
-        return undefined as Awaited<WriteResult<T>>;
+        return undefined;
     }
 
     /** Guarded accessor for this.#currentEndpoint.  This should never be undefined */
@@ -394,9 +393,6 @@ export class AttributeWriteResponse<
             );
         }
 
-        const previousPath = this.#previousProcessedAttributePath;
-        this.#previousProcessedAttributePath = path;
-
         try {
             const { tlv } = attribute;
             if (listIndex === undefined) {
@@ -408,15 +404,7 @@ export class AttributeWriteResponse<
                 writeState[attributeId] = decoded;
                 await this.session.transaction?.commit();
             } else if (listIndex === null) {
-                if (
-                    previousPath?.endpointId !== path.endpointId ||
-                    previousPath?.clusterId !== path.clusterId ||
-                    previousPath?.attributeId !== path.attributeId
-                ) {
-                    // Mimic chip sdk behavior
-                    throw new StatusResponseError("ADD list action without a former REPLACE_ALL action", Status.Busy);
-                }
-                // ADD
+                // ADD - caller (InteractionServer) has already validated that this ADD is allowed
                 if (!(tlv instanceof ArraySchema)) {
                     throw new StatusResponseError(
                         `Unsupported Write path provided: listIndex === ${listIndex} but attribute is not a list`,
@@ -433,9 +421,10 @@ export class AttributeWriteResponse<
             }
         } catch (error) {
             await this.session.transaction?.rollback();
-            if (StatusResponseError.is(error)) {
+            const sre = StatusResponseError.of(error);
+            if (sre) {
                 this.#errorCount++;
-                return this.#asStatus(path, error.code, error.clusterCode);
+                return this.#asStatus(path, sre.code, sre.clusterCode);
             }
             throw error;
         }

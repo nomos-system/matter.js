@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -67,6 +67,16 @@ export class Time {
     }
     static readonly getPeriodicTimer = (name: string, duration: Duration, callback: Timer.Callback): Timer =>
         Time.default.getPeriodicTimer(name, duration, callback);
+
+    /**
+     * Defer to a new macrotask.
+     */
+    get macrotask(): Promise<void> {
+        throw new NoProviderError();
+    }
+    static get macrotask() {
+        return Time.default.macrotask;
+    }
 
     /**
      * Create a promise that resolves after a specific interval or when canceled, whichever comes first.

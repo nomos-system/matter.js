@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { OperationalState } from "#clusters/operational-state";
-import { ImplementationError, MaybePromise } from "#general";
+import { ImplementationError, MaybePromise } from "@matter/general";
+import { OperationalState } from "@matter/types/clusters/operational-state";
 import { OperationalStateBehavior } from "./OperationalStateBehavior.js";
 
 /**

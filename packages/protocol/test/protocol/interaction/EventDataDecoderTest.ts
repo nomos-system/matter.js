@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
-import { BasicInformation } from "#clusters/basic-information";
 import { normalizeAndDecodeEventData, normalizeEventData } from "#interaction/EventDataDecoder.js";
-import { ClusterId, EndpointNumber, EventId, EventNumber, TlvEventData, TlvVoid, TypeFromSchema } from "#types";
+import { ClusterId, EndpointNumber, EventId, EventNumber, TlvEventData, TlvVoid, TypeFromSchema } from "@matter/types";
+import { BasicInformation } from "@matter/types/clusters/basic-information";
 
 describe("EventDataDecoder", () => {
     describe("normalizeEventData", () => {

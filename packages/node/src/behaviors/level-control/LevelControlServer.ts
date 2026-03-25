@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -11,13 +11,14 @@ import { ColorControlServer } from "#behaviors/color-control";
 import { GeneralDiagnosticsBehavior } from "#behaviors/general-diagnostics";
 import { OnOffServer } from "#behaviors/on-off";
 import { ScenesManagementServer } from "#behaviors/scenes-management";
-import { GeneralDiagnostics } from "#clusters/general-diagnostics";
-import { LevelControl } from "#clusters/level-control";
 import { Endpoint } from "#endpoint/Endpoint.js";
-import { AsyncObservable, cropValueRange, Identity, Logger, MaybePromise, Millis } from "#general";
+import { AggregatorEndpoint } from "#endpoints/aggregator";
 import { ServerNode } from "#node/ServerNode.js";
-import { Val } from "#protocol";
-import { ClusterType, StatusCode, StatusResponseError, TypeFromPartialBitSchema } from "#types";
+import { AsyncObservable, cropValueRange, Identity, Logger, MaybePromise, Millis } from "@matter/general";
+import { Val } from "@matter/protocol";
+import { ClusterType, StatusCode, StatusResponseError, TypeFromPartialBitSchema } from "@matter/types";
+import { GeneralDiagnostics } from "@matter/types/clusters/general-diagnostics";
+import { LevelControl } from "@matter/types/clusters/level-control";
 import { LevelControlBehavior } from "./LevelControlBehavior.js";
 
 const logger = Logger.get("LevelControlServer");
@@ -185,7 +186,10 @@ export class LevelControlBaseServer extends LevelControlBase {
             );
         }
 
-        if (this.#getBootReason() !== GeneralDiagnostics.BootReason.SoftwareUpdateCompleted) {
+        if (
+            this.#getBootReason() !== GeneralDiagnostics.BootReason.SoftwareUpdateCompleted &&
+            !this.endpoint.ownerOfType(AggregatorEndpoint)
+        ) {
             const startUpLevelValue = this.state.startUpCurrentLevel ?? null;
             const currentLevelValue = this.state.currentLevel;
             let targetLevelValue: number | null;

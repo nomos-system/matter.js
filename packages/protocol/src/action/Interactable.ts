@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Transaction } from "#general";
+import { InteractionSettings } from "./InteractionSettings.js";
 import { Invoke } from "./request/Invoke.js";
 import { Read } from "./request/Read.js";
 import { Subscribe } from "./request/Subscribe.js";
@@ -15,10 +15,7 @@ import { SubscribeResult } from "./response/SubscribeResult.js";
 import { WriteResult } from "./response/WriteResult.js";
 import { AccessControl } from "./server/AccessControl.js";
 
-export type InteractionSession = AccessControl.Session & {
-    transaction?: Transaction;
-    abort?: AbortSignal;
-};
+export type InteractionSession = AccessControl.Session & InteractionSettings;
 
 /**
  * Objects implementing this interface can participate in Matter interactions.

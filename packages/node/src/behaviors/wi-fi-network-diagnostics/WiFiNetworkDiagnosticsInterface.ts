@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { MaybePromise } from "#general";
+import { MaybePromise } from "@matter/general";
 
 export namespace WiFiNetworkDiagnosticsInterface {
     export interface ErrorCounts {
@@ -15,17 +15,17 @@ export namespace WiFiNetworkDiagnosticsInterface {
          *
          * Reception of this command shall reset the following attributes to 0:
          *
-         *   • BeaconLostCount
+         *   - BeaconLostCount
          *
-         *   • BeaconRxCount
+         *   - BeaconRxCount
          *
-         *   • PacketMulticastRxCount
+         *   - PacketMulticastRxCount
          *
-         *   • PacketMulticastTxCount
+         *   - PacketMulticastTxCount
          *
-         *   • PacketUnicastRxCount
+         *   - PacketUnicastRxCount
          *
-         *   • PacketUnicastTxCount
+         *   - PacketUnicastTxCount
          *
          * @see {@link MatterSpecification.v142.Core} § 11.15.7.1
          */

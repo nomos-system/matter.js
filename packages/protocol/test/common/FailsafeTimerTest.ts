@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { FailsafeTimer } from "#common/FailsafeTimer.js";
-import { createPromise, Instant, Seconds } from "#general";
+import { createPromise, Instant, Seconds } from "@matter/general";
 
 // TODO identify more cases that are not handled by chip tool tests
 describe("FailSafeTimer Test", () => {

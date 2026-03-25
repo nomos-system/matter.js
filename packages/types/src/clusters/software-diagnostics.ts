@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -10,14 +10,14 @@ import { MutableCluster } from "../cluster/mutation/MutableCluster.js";
 import { Attribute, Command, TlvNoResponse, OptionalAttribute, OptionalEvent } from "../cluster/Cluster.js";
 import { TlvUInt64, TlvUInt32 } from "../tlv/TlvNumber.js";
 import { TlvNoArguments } from "../tlv/TlvNoArguments.js";
-import { AccessLevel } from "#model";
+import { AccessLevel } from "@matter/model";
 import { BitFlag } from "../schema/BitmapSchema.js";
 import { TlvArray } from "../tlv/TlvArray.js";
 import { TlvField, TlvOptionalField, TlvObject } from "../tlv/TlvObject.js";
 import { TlvString, TlvByteString } from "../tlv/TlvString.js";
 import { TypeFromSchema } from "../tlv/TlvSchema.js";
 import { Priority } from "../globals/Priority.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace SoftwareDiagnostics {
@@ -145,9 +145,9 @@ export namespace SoftwareDiagnostics {
              *
              * Receipt of this command shall reset the following values which track high and lower watermarks:
              *
-             *   • The StackFreeMinimum field of the ThreadMetrics attribute
+             *   - The StackFreeMinimum field of the ThreadMetrics attribute
              *
-             *   • The CurrentHeapHighWatermark attribute
+             *   - The CurrentHeapHighWatermark attribute
              *
              * ### Effect on Receipt
              *

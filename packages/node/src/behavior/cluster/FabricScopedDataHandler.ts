@@ -1,16 +1,16 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import type { Behavior } from "#behavior/Behavior.js";
 import type { Endpoint } from "#endpoint/Endpoint.js";
 import type { SupportedElements } from "#endpoint/properties/Behaviors.js";
-import { createPromise, deepCopy, isObject, Logger, MaybePromise, Seconds, withTimeout } from "#general";
 import type { ServerNode } from "#node/ServerNode.js";
-import { OccurrenceManager, Val } from "#protocol";
-import type { ClusterType, FabricIndex, ObjectSchema } from "#types";
+import { createPromise, deepCopy, isObject, Logger, MaybePromise, Seconds, withTimeout } from "@matter/general";
+import { OccurrenceManager, Val } from "@matter/protocol";
+import type { ClusterType, FabricIndex, ObjectSchema } from "@matter/types";
 import type { ClusterBehavior } from "./ClusterBehavior.js";
 
 const logger = Logger.get("FabricScopedDataHandler");

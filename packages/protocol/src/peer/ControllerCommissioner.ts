@@ -1,52 +1,57 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { ClientInteraction } from "#action/client/ClientInteraction.js";
 import { CertificateAuthority } from "#certificate/CertificateAuthority.js";
-import { GeneralCommissioning } from "#clusters/general-commissioning";
-import { CommissionableDevice, CommissionableDeviceIdentifiers, DiscoveryData, ScannerSet } from "#common/Scanner.js";
+import { CommissionableDevice, DiscoveryData } from "#common/Scanner.js";
 import { Fabric } from "#fabric/Fabric.js";
-import {
-    Bytes,
-    Channel,
-    ChannelType,
-    ClassExtends,
-    ConnectionlessTransportSet,
-    Diagnostic,
-    Duration,
-    Environment,
-    Environmental,
-    ImplementationError,
-    isIPv6,
-    Logger,
-    Millis,
-    Minutes,
-    NoResponseTimeoutError,
-    Seconds,
-    ServerAddress,
-} from "#general";
 import { MdnsClient } from "#mdns/MdnsClient.js";
-import { CommissioningError } from "#peer/CommissioningError.js";
+import { CommissioningConnection } from "#peer/CommissioningConnection.js";
+import { CommissioningError, PairRetransmissionLimitReachedError } from "#peer/CommissioningError.js";
 import {
     ControllerCommissioningFlow,
     ControllerCommissioningFlowOptions,
     NodeIdConflictError,
 } from "#peer/ControllerCommissioningFlow.js";
-import { ControllerDiscovery, PairRetransmissionLimitReachedError } from "#peer/ControllerDiscovery.js";
 import { ExchangeManager } from "#protocol/ExchangeManager.js";
 import { DedicatedChannelExchangeProvider } from "#protocol/ExchangeProvider.js";
 import { ChannelStatusResponseError } from "#securechannel/SecureChannelMessenger.js";
 import { NodeSession } from "#session/NodeSession.js";
 import { PaseClient } from "#session/pase/PaseClient.js";
 import { SessionManager } from "#session/SessionManager.js";
-import { DiscoveryCapabilitiesBitmap, NodeId, SECURE_CHANNEL_PROTOCOL_ID, TypeFromPartialBitSchema } from "#types";
+import {
+    Abort,
+    asError,
+    Bytes,
+    causedBy,
+    Channel,
+    ChannelType,
+    ClassExtends,
+    ConnectionlessTransportSet,
+    Duration,
+    Environment,
+    Environmental,
+    ImplementationError,
+    isIPv6,
+    Logger,
+    MaybePromise,
+    Millis,
+    Minutes,
+    NoResponseTimeoutError,
+    Seconds,
+    ServerAddress,
+} from "@matter/general";
+import { NodeId, SECURE_CHANNEL_PROTOCOL_ID } from "@matter/types";
+import { GeneralCommissioning } from "@matter/types/clusters/general-commissioning";
 import { PeerAddress } from "./PeerAddress.js";
-import { NodeDiscoveryType, PeerSet } from "./PeerSet.js";
+import { CommissioningTransitionError, PeerCommunicationError } from "./PeerCommunicationError.js";
+import { PeerSet } from "./PeerSet.js";
+import { PeerTimingParameters } from "./PeerTimingParameters.js";
 
-const logger = Logger.get("PeerCommissioner");
+const logger = Logger.get("ControllerCommissioner");
 
 /**
  * General commissioning options.
@@ -67,13 +72,22 @@ export interface CommissioningOptions extends Partial<ControllerCommissioningFlo
      * This optional callback allows the caller to complete commissioning once PASE commissioning completes.  If it does
      * not throw, the commissioner considers commissioning complete.
      */
-    finalizeCommissioning?: (peerAddress: PeerAddress, discoveryData?: DiscoveryData) => Promise<void>;
+    finalizeCommissioning?: (peerAddress: PeerAddress, discoveryData?: DiscoveryData) => MaybePromise<void>;
 
     /**
      * Commissioning Flow Implementation as class that extends the official implementation to use for commissioning.
      * Defaults to the matter.js default implementation {@link ControllerCommissioningFlow}.
      */
     commissioningFlowImpl?: ClassExtends<ControllerCommissioningFlow>;
+
+    /**
+     * Timing overrides for the step-18 CASE reconnect.
+     *
+     * After commissioning completes, the commissioner establishes the first operational CASE session.  The device is
+     * known to be freshly online at this point, so tighter timing is appropriate.  Any fields provided here are merged
+     * on top of the global {@link PeerSet.timing} for that single connection only.
+     */
+    caseConnectionTiming?: Partial<PeerTimingParameters>;
 }
 
 /**
@@ -82,45 +96,72 @@ export interface CommissioningOptions extends Partial<ControllerCommissioningFlo
 export interface LocatedNodeCommissioningOptions extends CommissioningOptions {
     addresses: ServerAddress[];
     discoveryData?: DiscoveryData;
+
+    /**
+     * Overall wall-clock budget for PASE establishment across all candidate addresses.
+     * Defaults to 30 seconds.
+     */
+    timeout?: Duration;
+
+    /**
+     * Abort signal for cancellation.  When fired during PASE establishment, cancels the attempt.
+     * In parallel commissioning scenarios this is used to cancel other candidates once one wins.
+     */
+    abort?: AbortSignal;
+
+    /**
+     * Called immediately after PASE is established, before the main commissioning flow begins.
+     *
+     * Return `true` to proceed with commissioning (this candidate won the race).
+     * Return `false` to abort — the PASE session is closed and commissioning is skipped.
+     *
+     * This is the hook used by {@link CommissioningDiscovery} for multi-candidate parallel flows:
+     * the first candidate to establish PASE returns `true` and signals the others (via {@link abort})
+     * to stop.  Any candidate that establishes PASE after another has already won returns `false` here
+     * and cleans up.  In the single-device located-node path this callback is unnecessary and need not
+     * be provided.
+     */
+    continueCommissioningAfterPase?: () => boolean;
 }
 
 /**
- * Configuration for performing discovery + commissioning in one step.
+ * Options for establishing a PASE session with a device whose address(es) are already known.
+ *
+ * Use this when you have at least one address for the device (from a prior discovery, a QR code, or a
+ * pre-configured address).  For pure mDNS/BLE discovery without known addresses, use {@link PaseDiscovery}.
  */
-export interface DiscoveryAndCommissioningOptions extends CommissioningOptions {
-    /** Discovery related options. */
-    discovery: (
-        | {
-              /**
-               * Device identifiers (Short or Long Discriminator, Product/Vendor-Ids, Device-type or a pre-discovered
-               * instance Id, or "nothing" to discover all commissionable matter devices) to use for discovery.
-               * If the property commissionableDevice is provided this property is ignored.
-               */
-              identifierData: CommissionableDeviceIdentifiers;
-          }
-        | {
-              /**
-               * Commissionable device object returned by a discovery run.
-               * If this property is provided then identifierData and knownAddress are ignored.
-               */
-              commissionableDevice: CommissionableDevice;
-          }
-    ) & {
-        /**
-         * Discovery capabilities to use for discovery. These are included in the QR code normally and defined if BLE
-         * is supported for initial commissioning.
-         */
-        discoveryCapabilities?: TypeFromPartialBitSchema<typeof DiscoveryCapabilitiesBitmap>;
+export interface EstablishPaseOptions {
+    /** One or more addresses at which the device may be reached. All are tried in parallel. */
+    addresses: ServerAddress[];
 
-        /**
-         * Known address of the device to use for discovery. if this is set this will be tried first before discovering
-         * the device.
-         */
-        knownAddress?: ServerAddress;
+    /** Discovery metadata associated with the device (used for logging and passed through to the caller). */
+    discoveryData?: DiscoveryData;
 
-        /** Timeout in seconds for the discovery process. Default: 30 seconds */
-        timeout?: Duration;
-    };
+    /** PASE passcode for the device. */
+    passcode: number;
+
+    /** Overall timeout for PASE establishment across all addresses. Defaults to 30 seconds. */
+    timeout?: Duration;
+
+    /** External abort signal that, when fired, cancels all in-flight PASE attempts. */
+    abort?: AbortSignal;
+
+    /**
+     * Atomic gate for parallel PASE racing.
+     *
+     * Called immediately after PASE is established (before any further work).  Return `true` to claim this
+     * PASE session as the winner.  Return `false` if another candidate already won — this session is closed
+     * cleanly without proceeding.
+     *
+     * When omitted, the first successful PASE session is always accepted.
+     */
+    continueAfterPase?: () => boolean;
+}
+
+/** Result returned by {@link ControllerCommissioner.establishPase}. */
+export interface EstablishPaseResult {
+    paseSession: NodeSession;
+    discoveryData?: DiscoveryData;
 }
 
 /**
@@ -128,7 +169,6 @@ export interface DiscoveryAndCommissioningOptions extends CommissioningOptions {
  */
 export interface ControllerCommissionerContext {
     peers: PeerSet;
-    scanners: ScannerSet;
     transports: ConnectionlessTransportSet;
     sessions: SessionManager;
     exchanges: ExchangeManager;
@@ -151,7 +191,6 @@ export class ControllerCommissioner {
     static [Environmental.create](env: Environment) {
         const instance = new ControllerCommissioner({
             peers: env.get(PeerSet),
-            scanners: env.get(ScannerSet),
             transports: env.get(ConnectionlessTransportSet),
             sessions: env.get(SessionManager),
             exchanges: env.get(ExchangeManager),
@@ -166,137 +205,101 @@ export class ControllerCommissioner {
      * Commission a previously discovered node.
      */
     async commission(options: LocatedNodeCommissioningOptions): Promise<PeerAddress> {
-        const { passcode, addresses, discoveryData, fabric, nodeId } = options;
+        const {
+            passcode,
+            addresses,
+            discoveryData,
+            fabric,
+            nodeId,
+            abort,
+            continueCommissioningAfterPase,
+            timeout = Seconds(30),
+        } = options;
 
-        // If a NodeId is set verify that this nodeId is not already used
-        if (nodeId !== undefined) {
-            this.#assertPeerAddress(fabric.addressOf(nodeId));
-        }
+        this.#assertRequestedNodeIdAvailable(fabric, nodeId);
 
-        // Prioritize UDP
-        addresses.sort(a => (a.type === "udp" ? -1 : 1));
+        // Each address becomes an independent candidate so that a credential failure on one does not
+        // cancel attempts on others.  UDP is prioritised within the sorted list.
+        const addressCandidates = this.#addressesToCandidates(addresses, discoveryData);
 
-        // Attempt a connection on each known address
-        let session: NodeSession | undefined;
-        for (const address of addresses) {
-            try {
-                session = await this.#initializePaseSecureChannel(address, passcode, discoveryData);
-            } catch (e) {
-                NoResponseTimeoutError.accept(e);
-                logger.warn(`Could not connect to ${ServerAddress.urlFor(address)}: ${e.message}`);
-            }
-        }
+        const { session } = await this.#establishPaseFromCandidates({
+            devices: addressCandidates,
+            timeout,
+            passcode,
+            retryFailureAsPeerCommunication: "Could not connect to device",
+            abort,
+        });
 
-        if (session === undefined) {
-            throw new NoResponseTimeoutError("Could not connect to device");
+        // Check with the caller whether to proceed.  In parallel commissioning this callback atomically
+        // determines the winner: the first call returns true (and fires the abort signal to stop others);
+        // any subsequent call from a later PASE returns false and we clean up this session.
+        if (continueCommissioningAfterPase !== undefined && !continueCommissioningAfterPase()) {
+            await session.initiateForceClose({
+                cause: new CommissioningError("PASE established but other device connected faster"),
+            });
+            throw new CommissioningError("Commissioning cancelled: another device was already successfully connected");
         }
 
         return await this.#commissionConnectedNode(session, options, discoveryData);
     }
 
     /**
-     * Discover and establish a PASE channel with a device.
+     * Establishes a PASE session with a known device without running a commissioning flow.
+     *
+     * All provided addresses are tried in parallel.  The first to complete PASE wins; the rest are cancelled
+     * via an abort signal.  A credential failure (wrong passcode) on any address immediately cancels all
+     * other in-flight attempts for this device.
      */
-    async discoverAndEstablishPase(
-        options: DiscoveryAndCommissioningOptions,
-    ): Promise<{ paseSession: NodeSession; discoveryData?: DiscoveryData }> {
-        const {
-            discovery: { timeout = Seconds(30) },
+    async establishPase(options: EstablishPaseOptions): Promise<EstablishPaseResult> {
+        const { addresses, discoveryData, passcode, timeout = Seconds(30), abort, continueAfterPase } = options;
+
+        const candidates = this.#addressesToCandidates(addresses, discoveryData);
+
+        const { session } = await this.#establishPaseFromCandidates({
+            devices: candidates,
+            timeout,
             passcode,
-        } = options;
+            retryFailureAsPeerCommunication: "Could not connect to device",
+            abort,
+        });
 
-        const commissionableDevice =
-            "commissionableDevice" in options.discovery ? options.discovery.commissionableDevice : undefined;
-        let {
-            discovery: { discoveryCapabilities = {}, knownAddress },
-        } = options;
-        let identifierData = "identifierData" in options.discovery ? options.discovery.identifierData : {};
-
-        if (
-            this.#context.scanners.hasScannerFor(ChannelType.UDP) &&
-            this.#context.transports.hasInterfaceFor(ChannelType.UDP, "::") !== undefined
-        ) {
-            discoveryCapabilities.onIpNetwork = true; // We always discover on network as defined by specs
-        }
-        if (commissionableDevice !== undefined) {
-            let { addresses } = commissionableDevice;
-            if (discoveryCapabilities.ble === true) {
-                discoveryCapabilities = { onIpNetwork: true, ble: addresses.some(address => address.type === "ble") };
-            } else if (discoveryCapabilities.onIpNetwork === true) {
-                // do not use BLE if not specified, even if existing
-                addresses = addresses.filter(address => address.type !== "ble");
-            }
-            addresses.sort(a => (a.type === "udp" ? -1 : 1)); // Sort addresses to use UDP first
-            knownAddress = addresses[0];
-            if ("instanceId" in commissionableDevice && commissionableDevice.instanceId !== undefined) {
-                // it is an UDP discovery
-                identifierData = { instanceId: commissionableDevice.instanceId as string };
-            } else {
-                identifierData = { longDiscriminator: commissionableDevice.D };
-            }
+        // Check with the caller whether to proceed with this session.  In parallel PASE scenarios this callback
+        // atomically determines the winner: the first call returns true; any subsequent call returns false and
+        // we clean up this session cleanly.
+        if (continueAfterPase !== undefined && !continueAfterPase()) {
+            await session.initiateForceClose({
+                cause: new CommissioningError("PASE established but another candidate already won"),
+            });
+            throw new CommissioningError("PASE cancelled: another candidate was already selected");
         }
 
-        const scannersToUse = this.#context.scanners.select(discoveryCapabilities);
-
-        logger.info(
-            `Connecting to device with identifier ${Diagnostic.json(identifierData)} and ${
-                scannersToUse.length
-            } scanners and knownAddress ${Diagnostic.json(knownAddress)}`,
-        );
-
-        // If we have a known address we try this first before we discover the device
-        let paseSession: NodeSession | undefined;
-        let discoveryData: DiscoveryData | undefined;
-
-        // If we have a last known address, try this first
-        if (knownAddress !== undefined) {
-            try {
-                paseSession = await this.#initializePaseSecureChannel(knownAddress, passcode);
-            } catch (error) {
-                NoResponseTimeoutError.accept(error);
-            }
-        }
-        if (paseSession === undefined) {
-            const discoveredDevices = await ControllerDiscovery.discoverDeviceAddressesByIdentifier(
-                scannersToUse,
-                identifierData,
-                timeout,
-            );
-
-            const { result } = await ControllerDiscovery.iterateServerAddresses(
-                discoveredDevices,
-                NoResponseTimeoutError,
-                async () =>
-                    scannersToUse.flatMap(scanner => scanner.getDiscoveredCommissionableDevices(identifierData)),
-                async (address, device) => {
-                    const channel = await this.#initializePaseSecureChannel(address, passcode, device);
-                    discoveryData = device;
-                    return channel;
-                },
-            );
-
-            // Pairing was successful, so store the address and assign the established secure channel
-            paseSession = result;
-        }
-
-        return { paseSession, discoveryData };
+        return { paseSession: session, discoveryData };
     }
 
-    /**
-     * Commission a node with discovery.
-     */
-    async commissionWithDiscovery(options: DiscoveryAndCommissioningOptions): Promise<PeerAddress> {
-        const { fabric, nodeId } = options;
-        // If a NodeId is set verify that this nodeId is not already used
-        if (nodeId !== undefined) {
-            this.#assertPeerAddress(fabric.addressOf(nodeId));
+    async #establishPaseFromCandidates(options: {
+        devices: CommissionableDevice[];
+        timeout: Duration;
+        passcode: number;
+        retryFailureAsPeerCommunication?: string;
+        abort?: AbortSignal;
+    }) {
+        try {
+            return await CommissioningConnection({
+                devices: options.devices,
+                timeout: options.timeout,
+                externalAbort: options.abort,
+                establishSession: (address, device, signal) =>
+                    this.#establishEphemeralNodeSession(address, options.passcode, device, signal),
+            });
+        } catch (error) {
+            if (
+                options.retryFailureAsPeerCommunication !== undefined &&
+                causedBy(error, PairRetransmissionLimitReachedError)
+            ) {
+                throw new PeerCommunicationError(options.retryFailureAsPeerCommunication);
+            }
+            throw error;
         }
-
-        // Establish PASE channel
-        const { paseSession, discoveryData } = await this.discoverAndEstablishPase(options);
-
-        // Commission the node
-        return await this.#commissionConnectedNode(paseSession, options, discoveryData);
     }
 
     /**
@@ -304,10 +307,11 @@ export class ControllerCommissioner {
      * If this not successful and throws an RetransmissionLimitReachedError the address is invalid or the passcode
      * is wrong.
      */
-    async #initializePaseSecureChannel(
+    async #establishEphemeralNodeSession(
         address: ServerAddress,
         passcode: number,
         device?: DiscoveryData,
+        signal?: AbortSignal,
     ): Promise<NodeSession> {
         let paseChannel: Channel<Bytes>;
         if (device !== undefined) {
@@ -329,7 +333,7 @@ export class ControllerCommissioner {
                         `IPv${isIpv6Address ? "6" : "4"} interface not initialized. Cannot use ${ip} for commissioning.`,
                     );
                 }
-                paseChannel = await paseInterface.openChannel(address);
+                paseChannel = await Abort.attempt(signal, paseInterface.openChannel(address));
                 break;
 
             case "ble":
@@ -339,8 +343,7 @@ export class ControllerCommissioner {
                         `BLE interface not initialized. Cannot use ${address.peripheralAddress} for commissioning.`,
                     );
                 }
-                // TODO Have a Timeout mechanism here for connections
-                paseChannel = await ble.openChannel(address);
+                paseChannel = await Abort.attempt(signal, ble.openChannel(address));
                 break;
 
             default:
@@ -371,27 +374,53 @@ export class ControllerCommissioner {
                 paseExchange,
                 paseChannel,
                 passcode,
+                { abort: signal },
             );
             unsecuredSession.detachChannel();
             return caseSession;
         } catch (e) {
             // Close the exchange and rethrow
-            if (e instanceof ChannelStatusResponseError) {
+            if (causedBy(e, ChannelStatusResponseError)) {
                 throw new NoResponseTimeoutError(
-                    `Establishing PASE channel failed with channel status response error ${e.message}`,
+                    `Establishing PASE channel failed with channel status response error ${asError(e).message}`,
                 );
             }
             throw e;
         } finally {
-            await unsecuredSession.initiateForceClose();
+            await unsecuredSession.initiateForceClose({
+                cause: new CommissioningTransitionError("PASE session has transitioned to CASE"),
+            });
         }
     }
 
     /** Validate if a Peer Address is already known and commissioned */
     #assertPeerAddress(address: PeerAddress) {
         if (this.#context.peers.has(address)) {
-            throw new NodeIdConflictError(`Node ID ${address.nodeId} is already commissioned and can not be reused.`);
+            throw new NodeIdConflictError(`Node ID ${address.nodeId} is already commissioned and can not be reused`);
         }
+    }
+
+    #assertRequestedNodeIdAvailable(fabric: Fabric, nodeId?: NodeId) {
+        if (nodeId !== undefined) {
+            this.#assertPeerAddress(fabric.addressOf(nodeId));
+        }
+    }
+
+    /**
+     * Maps a sorted list of addresses to synthetic `CommissionableDevice` candidates for use with
+     * {@link CommissioningConnection}.  Each address becomes its own candidate so that a credential failure
+     * on one does not cancel attempts on others, and the per-device abort logic works correctly even in the
+     * single-address case.
+     */
+    #addressesToCandidates(addresses: ServerAddress[], discoveryData?: DiscoveryData): CommissionableDevice[] {
+        const sorted = [...addresses].sort((a, b) => (a.type === "udp" ? -1 : b.type === "udp" ? 1 : 0));
+        return sorted.map((address, index) => ({
+            ...(discoveryData ?? {}),
+            addresses: [address],
+            deviceIdentifier: `known-address-${index}-${ServerAddress.urlFor(address)}`,
+            D: 0,
+            CM: 1,
+        }));
     }
 
     /** Finds an unused random Node-ID to use for commissioning if not already provided. */
@@ -415,7 +444,7 @@ export class ControllerCommissioner {
      * success.
      */
     async #commissionConnectedNode(
-        paseSession: NodeSession,
+        ephemeralSession: NodeSession,
         options: CommissioningOptions,
         discoveryData?: DiscoveryData,
     ): Promise<PeerAddress> {
@@ -423,10 +452,11 @@ export class ControllerCommissioner {
             fabric,
             finalizeCommissioning: performCaseCommissioning,
             commissioningFlowImpl = ControllerCommissioningFlow,
+            caseConnectionTiming,
         } = options;
 
         const commissioningOptions = {
-            regulatoryLocation: GeneralCommissioning.RegulatoryLocationType.Outdoor, // Set to the most restrictive if relevant
+            regulatoryLocation: GeneralCommissioning.RegulatoryLocationType.Outdoor, // Most restrictive default if not specified
             regulatoryCountryCode: "XX",
             ...options,
         };
@@ -461,17 +491,15 @@ export class ControllerCommissioner {
 
         // The pase session has actual negotiated parameters from the device. Use them over the discoveryData
         discoveryData = discoveryData ?? {};
-        discoveryData.SII = paseSession.parameters.idleInterval;
-        discoveryData.SAI = paseSession.parameters.activeInterval;
-        discoveryData.SAT = paseSession.parameters.activeThreshold;
+        discoveryData.SII = ephemeralSession.parameters.idleInterval;
+        discoveryData.SAI = ephemeralSession.parameters.activeInterval;
+        discoveryData.SAT = ephemeralSession.parameters.activeThreshold;
 
         const address = this.#determineAddress(fabric, commissioningOptions.nodeId);
-        logger.info(
-            `Start commissioning of node ${address.nodeId} into fabric ${fabric.fabricId} (index ${address.fabricIndex})`,
-        );
-        const exchangeProvider = new DedicatedChannelExchangeProvider(this.#context.exchanges, paseSession);
-        const commissioningManager = new commissioningFlowImpl(
-            // Use the created secure session to do the commissioning
+        logger.info(`Start commissioning of node ${address.toString()} into fabric ${fabric.fabricId}`);
+        const exchangeProvider = new DedicatedChannelExchangeProvider(this.#context.exchanges, ephemeralSession);
+
+        await using commissioner = new commissioningFlowImpl(
             new ClientInteraction({
                 environment: this.#context.environment,
                 exchangeProvider,
@@ -487,7 +515,12 @@ export class ControllerCommissioner {
                         commissioning flow the commissioning channel SHALL terminate after successful step 12 (trigger
                         joining of operational network at Commissionee).
                      */
-                    await paseSession.initiateClose(); // We reconnect using Case, so close PASE connection
+                    // We've reconnected using CASE so close the ephemeral node ID session
+                    await ephemeralSession.initiateForceClose({
+                        cause: new CommissioningTransitionError(
+                            "Commissioning session closed because node has now joined fabric",
+                        ),
+                    });
                 }
 
                 if (performCaseCommissioning !== undefined) {
@@ -495,39 +528,37 @@ export class ControllerCommissioner {
                     return;
                 }
 
-                // Look for the device broadcast over MDNS and do CASE pairing
-                await this.#context.peers.connect(address, {
-                    discoveryOptions: {
-                        discoveryType: NodeDiscoveryType.TimedDiscovery,
-                        timeout: Minutes(4),
-                        discoveryData,
-                    },
-                }); // Wait to find the operational device for the commissioning process
+                const peer = this.#context.peers.for(address);
+                peer.descriptor.discoveryData = discoveryData;
+                await peer.connect({ connectionTimeout: Minutes(4), timing: caseConnectionTiming });
 
-                // And we use a ClientInteraction backed Interaction client to finish the commissioning because
-                const exchangeProvider = await this.#context.peers.exchangeProviderFor(address);
                 return new ClientInteraction({
                     environment: this.#context.environment,
-                    exchangeProvider,
+                    exchangeProvider: peer.exchangeProvider,
                     address,
                 });
             },
         );
 
         try {
-            await commissioningManager.executeCommissioning();
+            await commissioner.executeCommissioning();
         } catch (error) {
             // We might have added data for an operational address that we need to cleanup
             await this.#context.peers.get(address)?.delete();
             throw error;
         } finally {
-            commissioningManager.close();
+            commissioner.close();
             /*
                 In concurrent connection commissioning flow the commissioning channel SHALL terminate after
                 successful step 15 (CommissioningComplete command invocation).
-                If PaseSecureMessageChannel is not already closed, we are in non-concurrent connection commissioning flow.
-                */
-            await paseSession.initiateClose(); // We are done, so close PASE session
+            */
+            // If the ephemeral session is not already closed, we are in concurrent connection commissioning flow.
+            // Close it now
+            await ephemeralSession.initiateForceClose({
+                cause: new CommissioningTransitionError(
+                    "Commissioning session closed because node has now joined fabric",
+                ),
+            });
         }
 
         return address;

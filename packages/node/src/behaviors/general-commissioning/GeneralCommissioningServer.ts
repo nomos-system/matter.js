@@ -1,16 +1,14 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import type { RemoteActorContext } from "#behavior/context/server/RemoteActorContext.js";
 import { AdministratorCommissioningServer } from "#behaviors/administrator-commissioning";
 import { BasicInformationServer } from "#behaviors/basic-information";
-import { AdministratorCommissioning } from "#clusters/administrator-commissioning";
-import { GeneralCommissioning } from "#clusters/general-commissioning";
-import { Diagnostic, hex, Logger, MatterFlowError, MaybePromise, Seconds } from "#general";
 import type { ServerNode } from "#node/ServerNode.js";
+import { Diagnostic, hex, Logger, MatterFlowError, MaybePromise, Seconds } from "@matter/general";
 import {
     assertRemoteActor,
     DeviceCommissioner,
@@ -19,7 +17,9 @@ import {
     NodeSession,
     SecureSession,
     SessionManager,
-} from "#protocol";
+} from "@matter/protocol";
+import { AdministratorCommissioning } from "@matter/types/clusters/administrator-commissioning";
+import { GeneralCommissioning } from "@matter/types/clusters/general-commissioning";
 import { GeneralCommissioningBehavior } from "./GeneralCommissioningBehavior.js";
 import { ServerNodeFailsafeContext } from "./ServerNodeFailsafeContext.js";
 

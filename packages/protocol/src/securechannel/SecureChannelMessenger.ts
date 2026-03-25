@@ -1,30 +1,51 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Diagnostic, Duration, MatterError, Seconds, UnexpectedDataError } from "#general";
-import { GeneralStatusCode, SecureChannelStatusCode, SecureMessageType, TlvSchema } from "#types";
+import { TransientPeerCommunicationError } from "#peer/PeerCommunicationError.js";
+import {
+    Bytes,
+    DataReader,
+    DataWriter,
+    Diagnostic,
+    Duration,
+    Endian,
+    Millis,
+    Seconds,
+    UnexpectedDataError,
+} from "@matter/general";
+import { GeneralStatusCode, SecureChannelStatusCode, SecureMessageType, TlvSchema, VendorId } from "@matter/types";
 import { Message } from "../codec/MessageCodec.js";
 import { ExchangeSendOptions, MessageExchange } from "../protocol/MessageExchange.js";
 import { SecureChannelStatusMessage } from "./SecureChannelStatusMessageSchema.js";
 
 /** Error base Class for all errors related to the status response messages. */
-export class ChannelStatusResponseError extends MatterError {
+export class ChannelStatusResponseError extends TransientPeerCommunicationError {
+    public busyDelay?: Duration;
     public constructor(
         message: string,
         public readonly generalStatusCode: GeneralStatusCode,
         public readonly protocolStatusCode: SecureChannelStatusCode,
+        public readonly vendorId?: VendorId,
+        public readonly protocolData?: Bytes,
     ) {
         super(
             `(${GeneralStatusCode[generalStatusCode]} (${generalStatusCode}) / ${SecureChannelStatusCode[protocolStatusCode]} (${protocolStatusCode})) ${message}`,
         );
+        if (
+            generalStatusCode === GeneralStatusCode.Busy &&
+            protocolStatusCode === SecureChannelStatusCode.Busy &&
+            protocolData?.byteLength === 2
+        ) {
+            this.busyDelay = Millis(new DataReader(protocolData, Endian.Little).readUInt16());
+        }
     }
 }
 
-/** This value is used by chip SDK when performance wise heavy crypto operations are expected. */
-export const EXPECTED_CRYPTO_PROCESSING_TIME = Seconds(30);
+/** Chip SDK uses this value when performance wise heavy crypto operations are expected. */
+export const EXPECTED_CRYPTO_PROCESSING_TIME = Seconds(35);
 
 /** This value is used by chip SDK when normal processing time is expected. */
 export const DEFAULT_NORMAL_PROCESSING_TIME = Seconds(2);
@@ -33,7 +54,7 @@ export class SecureChannelMessenger {
     #defaultExpectedProcessingTime: Duration;
 
     constructor(
-        protected readonly exchange: MessageExchange,
+        readonly exchange: MessageExchange,
         defaultExpectedProcessingTime = EXPECTED_CRYPTO_PROCESSING_TIME,
     ) {
         this.#defaultExpectedProcessingTime = defaultExpectedProcessingTime;
@@ -43,37 +64,30 @@ export class SecureChannelMessenger {
         return this.exchange.channel;
     }
 
-    async nextMessage(
-        expectedMessageType: number,
-        expectedProcessingTimeMs = this.#defaultExpectedProcessingTime,
-        expectedMessageInfo?: string,
-    ) {
-        return this.#nextMessage(expectedMessageType, expectedProcessingTimeMs, expectedMessageInfo);
-    }
-
-    async anyNextMessage(expectedMessageInfo: string, expectedProcessingTime = this.#defaultExpectedProcessingTime) {
-        return this.#nextMessage(undefined, expectedProcessingTime, expectedMessageInfo);
+    get via() {
+        return this.exchange.via;
     }
 
     /**
      * Waits for the next message and returns it.
      *
-     * When no expectedProcessingTimeMs is provided, the default value of EXPECTED_CRYPTO_PROCESSING_TIME_MS is used.
+     * {@link expectedProcessingTime} defaults to {@link EXPECTED_CRYPTO_PROCESSING_TIME}.
      */
-    async #nextMessage(
-        expectedMessageType?: number,
+    async nextMessage({
+        type,
         expectedProcessingTime = this.#defaultExpectedProcessingTime,
-        expectedMessageInfo?: string,
-    ) {
-        const message = await this.exchange.nextMessage({ expectedProcessingTime });
+        description,
+        abort,
+    }: SecureChannelMessenger.ReadOptions = {}) {
+        const message = await this.exchange.nextMessage({ expectedProcessingTime, abort });
         const messageType = message.payloadHeader.messageType;
-        if (expectedMessageType !== undefined && expectedMessageInfo === undefined) {
-            expectedMessageInfo = SecureMessageType[expectedMessageType];
+        if (type !== undefined && description === undefined) {
+            description = SecureMessageType[type];
         }
-        this.throwIfErrorStatusReport(message, expectedMessageInfo);
-        if (expectedMessageType !== undefined && messageType !== expectedMessageType)
+        this.throwIfErrorStatusReport(message, description);
+        if (type !== undefined && messageType !== type)
             throw new UnexpectedDataError(
-                `Received unexpected message type: ${messageType}, expected: ${expectedMessageType} (${expectedMessageInfo})`,
+                `Received unexpected message type: ${messageType}, expected: ${type} (${description})`,
             );
         return message;
     }
@@ -81,31 +95,30 @@ export class SecureChannelMessenger {
     /**
      * Waits for the next message and decodes it.
      *
-     * When no expectedProcessingTimeMs is provided, the default value of EXPECTED_CRYPTO_PROCESSING_TIME_MS is used.
+     * When no expectedProcessingTimeMs is provided, the default value of EXPECTED_CRYPTO_PROCESSING_TIME is used.
      */
-    async nextMessageDecoded<T>(
-        expectedMessageType: number,
-        schema: TlvSchema<T>,
-        expectedProcessingTime = this.#defaultExpectedProcessingTime,
-    ) {
-        return schema.decode((await this.nextMessage(expectedMessageType, expectedProcessingTime)).payload);
+    async nextMessageDecoded<T>(schema: TlvSchema<T>, options?: SecureChannelMessenger.ReadOptions) {
+        return schema.decode((await this.nextMessage(options)).payload);
     }
 
     /**
      * Waits for the next message and returns it.
      *
-     * When no expectedProcessingTimeMs is provided, the default value of EXPECTED_CRYPTO_PROCESSING_TIME_MS is used.
+     * When no expectedProcessingTimeMs is provided, the default value of EXPECTED_CRYPTO_PROCESSING_TIME is used.
      */
-    async waitForSuccess(expectedMessageInfo: string, expectedProcessingTime = this.#defaultExpectedProcessingTime) {
+    async waitForSuccess(options?: Omit<SecureChannelMessenger.ReadOptions, "type">) {
         // If the status is not Success, this would throw an Error.
-        await this.nextMessage(SecureMessageType.StatusReport, expectedProcessingTime, expectedMessageInfo);
+        await this.nextMessage({
+            ...options,
+            type: SecureMessageType.StatusReport,
+        });
     }
 
     /**
      * Sends a message of the given type with the given payload.
      *
      * If no ExchangeSendOptions are provided, the expectedProcessingTimeMs will be set to
-     * EXPECTED_CRYPTO_PROCESSING_TIME_MS.
+     * EXPECTED_CRYPTO_PROCESSING_TIME.
      */
     async send<T>(message: T, type: number, schema: TlvSchema<T>, options?: ExchangeSendOptions) {
         options = {
@@ -117,16 +130,31 @@ export class SecureChannelMessenger {
         return payload;
     }
 
-    sendError(code: SecureChannelStatusCode) {
-        return this.#sendStatusReport(GeneralStatusCode.Failure, code);
+    sendError(code: SecureChannelStatusCode, abort?: AbortSignal) {
+        return this.#sendStatusReport(GeneralStatusCode.Failure, code, abort);
     }
 
-    sendSuccess() {
-        return this.#sendStatusReport(GeneralStatusCode.Success, SecureChannelStatusCode.Success);
+    sendSuccess(abort?: AbortSignal) {
+        return this.#sendStatusReport(GeneralStatusCode.Success, SecureChannelStatusCode.Success, abort);
     }
 
-    sendCloseSession() {
-        return this.#sendStatusReport(GeneralStatusCode.Success, SecureChannelStatusCode.CloseSession, false);
+    sendBusy(minimumRetryInterval: Duration, abort?: AbortSignal) {
+        if (minimumRetryInterval <= 0) {
+            throw new Error("Busy minimum retry interval must be greater than 0ms");
+        }
+        const writer = new DataWriter(Endian.Little);
+        writer.writeUInt16(Math.min(minimumRetryInterval, 0xffff));
+        return this.#sendStatusReport(
+            GeneralStatusCode.Busy,
+            SecureChannelStatusCode.Busy,
+            abort,
+            undefined,
+            writer.toByteArray(),
+        );
+    }
+
+    sendCloseSession(abort?: AbortSignal) {
+        return this.#sendStatusReport(GeneralStatusCode.Success, SecureChannelStatusCode.CloseSession, abort, false);
     }
 
     get channelName() {
@@ -144,13 +172,16 @@ export class SecureChannelMessenger {
     async #sendStatusReport(
         generalStatus: GeneralStatusCode,
         protocolStatus: SecureChannelStatusCode,
+        abort?: AbortSignal,
         requiresAck?: boolean,
+        protocolData?: Bytes,
     ) {
         await this.exchange.send(
             SecureMessageType.StatusReport,
             SecureChannelStatusMessage.encode({
                 generalStatus,
                 protocolStatus,
+                protocolData,
             }),
             {
                 requiresAck,
@@ -158,6 +189,7 @@ export class SecureChannelMessenger {
                     generalStatus: GeneralStatusCode[generalStatus] ?? Diagnostic.hex(generalStatus),
                     protocolStatus: SecureChannelStatusCode[protocolStatus] ?? Diagnostic.hex(protocolStatus),
                 },
+                abort,
             },
         );
     }
@@ -169,12 +201,15 @@ export class SecureChannelMessenger {
         } = message;
         if (messageType !== SecureMessageType.StatusReport) return;
 
-        const { generalStatus, protocolId, protocolStatus } = SecureChannelStatusMessage.decode(payload);
+        const { generalStatus, protocolId, protocolStatus, vendorId, protocolData } =
+            SecureChannelStatusMessage.decode(payload);
         if (generalStatus !== GeneralStatusCode.Success) {
             throw new ChannelStatusResponseError(
                 `Received general error status for protocol ${protocolId}${logHint ? ` (${logHint})` : ""}`,
                 generalStatus,
                 protocolStatus,
+                vendorId,
+                protocolData,
             );
         }
         if (protocolStatus !== SecureChannelStatusCode.Success) {
@@ -184,5 +219,34 @@ export class SecureChannelMessenger {
                 protocolStatus,
             );
         }
+    }
+}
+
+export namespace SecureChannelMessenger {
+    /**
+     * Controls message read.
+     */
+    export interface ReadOptions {
+        /**
+         * The expected type of the message.
+         *
+         * The messenger throws an error if a message arrives that is not of this type.
+         */
+        type?: SecureMessageType;
+
+        /**
+         * Processing time used as input to timeout algorithms.
+         */
+        expectedProcessingTime?: Duration;
+
+        /**
+         * Description of read operation used in diagnostic messages.
+         */
+        description?: string;
+
+        /**
+         * Aborts the read.
+         */
+        abort?: AbortSignal;
     }
 }

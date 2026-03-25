@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { BasicInformationServer } from "#behaviors/basic-information";
+import { BasicInformationServer, validateBasicInfoAttributes } from "#behaviors/basic-information";
 import { DescriptorServer } from "#behaviors/descriptor";
 import { AggregatorEndpoint } from "#endpoints/aggregator";
-import { ImplementationError, Logger } from "#general";
+import { ImplementationError, Logger } from "@matter/general";
 import { BridgedDeviceBasicInformationBehavior } from "./BridgedDeviceBasicInformationBehavior.js";
 
 const logger = Logger.get("BridgedDeviceBasicInformationServer");
@@ -27,15 +27,13 @@ export class BridgedDeviceBasicInformationServer extends BridgedDeviceBasicInfor
         }
         this.reactTo(this.events.reachable$Changed, this.#emitReachableChange);
 
-        const { uniqueId, serialNumber } = this.state;
+        const { uniqueId } = this.state;
 
         if (uniqueId === undefined) {
             this.state.uniqueId = BasicInformationServer.createUniqueId();
         }
 
-        if (serialNumber !== undefined && uniqueId === this.state.serialNumber) {
-            logger.warn("uniqueId and serialNumber shall not be the same.");
-        }
+        validateBasicInfoAttributes(this.state, logger);
     }
 
     static override readonly schema = BasicInformationServer.enableUniqueIdPersistence(

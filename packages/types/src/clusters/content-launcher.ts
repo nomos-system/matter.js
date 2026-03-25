@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -19,7 +19,7 @@ import { MediaPlayback } from "./media-playback.js";
 import { StatusResponseError } from "../common/StatusResponseError.js";
 import { Status as GlobalStatus } from "../globals/Status.js";
 import { TlvBoolean } from "../tlv/TlvBoolean.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace ContentLauncher {
@@ -162,11 +162,11 @@ export namespace ContentLauncher {
         /**
          * This field shall indicate the color, in RGB or RGBA, used for styling different Video Player sections like
          * Logo, Watermark, etc. The value shall conform to the 6-digit or 8-digit format defined for CSS sRGB
-         * hexadecimal color notation [https://www.w3.org/TR/css-color-4/#hex-notation]. Examples:
+         * hexadecimal color notation. Examples:
          *
-         *   • #76DE19 for R=0x76, G=0xDE, B=0x19, A absent
+         *   - #76DE19 for R=0x76, G=0xDE, B=0x19, A absent
          *
-         *   • #76DE1980 for R=0x76, G=0xDE, B=0x19, A=0x80
+         *   - #76DE1980 for R=0x76, G=0xDE, B=0x19, A=0x80
          *
          * @see {@link MatterSpecification.v142.Cluster} § 6.7.5.9.2
          */
@@ -711,9 +711,9 @@ export namespace ContentLauncher {
         /**
          * This field shall indicate whether to automatically start playing content, where:
          *
-         *   • TRUE means best match should start playing automatically.
+         *   - TRUE means best match should start playing automatically.
          *
-         *   • FALSE means matches should be displayed on screen for user selection.
+         *   - FALSE means matches should be displayed on screen for user selection.
          *
          * @see {@link MatterSpecification.v142.Cluster} § 6.7.7.1.2
          */
@@ -810,8 +810,9 @@ export namespace ContentLauncher {
     export const ContentSearchComponent = MutableCluster.Component({
         commands: {
             /**
-             * Upon receipt, this shall launch the specified content with optional search criteria. This command returns
-             * a Launch Response.
+             * Upon receipt, this shall launch the specified content with optional search criteria.
+             *
+             * This command returns a Launch Response.
              *
              * @see {@link MatterSpecification.v142.Cluster} § 6.7.7.1
              */

@@ -1,16 +1,17 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import type { ElementEvent, Events } from "#behavior/Events.js";
 import { NetworkClient } from "#behavior/system/network/NetworkClient.js";
-import { camelize, Diagnostic, isObject, Logger } from "#general";
-import { ClusterModel, EventModel, MatterModel } from "#model";
 import type { ClientNode } from "#node/ClientNode.js";
-import type { ReadResult } from "#protocol";
-import type { ClusterId, EventId } from "#types";
+import { ChangeNotificationService } from "#node/integration/ChangeNotificationService.js";
+import { Diagnostic, isObject, Logger, Timestamp } from "@matter/general";
+import { EventModel, MatterModel } from "@matter/model";
+import type { ReadResult, Val } from "@matter/protocol";
+import type { ClusterId, EventId } from "@matter/types";
 import type { ClientStructure } from "./ClientStructure.js";
 
 const logger = Logger.get("ClientEventEmitter");
@@ -38,6 +39,8 @@ const nameCache = new WeakMap<
 const warnedForUnknown = new Set<ClusterId | `${ClusterId}-${EventId}`>();
 
 export function ClientEventEmitter(node: ClientNode, structure: ClientStructure) {
+    const changes = node.env.get(ChangeNotificationService);
+
     return emitClientEvent;
 
     async function emitClientEvent(occurrence: ReadResult.EventValue) {
@@ -46,32 +49,45 @@ export function ClientEventEmitter(node: ClientNode, structure: ClientStructure)
             return;
         }
 
-        const event = getEvent(node, occurrence, names.cluster, names.event);
-        if (event) {
-            await node.act(async agent => {
-                // Current ActionContext is not writable, could skip act() but meh, see TODO above
-                //agent.context.priority = occurrence.priority;
-                event.emit(occurrence.value, agent.context);
+        const target = getTarget(node, occurrence, names.cluster, names.event);
+        if (!target) {
+            return;
+        }
 
-                const network = agent.get(NetworkClient);
-                if (occurrence.number > network.state.maxEventNumber) {
-                    await agent.context.transaction.addResources(network);
-                    await agent.context.transaction.begin();
-                    network.state.maxEventNumber = occurrence.number;
-                    await agent.context.transaction.commit();
-                }
+        await node.act(async agent => {
+            // Current ActionContext is not writable, could skip act() but meh, see TODO above
+            //agent.context.priority = occurrence.priority;
+            target.event.emit(occurrence.value, agent.context);
+
+            const network = agent.get(NetworkClient);
+            if (occurrence.number > network.state.maxEventNumber) {
+                await agent.context.transaction.addResources(network);
+                await agent.context.transaction.begin();
+                network.state.maxEventNumber = occurrence.number;
+                await agent.context.transaction.commit();
+            }
+        });
+
+        const behavior = target.endpoint.behaviors.supported[names.cluster];
+        if (behavior) {
+            const { number, timestamp, priority, value } = occurrence;
+            changes.broadcastEvent(target.endpoint, behavior, target.event.schema as EventModel, {
+                number,
+                timestamp: timestamp as Timestamp,
+                priority,
+                payload: value as Val.Struct | undefined,
             });
         }
     }
 
-    function getEvent(node: ClientNode, occurrence: ReadResult.EventValue, clusterName: string, eventName: string) {
+    function getTarget(node: ClientNode, occurrence: ReadResult.EventValue, clusterName: string, eventName: string) {
         const {
             value,
             path: { endpointId },
         } = occurrence;
         const endpoint = structure.endpointFor(endpointId);
         if (endpoint === undefined) {
-            logger.warn(`Received event for unsupported endpoint #${endpointId} on ${node}`);
+            logger.warn(`Received event for unknown endpoint #${endpointId} on ${node}`);
             return;
         }
 
@@ -81,15 +97,19 @@ export function ClientEventEmitter(node: ClientNode, structure: ClientStructure)
             return;
         }
 
-        logger.info(
-            "Received event",
-            Diagnostic.strong(`${clusterName}.${eventName}`),
-            " on ",
-            Diagnostic.strong(endpoint.toString()),
-            Diagnostic.weak(isObject(value) ? Diagnostic.dict(value) : value),
-        );
+        const event = events[eventName];
+        if (event) {
+            logger.info(
+                "Received event",
+                Diagnostic.strong(`${clusterName}.${eventName}`),
+                " on ",
+                Diagnostic.strong(endpoint.toString()),
+                Diagnostic.weak(isObject(value) ? Diagnostic.dict(value) : value),
+            );
+            return { endpoint, event };
+        }
 
-        return events[eventName];
+        logger.warn(`Received unknown event ${clusterName}.${eventName} on ${endpoint}`);
     }
 }
 
@@ -105,7 +125,7 @@ function getNames(matter: MatterModel, { path: { clusterId, eventId } }: ReadRes
         return matterCache[key];
     }
 
-    const cluster = matter.get(ClusterModel, clusterId);
+    const cluster = matter.clusters(clusterId);
     if (cluster === undefined) {
         if (!warnedForUnknown.has(clusterId)) {
             logger.warn(`Ignoring events for unknown cluster #${clusterId}`);
@@ -115,7 +135,7 @@ function getNames(matter: MatterModel, { path: { clusterId, eventId } }: ReadRes
         return;
     }
 
-    const event = cluster.get(EventModel, eventId);
+    const event = cluster.events(eventId);
     if (event === undefined) {
         if (!warnedForUnknown.has(key)) {
             logger.warn(`Ignoring unknown event #${eventId} for ${cluster.name} cluster`);
@@ -125,5 +145,5 @@ function getNames(matter: MatterModel, { path: { clusterId, eventId } }: ReadRes
         return;
     }
 
-    return (matterCache[key] = { cluster: camelize(cluster.name), event: camelize(event.name) });
+    return (matterCache[key] = { cluster: cluster.propertyName, event: event.propertyName });
 }

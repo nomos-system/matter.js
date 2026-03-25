@@ -1,18 +1,22 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { ClusterBehavior } from "#behavior/cluster/ClusterBehavior.js";
 import { GlobalAttributeState } from "#behavior/cluster/ClusterState.js";
 import { ValidatedElements } from "#behavior/cluster/ValidatedElements.js";
+import { OnlineEvent } from "#behavior/Events.js";
+import type { Endpoint } from "#endpoint/Endpoint.js";
+import type { Agent } from "#endpoint/index.js";
 import type { SupportedElements } from "#endpoint/properties/Behaviors.js";
-import { camelize, ImplementationError } from "#general";
-import { ClusterModel, FeatureSet, FieldValue, Schema } from "#model";
-import { Val } from "#protocol";
-import { ClusterType, TlvNoResponse } from "#types";
+import { camelize, ImplementationError, MaybePromise, ObserverGroup } from "@matter/general";
+import { ClusterModel, FeatureSet, FieldValue, Schema } from "@matter/model";
+import { Val } from "@matter/protocol";
+import { ClusterType, CommandId, TlvNoResponse } from "@matter/types";
 import { Behavior } from "../Behavior.js";
+import { Datasource } from "../state/managed/Datasource.js";
 import { BehaviorBacking } from "./BehaviorBacking.js";
 
 const NoElements = new Set<string>();
@@ -24,6 +28,14 @@ export class FeatureMismatchError extends ImplementationError {}
  */
 export class ServerBehaviorBacking extends BehaviorBacking {
     #elements?: SupportedElements;
+    #suppressedChanges?: Set<string>;
+    #quietObservers?: ObserverGroup;
+
+    constructor(endpoint: Endpoint, type: Behavior.Type, store: Datasource.Store, options?: Behavior.Options) {
+        super(endpoint, type, store, options);
+
+        this.#configureEventSuppression();
+    }
 
     get elements() {
         return this.#elements;
@@ -69,7 +81,7 @@ export class ServerBehaviorBacking extends BehaviorBacking {
         }
 
         for (const member of this.type.supervisor.membersOf(schema)) {
-            const name = camelize(member.name);
+            const name = member.propertyName;
             if (state[name] === undefined) {
                 const referenced = FieldValue.referenced(member.default);
                 if (referenced) {
@@ -91,17 +103,24 @@ export class ServerBehaviorBacking extends BehaviorBacking {
 
         // Update attribute list
         const attributeDefs = behavior.cluster.attributes as ClusterType.ElementSet<ClusterType.Attribute>;
-        globals.attributeList = [...validation.attributes].map(name => attributeDefs[name].id);
+        globals.attributeList = [...validation.attributes].map(name => attributeDefs[name].id).sort((a, b) => a - b);
 
-        // Update accepted & generated command lists
+        // Update accepted & generated command lists.  Filter commands with CommandId.NONE (-1) as these are
+        // non-Matter methods not visible to the protocol layer
         const commandDefs = behavior.cluster.commands as ClusterType.ElementSet<ClusterType.Command>;
-        const commands = [...validation.commands].map(name => commandDefs[name]);
-        globals.acceptedCommandList = commands.map(command => command.requestId);
+        const commands = [...validation.commands]
+            .map(name => commandDefs[name])
+            .filter(command => command.requestId !== CommandId.NONE);
+        globals.acceptedCommandList = commands.map(command => command.requestId).sort((a, b) => a - b);
         globals.generatedCommandList = [
             ...new Set(
-                commands.filter(command => command.responseSchema !== TlvNoResponse).map(command => command.responseId),
+                commands
+                    .filter(
+                        command => command.responseSchema !== TlvNoResponse && command.responseId !== CommandId.NONE,
+                    )
+                    .map(command => command.responseId),
             ),
-        ];
+        ].sort((a, b) => a - b);
 
         // Validate the feature map
         const schema = Schema(behavior.type) as ClusterModel;
@@ -127,5 +146,67 @@ export class ServerBehaviorBacking extends BehaviorBacking {
             commands: validation.commands,
             events: validation.events,
         };
+    }
+
+    #onChange(props: string[]) {
+        if (this.#suppressedChanges) {
+            props = props.filter(name => !this.#suppressedChanges!.has(name));
+        }
+        this.broadcastChanges(props);
+    }
+
+    protected override get datasourceOptions(): Datasource.Options {
+        const options = super.datasourceOptions;
+        options.onChange = this.#onChange.bind(this);
+        return options;
+    }
+
+    override close(agent?: Agent): MaybePromise {
+        this.#quietObservers?.close();
+        return super.close(agent);
+    }
+
+    /**
+     * We handle events in bulk via {@link Datasource.Options.onChange}, but "quieter" and "changesOmitted" events
+     * require special handling.  Those we ignore in the change handler and instead report only when emitted by the
+     * corresponding {@link OnlineEvent}.
+     */
+    #configureEventSuppression() {
+        const { schema } = this.type;
+        if (!schema) {
+            return;
+        }
+
+        for (const property of schema.conformant.properties) {
+            const { changesOmitted, quieter } = property.effectiveQuality;
+
+            if (!changesOmitted && !quieter) {
+                continue;
+            }
+
+            const name = property.propertyName;
+
+            if (!this.#suppressedChanges) {
+                this.#suppressedChanges = new Set();
+            }
+            this.#suppressedChanges.add(name);
+
+            if (!quieter) {
+                continue;
+            }
+
+            const event = (this.events as unknown as Record<string, OnlineEvent>)[`${name}$Changed`];
+            if (event === undefined) {
+                continue;
+            }
+
+            if (event.isQuieter) {
+                if (!this.#quietObservers) {
+                    this.#quietObservers = new ObserverGroup();
+                }
+
+                this.#quietObservers.on(event.quiet, () => this.broadcastChanges([name]));
+            }
+        }
     }
 }

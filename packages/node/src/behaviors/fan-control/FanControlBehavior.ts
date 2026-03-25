@@ -1,15 +1,15 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { FanControl } from "#clusters/fan-control";
+import { FanControl } from "@matter/types/clusters/fan-control";
 import { ClusterBehavior } from "../../behavior/cluster/ClusterBehavior.js";
 import { FanControlInterface } from "./FanControlInterface.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 
 /**
  * FanControlBehavior is the base class for objects that support interaction with {@link FanControl.Cluster}.

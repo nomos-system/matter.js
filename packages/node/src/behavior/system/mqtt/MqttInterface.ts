@@ -1,9 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { StateStream } from "#node/integration/StateStream.js";
 import {
     Abort,
     asJson,
@@ -15,10 +16,9 @@ import {
     MqttService,
     Mutex,
     NotImplementedError,
-} from "#general";
-import { any, CommandModel, Metatype, Schema } from "#model";
-import { StateStream } from "#node/integration/StateStream.js";
-import { StatusResponse } from "#types";
+} from "@matter/general";
+import { any, CommandModel, Metatype, Schema } from "@matter/model";
+import { StatusResponse } from "@matter/types";
 import { Api } from "../remote/api/Api.js";
 import { ApiPath } from "../remote/api/ApiPath.js";
 import { Envelope } from "../remote/api/Envelope.js";
@@ -49,6 +49,8 @@ export class MqttInterface extends RemoteInterface {
         this.#endpoint = await this.env.get(MqttService).connect({
             address: this.address,
             environment: this.node.env,
+            certificate: this.certificate,
+            key: this.key,
 
             will: {
                 topic: this.root.at("status").toString(),

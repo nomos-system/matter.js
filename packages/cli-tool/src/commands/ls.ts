@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Domain } from "#domain.js";
-import { MaybePromise } from "#general";
 import { Location } from "#location.js";
+import { MaybePromise } from "@matter/general";
 import colors from "ansi-colors";
 import { Command } from "./command.js";
 

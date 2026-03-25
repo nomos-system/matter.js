@@ -1,13 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Bytes, Crypto, Diagnostic, PublicKey } from "#general";
-import { FabricId } from "#types";
+import { Bytes, CertificateError, Crypto, Diagnostic, PublicKey } from "@matter/general";
+import { FabricId } from "@matter/types";
 import { Certificate } from "./Certificate.js";
-import { CertificateError } from "./common.js";
 import { ExtensionKeyUsageSchema } from "./definitions/base.js";
 import { OperationalCertificate } from "./definitions/operational.js";
 import { OperationalBase } from "./OperationalBase.js";
@@ -60,7 +59,7 @@ export class Icac extends OperationalBase<OperationalCertificate.Icac> {
             issuer: { rcacId },
             extensions,
         } = this.cert;
-        const { fabricId } = subject;
+        const { fabricId, icacId } = subject;
         const { basicConstraints, extendedKeyUsage, subjectKeyIdentifier, authorityKeyIdentifier } = extensions;
 
         const { fabricId: rootFabricId } = root.cert.subject;
@@ -80,8 +79,6 @@ export class Icac extends OperationalBase<OperationalCertificate.Icac> {
             }
         }
 
-        // Ikea Dirigera hub provided an invalid ICAC, so disable these checks for now because also SDK seems to not check it
-        /*
         // The subject DN SHALL encode exactly one matter-icac-id attribute.
         if (icacId === undefined || Array.isArray(icacId)) {
             throw new CertificateError(`Invalid icacId in Ica certificate: ${Diagnostic.json(icacId)}`);
@@ -91,7 +88,6 @@ export class Icac extends OperationalBase<OperationalCertificate.Icac> {
         if ("rcacId" in subject) {
             throw new CertificateError(`Ica certificate must not contain an rcacId.`);
         }
-        */
 
         // The subject DN SHALL NOT encode any matter-noc-cat attribute.
         if ("caseAuthenticatedTags" in subject) {
@@ -166,6 +162,6 @@ export class Icac extends OperationalBase<OperationalCertificate.Icac> {
             );
         }
 
-        await crypto.verifyEcdsa(PublicKey(root.cert.ellipticCurvePublicKey), this.asUnsignedAsn1(), this.signature);
+        await crypto.verifyEcdsa(PublicKey(root.cert.ellipticCurvePublicKey), this.asUnsignedDer(), this.signature);
     }
 }

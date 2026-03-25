@@ -1,14 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { RootSupervisor } from "#behavior/supervision/RootSupervisor.js";
-import { camelize } from "#general";
-import type { Schema } from "#model";
-import { ClusterModel, Model, ValueModel, type FieldValue } from "#model";
-import { Val } from "#protocol";
+import type { Schema } from "@matter/model";
+import { ClusterModel, Model, ValueModel, type FieldValue } from "@matter/model";
+import { Val } from "@matter/protocol";
 import { Internal } from "./Internal.js";
 
 /**
@@ -44,7 +43,7 @@ export function NameResolver(
     // Read directly if the named property is supported by this schema.  This is not indexed which is fine because:
     //   1. The spec uses this very lightly as of 1.4, and
     //   2. We only do this once and only for schema that utilizes this feature
-    if (supervisor.membersOf(model as Schema).find(model => camelize(model.name, false) === name)) {
+    if (supervisor.membersOf(model as Schema).find(model => model.propertyName === name)) {
         return createDirectResolver();
     }
 

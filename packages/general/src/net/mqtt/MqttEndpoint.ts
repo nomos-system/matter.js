@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -37,6 +37,8 @@ export namespace MqttEndpoint {
 
     export interface ConnectionOptions {
         address: AppAddress.Definition;
+        certificate?: string;
+        key?: string;
         environment?: Environment;
         will?: Message;
         onUp?: (endpoint: MqttEndpoint) => MaybePromise<void>;

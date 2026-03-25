@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -9,27 +9,23 @@ import {
     Construction,
     Days,
     Diagnostic,
-    Directory,
     Duration,
     Environment,
+    Github,
     Logger,
-    Repo,
+    Pem,
     StorageContext,
+    StorageManager,
     StorageService,
     Time,
     Timer,
-} from "#general";
+} from "@matter/general";
 import { Paa } from "../certificate/kinds/AttestationCertificates.js";
 import { DclClient, MatterDclError } from "./DclClient.js";
+import { DclConfig, DclGithubConfig } from "./DclConfig.js";
 import { DclPkiRootCertificateSubjectReference } from "./DclRestApiTypes.js";
 
 const logger = Logger.get("DclCertificateService");
-
-// GitHub repository for development/test certificates
-const GITHUB_OWNER = "project-chip";
-const GITHUB_REPO = "connectedhomeip";
-const GITHUB_BRANCH = "master";
-const GITHUB_CERT_PATH = "credentials/development/paa-root-certs";
 
 /**
  * Implements a service to manage DCL root certificates as a singleton in the environment and so will be shared by
@@ -39,6 +35,7 @@ const GITHUB_CERT_PATH = "credentials/development/paa-root-certs";
  */
 export class DclCertificateService {
     readonly #construction: Construction<DclCertificateService>;
+    #storageManager?: StorageManager;
     #storage?: StorageContext;
     #certificateIndex = new Map<string, DclCertificateService.CertificateMetadata>();
     #updateTimer?: Timer;
@@ -47,11 +44,20 @@ export class DclCertificateService {
     #fetchPromise?: Promise<void>;
 
     constructor(environment: Environment, options: DclCertificateService.Options = {}) {
-        environment.set(DclCertificateService, this);
+        environment.root.set(DclCertificateService, this);
         this.#options = options;
+        logger.info(
+            "Initialize CertificateService",
+            Diagnostic.dict({
+                prod: options.dclConfig?.url ?? DclConfig.production.url,
+                test: options.fetchTestCertificates ? (options.testDclConfig?.url ?? DclConfig.test.url) : undefined,
+                github: options.fetchTestCertificates && options.fetchGithubCertificates ? "yes" : undefined,
+            }),
+        );
 
         this.#construction = Construction(this, async () => {
-            this.#storage = (await environment.get(StorageService).open("certificates")).createContext("root");
+            this.#storageManager = await environment.get(StorageService).open("certificates");
+            this.#storage = this.#storageManager.createContext("root");
             await this.#loadIndex(this.#storage);
             await this.update();
 
@@ -70,7 +76,7 @@ export class DclCertificateService {
     }
 
     /**
-     * Normalize subject key identifier to a consistent string format.
+     * Normalize the subject key identifier to a consistent string format.
      * Accepts either Bytes or string (with or without colons).
      */
     #normalizeSubjectKeyId(subjectKeyId: Bytes | string) {
@@ -115,7 +121,7 @@ export class DclCertificateService {
             throw new MatterDclError(`Certificate data not found in storage`, Diagnostic.dict({ skid: normalizedId }));
         }
 
-        return this.#derToPem(derBytes);
+        return Pem.encode(derBytes);
     }
 
     /**
@@ -144,8 +150,11 @@ export class DclCertificateService {
 
         try {
             const isProduction = options?.isProduction ?? true;
-            // Fetch root certificate list to find the certificate reference
-            const dclClient = new DclClient(isProduction);
+            // Fetch the root certificate list to find the certificate reference
+            const config = isProduction
+                ? (this.#options.dclConfig ?? DclConfig.production)
+                : (this.#options.testDclConfig ?? DclConfig.test);
+            const dclClient = new DclClient(config);
             const certRefs = await dclClient.fetchRootCertificateList(options);
 
             // Find the certificate reference with matching subject key ID (with colons for comparison)
@@ -212,9 +221,13 @@ export class DclCertificateService {
     /**
      * Close the service and stop all timers.
      */
-    close() {
+    async close() {
         this.#closed = true;
         this.#updateTimer?.stop();
+        if (this.#fetchPromise !== undefined) {
+            await this.#fetchPromise;
+        }
+        await this.#storageManager?.close();
     }
 
     /**
@@ -308,18 +321,19 @@ export class DclCertificateService {
                 return;
             }
 
-            // Also fetch certificates from GitHub
-            await this.#fetchGitHubCertificates(storage, force);
+            // Also fetch certificates from GitHub (unless explicitly disabled)
+            if (this.#options.fetchGithubCertificates !== false) {
+                await this.#fetchGitHubCertificates(storage, force);
+            }
         }
 
         if (this.#closed) {
             return;
         }
 
-        // Store the index if anything changed
+        await this.#saveIndex();
         const newCerts = this.#certificateIndex.size - initialSize;
         if (newCerts > 0) {
-            await this.#saveIndex();
             logger.info(`Downloaded and stored ${newCerts} new certificates (total: ${this.#certificateIndex.size})`);
         } else {
             logger.info(`All certificates up to date (${this.#certificateIndex.size} total)`);
@@ -331,7 +345,10 @@ export class DclCertificateService {
         const environment = isProduction ? "production" : "test";
         logger.debug(`Fetching PAA certificates from DCL (${environment})`);
 
-        const dclClient = new DclClient(isProduction);
+        const config = isProduction
+            ? (this.#options.dclConfig ?? DclConfig.production)
+            : (this.#options.testDclConfig ?? DclConfig.test);
+        const dclClient = new DclClient(config);
         const certRefs = await dclClient.fetchRootCertificateList(this.#options);
         logger.debug(`Found ${certRefs.length} ${environment} root certificates in DCL`);
 
@@ -370,7 +387,20 @@ export class DclCertificateService {
 
             // Check if certificate already exists before fetching details (skip check if force is true)
             if (!force && this.#certificateIndex.has(normalizedSubjectKeyId)) {
-                logger.debug(`Certificate already exists, skipping`, Diagnostic.dict({ skid: normalizedSubjectKeyId }));
+                // If the existing certificate was stored as test but is now found in production DCL, upgrade it
+                const existing = this.#certificateIndex.get(normalizedSubjectKeyId)!;
+                if (isProduction && !existing.isProduction) {
+                    existing.isProduction = true;
+                    logger.debug(
+                        `Upgraded certificate to production`,
+                        Diagnostic.dict({ skid: normalizedSubjectKeyId }),
+                    );
+                } else {
+                    logger.debug(
+                        `Certificate already exists, skipping`,
+                        Diagnostic.dict({ skid: normalizedSubjectKeyId }),
+                    );
+                }
                 return;
             }
 
@@ -390,7 +420,7 @@ export class DclCertificateService {
                 const subjectKeyId = this.#normalizeSubjectKeyId(cert.subjectKeyId);
 
                 // Convert PEM to DER
-                const derBytes = this.#pemToDer(cert.pemCert);
+                const derBytes = Pem.asDer(cert.pemCert);
 
                 const { subject, subjectAsText, serialNumber, vid, isRoot } = cert;
                 // Store certificate with metadata (using normalized ID without colons)
@@ -419,8 +449,9 @@ export class DclCertificateService {
             logger.debug("Fetching development certificates from GitHub");
 
             // Create GitHub repo client with timeout option
-            const repo = new Repo(GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH, this.#options);
-            const certDir = await repo.cd(GITHUB_CERT_PATH);
+            const { owner, repo, branch, certPath } = this.#options.githubConfig ?? DclGithubConfig.defaults;
+            const repoClient = new Github.Repo(owner, repo, branch, this.#options);
+            const certDir = await repoClient.cd(certPath);
 
             // List files in the certificate directory
             const files = await certDir.ls();
@@ -443,7 +474,12 @@ export class DclCertificateService {
     /**
      * Fetch a single certificate from GitHub by filename.
      */
-    async #fetchGitHubCertificate(storage: StorageContext, certDir: Directory, filename: string, force: boolean) {
+    async #fetchGitHubCertificate(
+        storage: StorageContext,
+        certDir: Github.Directory,
+        filename: string,
+        force: boolean,
+    ) {
         try {
             // Download DER certificate directly as binary using GitHub client
             const derBytes = await certDir.getBinary(filename);
@@ -487,43 +523,17 @@ export class DclCertificateService {
         derBytes: Bytes,
         metadata: DclCertificateService.CertificateMetadata,
     ) {
+        // Never downgrade isProduction from true to false
+        const existing = this.#certificateIndex.get(subjectKeyId);
+        if (existing?.isProduction && !metadata.isProduction) {
+            metadata = { ...metadata, isProduction: true };
+        }
+
         // Store the DER certificate
         await storage.set(subjectKeyId, derBytes);
 
         // Add entry to certificate index
         this.#certificateIndex.set(subjectKeyId, metadata);
-    }
-
-    /**
-     * Convert PEM certificate to DER format.
-     * Strips the PEM header/footer and decodes from base64.
-     */
-    #pemToDer(pemCert: string): Bytes {
-        // Remove PEM header and footer lines
-        const base64 = pemCert
-            .replace(/-----BEGIN CERTIFICATE-----/g, "")
-            .replace(/-----END CERTIFICATE-----/g, "")
-            .replace(/\r?\n/g, "")
-            .trim();
-
-        return Bytes.fromBase64(base64);
-    }
-
-    /**
-     * Convert DER certificate to PEM format.
-     * Encodes to base64 and adds PEM header/footer.
-     */
-    #derToPem(derBytes: Bytes): string {
-        const base64 = Bytes.toBase64(derBytes);
-        const lines: string[] = ["-----BEGIN CERTIFICATE-----"];
-
-        // Split base64 into 64-character lines
-        for (let i = 0; i < base64.length; i += 64) {
-            lines.push(base64.slice(i, i + 64));
-        }
-
-        lines.push("-----END CERTIFICATE-----");
-        return lines.join("\n");
     }
 }
 
@@ -531,6 +541,9 @@ export namespace DclCertificateService {
     export interface Options {
         /** Whether to fetch test certificates in addition to production ones. Default is false. */
         fetchTestCertificates?: boolean;
+
+        /** Whether to fetch development certificates from GitHub. Default is true (when fetchTestCertificates is true). */
+        fetchGithubCertificates?: boolean;
 
         /**
          * Interval for periodic certificate updates. Default is 1 day. Set to null to disable automatic certificate
@@ -540,6 +553,15 @@ export namespace DclCertificateService {
 
         /** Timeout for DCL requests. Default is 5s. */
         timeout?: Duration;
+
+        /** DCL config for production endpoint. Defaults to DclConfig.production. */
+        dclConfig?: DclConfig;
+
+        /** DCL config for test endpoint. Defaults to DclConfig.test. */
+        testDclConfig?: DclConfig;
+
+        /** GitHub config for development certificates. Programmatic override only. Defaults to DclGithubConfig.defaults. */
+        githubConfig?: DclGithubConfig;
     }
 
     /**

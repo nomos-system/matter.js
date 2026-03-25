@@ -1,41 +1,56 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { InteractionClient } from "#cluster/client/InteractionClient.js";
-import { OperationalCredentials } from "#clusters";
+import { InteractionClient, NodeDiscoveryType } from "#cluster/client/InteractionClient.js";
 import {
+    ChannelType,
     ClassExtends,
     Crypto,
     Duration,
     Environment,
     ImplementationError,
     Logger,
+    MatterError,
     Minutes,
+    Observable,
+    ObserverGroup,
+    Seconds,
+    ServerAddress,
     UnexpectedDataError,
-} from "#general";
-import { Endpoint, NetworkClient, ServerNode, SoftwareUpdateManager } from "#node";
+} from "@matter/general";
+import {
+    ChangeNotificationService,
+    ClusterState,
+    ContinuousDiscovery,
+    Endpoint,
+    NetworkClient,
+    Node,
+    RemoteDescriptor,
+    ServerNode,
+    SoftwareUpdateManager,
+} from "@matter/node";
+import { OperationalCredentialsClient } from "@matter/node/behaviors/operational-credentials";
+import { OtaProviderEndpoint } from "@matter/node/endpoints/ota-provider";
 import {
     ActiveSessionInformation,
     Ble,
     CertificateAuthority,
     CommissionableDevice,
     CommissionableDeviceIdentifiers,
+    CommissioningOptions,
     ControllerCommissioningFlow,
-    ControllerDiscovery,
-    DiscoveryAndCommissioningOptions,
     DiscoveryData,
     Fabric,
     FabricGroups,
-    NodeDiscoveryType,
     NodeSession,
     PeerSet,
     SecureSession,
     Session,
     SessionManager,
-} from "#protocol";
+} from "@matter/protocol";
 import {
     CaseAuthenticatedTag,
     DiscoveryCapabilitiesBitmap,
@@ -44,12 +59,65 @@ import {
     NodeId,
     TypeFromPartialBitSchema,
     VendorId,
-} from "#types";
-import { OtaProviderEndpoint } from "@matter/node/endpoints";
+} from "@matter/types";
+import { BasicInformation } from "@matter/types/clusters/basic-information";
 import { CommissioningControllerNodeOptions, NodeStates, PairedNode } from "./device/PairedNode.js";
 import { MatterController, PairedNodeDetails } from "./MatterController.js";
 
 const logger = new Logger("CommissioningController");
+
+// Shared helpers used by both CommissioningController and PaseCommissioner.
+
+function discoveryKey(
+    identifierData: CommissionableDeviceIdentifiers,
+    discoveryCapabilities: TypeFromPartialBitSchema<typeof DiscoveryCapabilitiesBitmap> | undefined,
+) {
+    return JSON.stringify({ id: identifierData, caps: discoveryCapabilities });
+}
+
+export async function runDiscoverCommissionableDevices(
+    node: ServerNode,
+    identifierData: CommissionableDeviceIdentifiers,
+    discoveryCapabilities: TypeFromPartialBitSchema<typeof DiscoveryCapabilitiesBitmap> | undefined,
+    discoveredCallback: ((device: CommissionableDevice) => void) | undefined,
+    timeout: Duration,
+    activeDiscoveries: Map<string, ContinuousDiscovery>,
+): Promise<CommissionableDevice[]> {
+    const key = discoveryKey(identifierData, discoveryCapabilities);
+    const discovery = new ContinuousDiscovery(node, {
+        ...identifierData,
+        timeout,
+        scannerFilter: discoveryCapabilities
+            ? (s): boolean => s.type === ChannelType.UDP || (!!discoveryCapabilities.ble && s.type === ChannelType.BLE)
+            : undefined,
+    });
+    const results = Array<CommissionableDevice>();
+    const seen = new Set<string>();
+    discovery.discovered.on(discoveredNode => {
+        const device = RemoteDescriptor.fromLongForm(discoveredNode.state.commissioning) as CommissionableDevice;
+        const id = device.deviceIdentifier ?? JSON.stringify(discoveredNode.state.commissioning.addresses ?? []);
+        if (!seen.has(id)) {
+            seen.add(id);
+            results.push(device);
+            discoveredCallback?.(device);
+        }
+    });
+    activeDiscoveries.set(key, discovery);
+    try {
+        await discovery;
+        return results;
+    } finally {
+        activeDiscoveries.delete(key);
+    }
+}
+
+export function cancelDiscoverCommissionableDevices(
+    identifierData: CommissionableDeviceIdentifiers,
+    discoveryCapabilities: TypeFromPartialBitSchema<typeof DiscoveryCapabilitiesBitmap> | undefined,
+    activeDiscoveries: Map<string, ContinuousDiscovery>,
+) {
+    activeDiscoveries.get(discoveryKey(identifierData, discoveryCapabilities))?.stop();
+}
 
 // TODO how to enhance "getting devices" as API? Or is getDevices() enough?
 // TODO decline using setRoot*Cluster
@@ -147,7 +215,53 @@ export type CommissioningControllerOptions = CommissioningControllerNodeOptions 
      * to download OTA updates.
      */
     readonly enableOtaProvider?: boolean;
+
+    /**
+     * Options for the BasicInformation cluster of the Controller node.
+     * The vendorId is determined by the adminVendorId!
+     */
+    readonly basicInformation?: Partial<Omit<ClusterState.PropertiesOf<typeof BasicInformation.Complete>, "vendorId">>;
 };
+
+/**
+ * Configuration for performing discovery + commissioning in one step.
+ * Kept in the legacy matter.js package; new code uses {@link CommissioningDiscovery.Options} directly.
+ */
+export interface DiscoveryAndCommissioningOptions extends CommissioningOptions {
+    /** Discovery related options. */
+    discovery: (
+        | {
+              /**
+               * Device identifiers (Short or Long Discriminator, Product/Vendor-Ids, Device-type or a pre-discovered
+               * instance Id, or "nothing" to discover all commissionable matter devices) to use for discovery.
+               * If the property commissionableDevice is provided this property is ignored.
+               */
+              identifierData: CommissionableDeviceIdentifiers;
+          }
+        | {
+              /**
+               * Commissionable device object returned by a discovery run.
+               * If this property is provided then identifierData and knownAddress are ignored.
+               */
+              commissionableDevice: CommissionableDevice;
+          }
+    ) & {
+        /**
+         * Discovery capabilities to use for discovery. These are included in the QR code normally and defined if BLE
+         * is supported for initial commissioning.
+         */
+        discoveryCapabilities?: TypeFromPartialBitSchema<typeof DiscoveryCapabilitiesBitmap>;
+
+        /**
+         * Known address of the device to use for discovery. if this is set this will be tried first before discovering
+         * the device.
+         */
+        knownAddress?: ServerAddress;
+
+        /** Timeout in seconds for the discovery process. Default: 30 seconds */
+        timeout?: Duration;
+    };
+}
 
 /** Options needed to commission a new node */
 export type NodeCommissioningOptions = CommissioningControllerNodeOptions & {
@@ -167,12 +281,16 @@ export class CommissioningController {
     readonly #options: CommissioningControllerOptions;
     #id: string;
 
-    #environment: Environment; // Set when new API was initialized correctly
+    #environment: Environment; // Set when the new API was initialized correctly
 
     #controllerInstance?: MatterController;
     readonly #initializedNodes = new Map<string, PairedNode>();
+    readonly #nodeChangeObservers = new Map<string, Observable<[changes: ChangeNotificationService.Change]>>();
     readonly #nodeUpdateLabelHandlers = new Map<NodeId, (nodeState: NodeStates) => Promise<void>>();
-    readonly #sessionDisconnectedHandler = new Map<NodeId, () => Promise<void>>();
+    readonly #observers = new ObserverGroup();
+    readonly #endpointsToPeers = new WeakMap<Endpoint, string>();
+    // Keyed by JSON-stringified identifier so cancelCommissionableDeviceDiscovery() can look up active discoveries.
+    readonly #activeDiscoveries = new Map<string, ContinuousDiscovery>();
 
     /**
      * Creates a new CommissioningController instance
@@ -251,6 +369,7 @@ export class CommissioningController {
             rootCertificateAuthority,
             rootFabric,
             enableOtaProvider,
+            basicInformation = {},
         } = this.#options;
 
         // Initialize the Storage in a compatible way for the legacy API and new style for new API
@@ -272,22 +391,26 @@ export class CommissioningController {
             localPort,
             environment: this.#environment,
             enableOtaProvider,
+            basicInformation,
         });
 
         if (!controller.ble) {
             logger.warn("BLE is not enabled on this platform");
         }
 
-        // Start all peers, they should normally not connect automatically
-        // TODO adjust/remove once we have this in Peers
+        // Sync state for all peers before start
         for (const peer of controller.node.peers) {
             if (!peer.lifecycle.isCommissioned) {
                 continue;
             }
-            if (peer.stateOf(NetworkClient).isDisabled) {
-                await peer.enable();
-            } else {
-                await peer.start();
+            const networkState = peer.stateOf(NetworkClient);
+            const desiredDisabled = this.#options.autoConnect === false;
+            if (desiredDisabled !== networkState.isDisabled) {
+                await peer.set({ network: { isDisabled: desiredDisabled } });
+            }
+            const desiredAutoSubscribe = !!this.#options.autoSubscribe;
+            if (desiredAutoSubscribe !== networkState.autoSubscribe) {
+                await peer.set({ network: { autoSubscribe: desiredAutoSubscribe } });
             }
         }
 
@@ -309,7 +432,7 @@ export class CommissioningController {
 
         const { connectNodeAfterCommissioning = true, commissioningFlowImpl } = commissionOptions ?? {};
 
-        // IF OTA is enabled on the controller and no custom OTA provider location is provided, set it to the controller node
+        // If OTA is enabled on the controller and no custom OTA provider location is provided, set it to the controller node
         if (
             this.#options.enableOtaProvider &&
             nodeOptions.commissioning.otaUpdateProviderLocation === undefined &&
@@ -321,15 +444,13 @@ export class CommissioningController {
             };
         }
 
-        const nodeId = await controller.commission(nodeOptions, { commissioningFlowImpl });
+        // Apply controller-level caseAuthenticatedTags default when not specified per-node
+        const nodeOptionsWithDefaults: NodeCommissioningOptions = {
+            caseAuthenticatedTags: this.#options.caseAuthenticatedTags,
+            ...nodeOptions,
+        };
 
-        // Ensure we have the peer added to the node because commissioning runs aside for now
-        await controller.node.peers.forAddress(controller.fabric.addressOf(nodeId), {
-            network: {
-                autoSubscribe: false,
-                caseAuthenticatedTags: nodeOptions.caseAuthenticatedTags ?? this.#options.caseAuthenticatedTags,
-            },
-        });
+        const nodeId = await controller.commission(nodeOptionsWithDefaults, { commissioningFlowImpl });
 
         if (connectNodeAfterCommissioning) {
             const node = await this.#createPairedNode(nodeId, {
@@ -388,6 +509,18 @@ export class CommissioningController {
     async removeNode(nodeId: NodeId, tryDecommissioning = true) {
         const controller = this.#assertControllerIsStarted();
         const node = this.#pairedNodeForNodeId(nodeId);
+
+        // If we have a node already remove the endpoints, they are lazily re-added if decommissioning fails
+        if (node !== undefined) {
+            try {
+                for (const ep of node.node.endpoints) {
+                    this.#endpointsToPeers.delete(ep);
+                }
+            } catch (error) {
+                MatterError.accept(error);
+            }
+        }
+
         let decommissionSuccess = false;
         if (tryDecommissioning) {
             try {
@@ -406,6 +539,7 @@ export class CommissioningController {
         await controller.removeNode(nodeId);
         if (node !== undefined) {
             this.#initializedNodes.delete(node.id);
+            this.#nodeChangeObservers.delete(node.id);
         }
     }
 
@@ -417,8 +551,12 @@ export class CommissioningController {
         }
         await this.#controllerInstance?.disconnect(nodeId);
         if (force) {
-            const peer = this.node.env.get(PeerSet).for(this.fabric.addressOf(nodeId));
-            await peer.delete();
+            const address = this.fabric.addressOf(nodeId);
+            const peer = this.node.env.get(PeerSet).for(address);
+            await peer.disconnect();
+            for (const session of [...this.node.env.get(SessionManager).sessionsFor(address)]) {
+                await session.initiateClose();
+            }
         }
     }
 
@@ -466,17 +604,19 @@ export class CommissioningController {
             return existingNode;
         }
 
-        logger.info(`Connecting to node ${nodeId}...`);
         const peerAddress = controller.fabric.addressOf(nodeId);
+        logger.info("Connecting to node", peerAddress, "...");
 
         let peerNode = this.node.peers.get(peerAddress);
         if (peerNode === undefined) {
             if (allowUnknownNode) {
                 peerNode = await this.node.peers.forAddress(peerAddress, {
-                    network: {
-                        autoSubscribe: false,
+                    commissioning: {
                         caseAuthenticatedTags:
                             connectOptions?.caseAuthenticatedTags ?? this.#options.caseAuthenticatedTags,
+                    },
+                    network: {
+                        autoSubscribe: false,
                     },
                 });
             } else {
@@ -490,6 +630,21 @@ export class CommissioningController {
             await peerNode.start();
         }
 
+        // Configure NetworkClient subscription parameters from connectOptions so that when
+        // PairedNode later activates autoSubscribe, NetworkClient uses the right intervals
+        const { subscribeMinIntervalFloorSeconds, subscribeMaxIntervalCeilingSeconds } = connectOptions ?? {};
+        if (subscribeMinIntervalFloorSeconds !== undefined || subscribeMaxIntervalCeilingSeconds !== undefined) {
+            const subscriptionOptions: Record<string, unknown> = {};
+            if (subscribeMinIntervalFloorSeconds !== undefined) {
+                subscriptionOptions.minIntervalFloor = Seconds(subscribeMinIntervalFloorSeconds);
+            }
+            if (subscribeMaxIntervalCeilingSeconds !== undefined) {
+                subscriptionOptions.maxIntervalCeiling = Seconds(subscribeMaxIntervalCeilingSeconds);
+            }
+            await peerNode.set({ network: { defaultSubscription: subscriptionOptions } });
+        }
+
+        const changeObserver = new Observable<[changes: ChangeNotificationService.Change]>();
         const { caseAuthenticatedTags = this.#options.caseAuthenticatedTags } = connectOptions ?? {};
         const pairedNode = await PairedNode.create(
             nodeId,
@@ -500,17 +655,12 @@ export class CommissioningController {
                 forcedConnection: false,
                 caseAuthenticatedTags,
             }), // First, connect without discovery to the last known address
-            async (discoveryType?: NodeDiscoveryType) =>
-                void (await controller.connect(nodeId, {
-                    discoveryOptions: { discoveryType },
-                    allowUnknownPeer: false,
-                    caseAuthenticatedTags,
-                })),
-            handler => this.#sessionDisconnectedHandler.set(nodeId, handler),
-            controller.sessions,
+            controller.peers.for(peerAddress),
             this.#crypto,
+            changeObserver,
         );
         this.#initializedNodes.set(peerNode.id, pairedNode);
+        this.#nodeChangeObservers.set(peerNode.id, changeObserver);
 
         return pairedNode;
     }
@@ -602,6 +752,7 @@ export class CommissioningController {
      * You can use "start()" to restart the controller after closing it.
      */
     async close() {
+        this.#observers.close();
         for (const node of this.#initializedNodes.values()) {
             node.close();
         }
@@ -609,6 +760,7 @@ export class CommissioningController {
 
         this.#controllerInstance = undefined;
         this.#initializedNodes.clear();
+        this.#nodeChangeObservers.clear();
         this.#ipv4Disabled = undefined;
         this.#started = false;
     }
@@ -654,21 +806,32 @@ export class CommissioningController {
 
         await this.#controllerInstance.start();
 
-        this.#controllerInstance.node.env.get(SessionManager).sessions.deleted.on(session => {
-            if (!session.isSecure) {
-                return;
-            }
-            const { peerNodeId } = session;
-            logger.info(`Session for peer node ${peerNodeId} disconnected ...`);
-            const handler = this.#sessionDisconnectedHandler.get(peerNodeId);
-            if (handler !== undefined) {
-                handler().catch(error => logger.warn(`Error while handling session disconnect: ${error}`));
-            }
-        });
+        const changeNotifications = this.#controllerInstance.node.env.get(ChangeNotificationService);
+        this.#observers.on(changeNotifications.change, this.#handleNodeChange.bind(this));
 
         if (this.#options.autoConnect !== false && this.#controllerInstance.isCommissioned()) {
             await this.connect();
         }
+    }
+
+    #handleNodeChange(changes: ChangeNotificationService.Change) {
+        const { endpoint } = changes;
+        let peerNodeId = this.#endpointsToPeers.get(endpoint);
+        if (peerNodeId === undefined) {
+            try {
+                peerNodeId = Node.forEndpoint(endpoint).id;
+                this.#endpointsToPeers.set(endpoint, peerNodeId);
+            } catch (error) {
+                // If the node cannot be determined for any reason, accept the error and ignore the change
+                ImplementationError.accept(error);
+                return;
+            }
+        }
+        const changeHandler = this.#nodeChangeObservers.get(peerNodeId);
+        if (changeHandler === undefined) {
+            return;
+        }
+        changeHandler.emit(changes);
     }
 
     /**
@@ -678,10 +841,7 @@ export class CommissioningController {
         identifierData: CommissionableDeviceIdentifiers,
         discoveryCapabilities?: TypeFromPartialBitSchema<typeof DiscoveryCapabilitiesBitmap>,
     ) {
-        const controller = this.#assertControllerIsStarted();
-        controller
-            .collectScanners(discoveryCapabilities)
-            .forEach(scanner => ControllerDiscovery.cancelCommissionableDeviceDiscovery(scanner, identifierData));
+        cancelDiscoverCommissionableDevices(identifierData, discoveryCapabilities, this.#activeDiscoveries);
     }
 
     /**
@@ -695,12 +855,13 @@ export class CommissioningController {
         discoveredCallback?: (device: CommissionableDevice) => void,
         timeout = Minutes(15),
     ) {
-        const controller = this.#assertControllerIsStarted();
-        return await ControllerDiscovery.discoverCommissionableDevices(
-            controller.collectScanners(discoveryCapabilities),
-            timeout,
+        return runDiscoverCommissionableDevices(
+            this.node as ServerNode,
             identifierData,
+            discoveryCapabilities,
             discoveredCallback,
+            timeout,
+            this.#activeDiscoveries,
         );
     }
 
@@ -729,22 +890,26 @@ export class CommissioningController {
         if (node === undefined) {
             throw new ImplementationError(`Node ${nodeId} is not connected!`);
         }
-        const operationalCredentialsCluster = node.getRootClusterClient(OperationalCredentials.Cluster);
-        if (operationalCredentialsCluster === undefined) {
+        if (!node.node.behaviors.has(OperationalCredentialsClient)) {
             throw new UnexpectedDataError(`Node ${nodeId}: Operational Credentials Cluster not available!`);
         }
-        const fabrics = await operationalCredentialsCluster.getFabricsAttribute(false, true);
+        let fabrics = node.node.stateOf(OperationalCredentialsClient).fabrics;
         if (fabrics.length !== 1) {
-            logger.info(`Invalid fabrics returned from node ${nodeId}.`, fabrics);
-            return;
+            const ownFabricId = node.node.stateOf(OperationalCredentialsClient).currentFabricIndex;
+            fabrics = fabrics.filter(fabric => fabric.fabricIndex === ownFabricId);
+            if (fabrics.length !== 1) {
+                logger.info(`Invalid fabrics returned from node ${nodeId}.`, fabrics);
+                return;
+            }
         }
         const label = controller.fabricConfig.label;
         const fabric = fabrics[0];
         if (fabric.label !== label) {
             logger.info(
-                `Node ${nodeId}: Fabric label "${fabric.label}" does not match requested admin fabric Label "${label}". Updating...`,
+                this.fabric.addressOf(nodeId),
+                `Fabric label "${fabric.label}" does not match requested admin fabric Label "${label}". Updating...`,
             );
-            await operationalCredentialsCluster.updateFabricLabel({
+            await node.node.commandsOf(OperationalCredentialsClient).updateFabricLabel({
                 label,
                 fabricIndex: fabric.fabricIndex,
             });
@@ -774,12 +939,16 @@ export class CommissioningController {
             }
             if (!node.remoteInitializationDone) {
                 // Node not online and was also not yet initialized, means update happens
-                // automatically when node connects
-                logger.info(`Node ${node.nodeId} is offline. Fabric label will be updated on next connection.`);
+                // automatically when the node connects
+                logger.info(
+                    this.fabric.addressOf(node.nodeId),
+                    `Node is offline. Fabric label will be updated on next connection.`,
+                );
                 return;
             }
             logger.info(
-                `Node ${node.nodeId} is reconnecting. Delaying fabric label update to when node is back online.`,
+                this.fabric.addressOf(node.nodeId),
+                `Node is reconnecting. Delaying fabric label update to when node is back online.`,
             );
 
             // If no update handler is registered, register one

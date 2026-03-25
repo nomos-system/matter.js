@@ -1,14 +1,16 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Datasource } from "#behavior/state/managed/Datasource.js";
-import { InternalError, MaybePromise, Transaction } from "#general";
-import { Val } from "#protocol";
-import type { ClientEndpointStore } from "./ClientEndpointStore.js";
-import type { RemoteWriteParticipant } from "./RemoteWriteParticipant.js";
+import { InternalError, MaybePromise, Transaction } from "@matter/general";
+import { Val } from "@matter/protocol";
+import { EndpointNumber } from "@matter/types";
+import type { LocalWriter } from "./LocalWriter.js";
+import { RemoteWriteParticipant } from "./RemoteWriteParticipant.js";
+import type { RemoteWriter } from "./RemoteWriter.js";
 
 /**
  * The default implementation of {@link Datasource.ExternallyMutableStore}.
@@ -27,11 +29,9 @@ export interface DatasourceCache extends Datasource.ExternallyMutableStore {
     erase(): MaybePromise<void>;
 }
 
-export function DatasourceCache(
-    store: ClientEndpointStore,
-    behaviorId: string,
-    initialValues: Val.Struct | undefined,
-): DatasourceCache {
+export function DatasourceCache(options: DatasourceCache.Options): DatasourceCache {
+    const { writer, endpointNumber, behaviorId, initialValues } = options;
+
     let version = initialValues?.[DatasourceCache.VERSION_KEY] as number;
     if (typeof version !== "number") {
         version = Datasource.UNKNOWN_VERSION;
@@ -41,16 +41,22 @@ export function DatasourceCache(
         initialValues,
 
         async set(transaction: Transaction, values: Val.Struct) {
-            const participant = store.participantFor(transaction) as RemoteWriteParticipant;
-            participant.set(store.number, behaviorId, values);
+            let participant = transaction.getParticipant(writer);
+            if (participant === undefined) {
+                participant = new RemoteWriteParticipant(writer);
+                transaction.addParticipants(participant);
+            }
+            (participant as RemoteWriteParticipant).set(endpointNumber, behaviorId, values);
         },
 
-        async externalSet(values: Val.Struct) {
-            if (typeof values[DatasourceCache.VERSION_KEY] === "number") {
-                version = values[DatasourceCache.VERSION_KEY];
+        async externalSet(values: Val.StructMap) {
+            const versionVal = values.get(DatasourceCache.VERSION_KEY);
+            if (typeof versionVal === "number") {
+                version = versionVal;
             }
 
-            await store.set({ [behaviorId]: values });
+            const valuesStruct = Object.fromEntries(values) as Val.Struct;
+            await options.localWriter?.persist(endpointNumber, behaviorId, valuesStruct);
 
             if (this.externalChangeListener) {
                 await this.externalChangeListener(values);
@@ -58,7 +64,7 @@ export function DatasourceCache(
                 if (!this.initialValues) {
                     this.initialValues = {};
                 }
-                Object.assign(this.initialValues, values);
+                Object.assign(this.initialValues, valuesStruct);
             }
         },
 
@@ -81,7 +87,7 @@ export function DatasourceCache(
         },
 
         async erase() {
-            await store.eraseStoreForBehavior(behaviorId);
+            await options.localWriter?.erase(endpointNumber, behaviorId);
         },
     };
 }
@@ -93,4 +99,12 @@ export namespace DatasourceCache {
      * This conveys the version to the {@link Datasource}.
      */
     export const VERSION_KEY = "__version__";
+
+    export interface Options {
+        writer: RemoteWriter;
+        endpointNumber: EndpointNumber;
+        behaviorId: string;
+        initialValues?: Val.Struct;
+        localWriter?: LocalWriter;
+    }
 }

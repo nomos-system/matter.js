@@ -1,9 +1,9 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export { Base64, DerCodec, DerKey, DnsCodec, type DerNode } from "#general";
+export { Base64, DerCodec, DnsCodec, type DerNode } from "@matter/general";
 export * from "./BtpCodec.js";
 export * from "./MessageCodec.js";

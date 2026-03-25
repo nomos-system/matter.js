@@ -1,14 +1,14 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import type { Subscribe } from "#action/request/Subscribe.js";
 import type { ActiveSubscription } from "#action/response/SubscribeResult.js";
-import { Abort, decamelize, Diagnostic, Lifetime, Logger } from "#general";
 import type { SubscriptionId } from "#interaction/Subscription.js";
 import type { PeerAddress } from "#peer/PeerAddress.js";
+import { Abort, decamelize, Diagnostic, Lifetime, Logger } from "@matter/general";
 import type { ClientSubscribe } from "./ClientSubscribe.js";
 
 const logger = Logger.get("ClientSubscription");

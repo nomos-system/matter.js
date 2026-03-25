@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Bytes, Diagnostic, Logger } from "#general";
-import { BLE_MATTER_SERVICE_UUID_SHORT } from "#protocol";
+import { Bytes, Diagnostic, Logger } from "@matter/general";
 import { require } from "@matter/nodejs-ble/require";
+import { BLE_MATTER_SERVICE_UUID_SHORT } from "@matter/protocol";
 import type { Noble, Peripheral } from "@stoprocent/noble";
 import { platform } from "node:process";
 import { BleOptions } from "./NodeJsBle.js";
@@ -124,7 +124,7 @@ export class NobleBleClient {
         );
 
         if (!peripheral.connectable) {
-            logger.info(`Peripheral ${address} is not connectable ... ignoring`);
+            logger.debug(`Peripheral ${address} is not connectable ... ignoring`);
             return;
         }
         const matterServiceData = peripheral.advertisement.serviceData.find(

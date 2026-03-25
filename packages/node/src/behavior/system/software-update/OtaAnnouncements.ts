@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -8,42 +8,75 @@ import { CommissioningClient } from "#behavior/system/commissioning/Commissionin
 import { NetworkClient } from "#behavior/system/network/NetworkClient.js";
 import { BasicInformationClient } from "#behaviors/basic-information";
 import { OtaSoftwareUpdateRequestorClient } from "#behaviors/ota-software-update-requestor";
-import { OtaSoftwareUpdateRequestor } from "#clusters/ota-software-update-requestor";
 import { Endpoint } from "#endpoint/Endpoint.js";
-import { Duration, Hours, isDeepEqual, Logger, MatterError, Millis, Minutes, Seconds, Time, Timer } from "#general";
 import type { ClientNode } from "#node/ClientNode.js";
 import { Node } from "#node/Node.js";
 import type { ServerNode } from "#node/ServerNode.js";
-import { Fabric, PeerAddress, Write } from "#protocol";
-import { EndpointNumber } from "#types";
+import {
+    Duration,
+    Hours,
+    isDeepEqual,
+    Logger,
+    MatterError,
+    Millis,
+    Minutes,
+    Seconds,
+    Time,
+    Timer,
+} from "@matter/general";
+import { Fabric, PeerAddress, Write, WriteResult } from "@matter/protocol";
+import { EndpointNumber, FabricIndex, NodeId, VendorId } from "@matter/types";
+import { OtaSoftwareUpdateRequestor } from "@matter/types/clusters/ota-software-update-requestor";
 
 const logger = new Logger("OTAAnnouncements");
 
 export class OtaAnnouncements {
     #announcementQueue = new Array<PeerAddress>();
-    #announcementTimer: Timer;
+    #announcementTimer?: Timer;
     #announcementDelayTimer: Timer;
-    #ownFabric: Fabric;
+    #ownNodeId: NodeId;
+    #ownFabricIndex: FabricIndex;
+    #ownVendorId: VendorId;
     #node: ServerNode;
     #otaProviderEndpoint: EndpointNumber;
-    #announcementInterval: Duration;
+    #announcementInterval?: Duration;
     #currentAnnouncementPromise?: Promise<void>;
 
-    constructor(endpoint: Endpoint, ownFabric: Fabric, interval: Duration) {
+    constructor(endpoint: Endpoint, ownFabric: Fabric) {
         this.#node = Node.forEndpoint(endpoint) as ServerNode;
-        this.#ownFabric = ownFabric;
+        this.#ownNodeId = ownFabric.rootNodeId;
+        this.#ownFabricIndex = ownFabric.fabricIndex;
+        this.#ownVendorId = ownFabric.rootVendorId;
         this.#otaProviderEndpoint = endpoint.number;
-        if (interval < Hours(24)) {
-            logger.warn("Announcements interval is too short, consider increasing it to at least 24 hours.");
-            interval = Hours(24);
-        }
-        // The daily start time should have a random jitter of + >= 60s, so just increase the time randomly a bit
-        this.#announcementInterval = Millis(interval + Seconds(Math.floor(Math.random() * 120) + 60));
 
         // When announcing to multiple nodes, min 1s pause between, let's do some more, but no need for random
         this.#announcementDelayTimer = Time.getTimer("OTA Node announcement delay", Seconds(10), () =>
             this.#processQueueEntry(),
         );
+    }
+
+    /**
+     * Set the interval to a time value or undefined to disable announcements
+     */
+    set interval(interval: Duration | undefined) {
+        if (interval === undefined) {
+            this.#announcementInterval = undefined;
+            this.#announcementTimer?.stop();
+            this.#announcementTimer = undefined;
+            return;
+        }
+
+        if (interval < Hours(24)) {
+            logger.warn("Announcements interval is too short, consider increasing it to at least 24 hours.");
+            interval = Hours(24);
+        }
+        if (interval === this.#announcementInterval) {
+            return;
+        }
+        // The daily start time should have a random jitter of + >= 60s, so just increase the time randomly a bit
+        this.#announcementInterval = Millis(interval + Seconds(Math.floor(Math.random() * 120) + 60));
+
+        this.#announcementTimer?.stop();
 
         const initialDelay = Millis(Seconds(Math.floor(Math.random() * 300)) + Minutes(10));
         logger.debug(`Initial OTA announcement delay is ${Duration.format(initialDelay)}`);
@@ -53,7 +86,10 @@ export class OtaAnnouncements {
     }
 
     #initializeAnnouncements() {
-        this.#announcementTimer.stop();
+        if (this.#announcementInterval === undefined) {
+            return;
+        }
+        this.#announcementTimer?.stop();
         this.#announcementTimer = Time.getTimer("OTA All Nodes announcement timer", this.#announcementInterval, () =>
             this.#queueAllPeers(),
         );
@@ -61,6 +97,9 @@ export class OtaAnnouncements {
     }
 
     #queueAllPeers() {
+        if (this.#announcementTimer === undefined) {
+            return;
+        }
         this.#announcementTimer.stop();
         for (const peer of this.#node.peers) {
             if (!peer.lifecycle.isCommissioned || !peer.lifecycle.isOnline) {
@@ -77,6 +116,9 @@ export class OtaAnnouncements {
 
     // Queue a peer because processing is delayed and better to check /get peer anew when we process it
     #queuePeer(peerAddress: PeerAddress) {
+        if (this.#announcementTimer === undefined) {
+            return;
+        }
         this.#announcementQueue.push(peerAddress);
         logger.debug("Queued peer", peerAddress, "for OTA announcement;", this.#announcementQueue.length, "queued");
         if (this.#announcementQueue.length > 0 && !this.#announcementTimer.isRunning) {
@@ -124,13 +166,13 @@ export class OtaAnnouncements {
         }
 
         const consideredOtaProviderRecord = {
-            providerNodeId: this.#ownFabric.rootNodeId,
+            providerNodeId: this.#ownNodeId,
             endpoint: this.#otaProviderEndpoint,
-            fabricIndex: this.#ownFabric.fabricIndex,
+            fabricIndex: this.#ownFabricIndex,
         };
         const existingOtaProviderRecord = otaEndpoint
             .stateOf(OtaSoftwareUpdateRequestorClient)
-            .defaultOtaProviders.filter(({ fabricIndex }) => fabricIndex === this.#ownFabric.fabricIndex)[0];
+            .defaultOtaProviders.filter(({ fabricIndex }) => fabricIndex === this.#ownFabricIndex)[0];
 
         // Check and update the default OTA provider entry and add/update it
         if (
@@ -139,16 +181,19 @@ export class OtaAnnouncements {
         ) {
             try {
                 // Fabric scoped attribute, so we just overwrite our value
-                await peer.interaction.write(
-                    Write(
-                        Write.Attribute({
-                            endpoint: otaEndpoint.number,
-                            cluster: OtaSoftwareUpdateRequestor.Complete,
-                            attributes: ["defaultOtaProviders"],
-                            value: [consideredOtaProviderRecord],
-                        }),
+                WriteResult.assertSuccess(
+                    await peer.interaction.write(
+                        Write(
+                            Write.Attribute({
+                                endpoint: otaEndpoint.number,
+                                cluster: OtaSoftwareUpdateRequestor.Complete,
+                                attributes: ["defaultOtaProviders"],
+                                value: [consideredOtaProviderRecord],
+                            }),
+                        ),
                     ),
                 );
+
                 logger.debug(
                     `${existingOtaProviderRecord === undefined ? "Added" : "Updated"} default OTA provider for`,
                     peerAddress,
@@ -184,14 +229,22 @@ export class OtaAnnouncements {
             peer.behaviors.internalsOf(NetworkClient).activeSubscription === undefined
         ) {
             // Node is disabled or not connected via an active subscription
-            logger.debug(`Node`, (peerAddress ?? peer.id).toString(), ` is currently not applicable for OTA updates`);
+            logger.info(
+                `Node`,
+                (peerAddress ?? peer.id).toString(),
+                `is currently not in a state where it is applicable for OTA updates (not subscribed)`,
+            );
             return;
         }
 
         const otaEndpoint = this.#findOtaRequestorEndpointOn(peer);
         if (otaEndpoint === undefined) {
             // Node has no OtaSoftwareUpdateRequestor cluster, so we cannot notify it about updates
-            logger.debug(`Node`, (peerAddress ?? peer.id).toString(), ` does not support OTA updates`);
+            logger.debug(
+                `Node`,
+                (peerAddress ?? peer.id).toString(),
+                ` does not support OTA updates (no OTA requestor cluster found)`,
+            );
             return;
         }
 
@@ -216,9 +269,9 @@ export class OtaAnnouncements {
         try {
             // Find the endpoint with Requestor behavior
             await endpoint.commandsOf(OtaSoftwareUpdateRequestorClient).announceOtaProvider({
-                providerNodeId: this.#ownFabric.rootNodeId,
-                vendorId: this.#ownFabric.rootVendorId,
-                fabricIndex: this.#ownFabric.fabricIndex,
+                providerNodeId: this.#ownNodeId,
+                vendorId: this.#ownVendorId,
+                fabricIndex: this.#ownFabricIndex,
                 announcementReason,
                 endpoint: this.#otaProviderEndpoint,
             });
@@ -232,7 +285,7 @@ export class OtaAnnouncements {
     }
 
     async close() {
-        this.#announcementTimer.stop();
+        this.#announcementTimer?.stop();
         this.#announcementDelayTimer.stop();
         if (this.#currentAnnouncementPromise !== undefined) {
             await this.#currentAnnouncementPromise;

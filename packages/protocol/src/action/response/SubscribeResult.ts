@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { MaybePromise } from "#general";
-import { SubscribeResponse } from "#types";
+import { MaybePromise } from "@matter/general";
+import { SubscribeResponse } from "@matter/types";
 
 export type SubscribeResult = Promise<ActiveSubscription>;
 

@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { BasicInformationCluster } from "#clusters/basic-information";
 import { OnOffLightDevice } from "#devices/on-off-light";
-import { Read } from "#protocol";
-import { AttributeId, ClusterId, EndpointNumber, StatusCode } from "#types";
+import { Read } from "@matter/protocol";
+import { AttributeId, ClusterId, EndpointNumber, StatusCode } from "@matter/types";
+import { BasicInformationCluster } from "@matter/types/clusters/basic-information";
 import { MockServerNode } from "./mock-server-node.js";
 import { countAttrs, readAttr, readAttrRaw } from "./read-helpers.js";
 

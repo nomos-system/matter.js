@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -8,14 +8,20 @@ import { ValueSupervisor } from "#behavior/supervision/ValueSupervisor.js";
 import { CommissioningServer } from "#behavior/system/commissioning/CommissioningServer.js";
 import { ProductDescriptionServer } from "#behavior/system/product-description/ProductDescriptionServer.js";
 import { AccessControlServer } from "#behaviors/access-control";
-import { OperationalCredentials } from "#clusters/operational-credentials";
 import { Endpoint } from "#endpoint/Endpoint.js";
-import { Crypto, CryptoVerifyError, Logger, MatterFlowError, MaybePromise, UnexpectedDataError } from "#general";
-import { AccessLevel } from "#model";
 import type { Node } from "#node/Node.js";
 import {
-    assertRemoteActor,
     CertificateError,
+    Crypto,
+    CryptoVerifyError,
+    Logger,
+    MatterFlowError,
+    MaybePromise,
+    UnexpectedDataError,
+} from "@matter/general";
+import { AccessLevel } from "@matter/model";
+import {
+    assertRemoteActor,
     DeviceCertification,
     DeviceCommissioner,
     Fabric,
@@ -28,14 +34,14 @@ import {
     TlvAttestation,
     TlvCertSigningRequest,
     Val,
-} from "#protocol";
+} from "@matter/protocol";
 import {
     Command,
     FabricIndex,
-    NodeId,
     StatusCode,
     StatusResponse,
     StatusResponseError,
+    SubjectId,
     TlvBoolean,
     TlvByteString,
     TlvField,
@@ -43,7 +49,8 @@ import {
     TlvOptionalField,
     ValidationError,
     VendorId,
-} from "#types";
+} from "@matter/types";
+import { OperationalCredentials } from "@matter/types/clusters/operational-credentials";
 import { OperationalCredentialsBehavior } from "./OperationalCredentialsBehavior.js";
 import { VendorIdVerification } from "./VendorIdVerification.js";
 
@@ -304,7 +311,7 @@ export class OperationalCredentialsServer extends OperationalCredentialsBehavior
         //  accessing fabric.
 
         logger.info(
-            `addNoc success, adminVendorId ${adminVendorId}, caseAdminSubject ${NodeId.strOf(caseAdminSubject)}`,
+            `addNoc success, adminVendorId ${adminVendorId}, caseAdminSubject ${SubjectId.strOf(caseAdminSubject)}`,
         );
 
         return {
@@ -364,6 +371,9 @@ export class OperationalCredentialsServer extends OperationalCredentialsBehavior
 
             // update FabricManager and Resumption records but leave the current session intact
             await timedOp.replaceFabric(updatedFabric);
+
+            // close all sessions found to the old fabric and just leave the one with this exchange open to deliver response
+            await timedOp.associatedFabric.replaced(this.context.exchange);
 
             return {
                 statusCode: OperationalCredentials.NodeOperationalCertStatus.Ok,

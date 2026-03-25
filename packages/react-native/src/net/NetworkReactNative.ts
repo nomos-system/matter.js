@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 import dgram from "react-native-udp";
@@ -32,7 +32,7 @@ import {
     onSameNetwork,
     UdpChannel,
     UdpChannelOptions,
-} from "#general";
+} from "@matter/general";
 import { fetch as fetchNetworkInfo } from "@react-native-community/netinfo";
 import { UdpChannelReactNative } from "./UdpChannelReactNative.js";
 
@@ -113,7 +113,7 @@ export class NetworkReactNative extends Network {
 
     private static readonly netInterfaces = new AsyncCache<string | undefined>(
         "Network interface",
-        (ip: string) => this.getNetInterfaceForRemoveAddress(ip),
+        (ip: string) => this.getNetInterfaceForRemoteAddress(ip),
         Minutes(5),
     );
 
@@ -121,7 +121,7 @@ export class NetworkReactNative extends Network {
         await NetworkReactNative.netInterfaces.close();
     }
 
-    private static async getNetInterfaceForRemoveAddress(ip: string) {
+    private static async getNetInterfaceForRemoteAddress(ip: string) {
         if (ip.includes("%")) {
             // IPv6 address with scope
             return ip.split("%")[1];

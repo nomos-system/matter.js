@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Endpoint } from "#endpoint/Endpoint.js";
 import { AggregatorEndpoint } from "#endpoints/aggregator";
-import { FabricManager } from "#protocol";
-import { FabricIndex } from "#types";
+import { FabricManager } from "@matter/protocol";
+import { FabricIndex } from "@matter/types";
 import { MockServerNode } from "../node/mock-server-node.js";
 import { CommissioningHelper, interaction } from "../node/node-helpers.js";
 import { BridgedLightDevice, createBridge } from "./bridge-helpers.js";

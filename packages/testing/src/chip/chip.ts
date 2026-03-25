@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { globSync } from "#tools";
+import { globSync } from "@matter/tools";
 import { Subject } from "../device/subject.js";
 import { Test } from "../device/test.js";
 import type { Container } from "../docker/container.js";

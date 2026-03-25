@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -22,9 +22,15 @@ import "./duration.js";
 import "./ElectricalPowerMeasurementOverrides.js";
 import "./epoch-s.js";
 import "./epoch-us.js";
+import "./FanControl.js";
 import "./GroupKeyManagementOverrides.js";
 import "./GroupsOverrides.js";
+import "./hwadr.js";
 import "./IlluminanceMeasurementOverrides.js";
+import "./ipadr.js";
+import "./ipv4adr.js";
+import "./ipv6adr.js";
+import "./ipv6pre.js";
 import "./LevelControlOverrides.js";
 import "./LocalizationConfigurationOverrides.js";
 import "./ModeBaseOverrides.js";

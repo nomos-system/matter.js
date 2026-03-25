@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { MaybePromise } from "#general";
-import { MediaPlayback } from "#clusters/media-playback";
+import { MaybePromise } from "@matter/general";
+import { MediaPlayback } from "@matter/types/clusters/media-playback";
 
 export namespace MediaPlaybackInterface {
     export interface Base {
@@ -22,7 +22,9 @@ export namespace MediaPlaybackInterface {
         play(): MaybePromise<MediaPlayback.PlaybackResponse>;
 
         /**
-         * This command is used to pause playback of the media. Upon receipt, this shall pause playback of the media.
+         * This command is used to pause playback of the media.
+         *
+         * Upon receipt, this shall pause playback of the media.
          *
          * @see {@link MatterSpecification.v142.Cluster} § 6.10.7.2
          */
@@ -39,8 +41,9 @@ export namespace MediaPlaybackInterface {
         stop(): MaybePromise<MediaPlayback.PlaybackResponse>;
 
         /**
-         * This command is used to start playback of the media from the beginning. Upon receipt, this shall Start Over
-         * with the current media playback item.
+         * This command is used to start playback of the media from the beginning.
+         *
+         * Upon receipt, this shall Start Over with the current media playback item.
          *
          * @see {@link MatterSpecification.v142.Cluster} § 6.10.7.4
          */

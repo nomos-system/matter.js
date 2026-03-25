@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { MaybePromise } from "#general";
-import { ThreadNetworkDirectory } from "#clusters/thread-network-directory";
+import { MaybePromise } from "@matter/general";
+import { ThreadNetworkDirectory } from "@matter/types/clusters/thread-network-directory";
 
 export namespace ThreadNetworkDirectoryInterface {
     export interface Base {

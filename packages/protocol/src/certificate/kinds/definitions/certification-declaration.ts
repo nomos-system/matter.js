@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 import {
@@ -14,7 +14,7 @@ import {
     TlvUInt32,
     TlvUInt8,
     TlvVendorId,
-} from "#types";
+} from "@matter/types";
 
 /** Definitions for Matter Certification Declaration */
 export namespace CertificationDeclaration {

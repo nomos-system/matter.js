@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -10,7 +10,7 @@ import { MutableCluster } from "../cluster/mutation/MutableCluster.js";
 import { Attribute } from "../cluster/Cluster.js";
 import { TlvArray } from "../tlv/TlvArray.js";
 import { Label } from "./label.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace FixedLabel {
@@ -36,10 +36,10 @@ export namespace FixedLabel {
      *
      * Examples:
      *
-     *   • A bridge can use this to indicate grouping of bridged devices. For example: All bridged devices whose
+     *   - A bridge can use this to indicate grouping of bridged devices. For example: All bridged devices whose
      *     endpoints have an entry in their LabelList "room":"bedroom 2" are in the same (bed)room.
      *
-     *   • A manufacturer can use this to identify a characteristic of an endpoint. For example to identify the
+     *   - A manufacturer can use this to identify a characteristic of an endpoint. For example to identify the
      *     endpoints of a luminaire, one pointing up, the other pointing down, one of the endpoints would have a
      *     LabelList entry "orientation":"up" while the other would have "orientation":"down". Using such indication,
      *     the user interface of a Node controlling this luminaire knows which of the endpoints is which of the lights.

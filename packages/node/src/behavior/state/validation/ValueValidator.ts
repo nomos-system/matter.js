@@ -1,14 +1,14 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { camelize, InternalError } from "#general";
-import type { Schema } from "#model";
-import { AttributeModel, ClusterModel, DataModelPath, FeatureMap, Metatype, ValueModel } from "#model";
-import { ConformanceError, DatatypeError, SchemaImplementationError, Val } from "#protocol";
-import { Status } from "#types";
+import { camelize, InternalError } from "@matter/general";
+import type { Schema } from "@matter/model";
+import { AttributeModel, ClusterModel, DataModelPath, FeatureMap, Metatype, ValueModel } from "@matter/model";
+import { ConformanceError, DatatypeError, SchemaImplementationError, Val } from "@matter/protocol";
+import { Status } from "@matter/types";
 import { RootSupervisor } from "../../supervision/RootSupervisor.js";
 import type { ValueSupervisor } from "../../supervision/ValueSupervisor.js";
 import { Internal } from "../managed/Internal.js";
@@ -89,16 +89,16 @@ export function ValueValidator(schema: Schema, supervisor: RootSupervisor): Valu
                     // them
                     break;
                 }
-                throw new SchemaImplementationError(DataModelPath(schema.path), `No type defined`);
+                throw new SchemaImplementationError(new DataModelPath(schema.path), `No type defined`);
             }
             throw new SchemaImplementationError(
-                DataModelPath(schema.path),
+                new DataModelPath(schema.path),
                 `Cannot determine metatype for type "${type}"`,
             );
 
         default:
             throw new SchemaImplementationError(
-                DataModelPath((schema as unknown as Schema).path),
+                new DataModelPath((schema as unknown as Schema).path),
                 `Unsupported validation metatype ${metabase?.metatype}`,
             );
     }
@@ -164,7 +164,7 @@ function createBitmapValidator(schema: ValueModel, supervisor: RootSupervisor): 
         if (field?.parent?.id === FeatureMap.id) {
             name = camelize(field.title ?? field.name);
         } else {
-            name = camelize(field.name);
+            name = field.propertyName;
         }
         fields[name] = {
             schema: field,
@@ -257,7 +257,7 @@ function createStructValidator(schema: Schema, supervisor: RootSupervisor): Valu
         }
         const validate = supervisor.get(field).validate;
         if (validate) {
-            validators[camelize(field.name)] = validate;
+            validators[field.propertyName] = validate;
         }
     }
 

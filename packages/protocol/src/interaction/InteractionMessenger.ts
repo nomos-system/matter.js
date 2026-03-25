@@ -1,13 +1,16 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { ReadResult } from "#action/response/ReadResult.js";
 import { Mark } from "#common/Mark.js";
+import { PeerUnresponsiveError } from "#peer/PeerCommunicationError.js";
+import { UnexpectedMessageError } from "#protocol/errors.js";
 import {
     Bytes,
+    causedBy,
     Diagnostic,
     Duration,
     InternalError,
@@ -15,11 +18,9 @@ import {
     MatterFlowError,
     Millis,
     NoResponseTimeoutError,
-    Time,
     UnexpectedDataError,
-} from "#general";
-import { Specification } from "#model";
-import { RetransmissionLimitReachedError, SessionClosedError, UnexpectedMessageError } from "#protocol/errors.js";
+} from "@matter/general";
+import { Specification } from "@matter/model";
 import {
     ReceivedStatusResponseError,
     Status,
@@ -30,6 +31,7 @@ import {
     TlvDataVersionFilter,
     TlvInvokeRequest,
     TlvInvokeResponse,
+    TlvInvokeResponseForSend,
     TlvReadRequest,
     TlvSchema,
     TlvStatusResponse,
@@ -40,10 +42,10 @@ import {
     TlvWriteRequest,
     TlvWriteResponse,
     TypeFromSchema,
-} from "#types";
+} from "@matter/types";
 import { Message, SessionType } from "../codec/MessageCodec.js";
-import { ExchangeProvider } from "../protocol/ExchangeProvider.js";
-import { ExchangeSendOptions, MessageExchange } from "../protocol/MessageExchange.js";
+import { ExchangeProvider, NewExchangeOptions } from "../protocol/ExchangeProvider.js";
+import { ExchangeReceiveOptions, ExchangeSendOptions, MessageExchange } from "../protocol/MessageExchange.js";
 import {
     AttributeReportPayload,
     BaseDataReport,
@@ -76,6 +78,7 @@ export type SubscribeRequest = TypeFromSchema<typeof TlvSubscribeRequest>;
 export type SubscribeResponse = TypeFromSchema<typeof TlvSubscribeResponse>;
 export type InvokeRequest = TypeFromSchema<typeof TlvInvokeRequest>;
 export type InvokeResponse = TypeFromSchema<typeof TlvInvokeResponse>;
+export type InvokeResponseForSend = TypeFromSchema<typeof TlvInvokeResponseForSend>;
 export type TimedRequest = TypeFromSchema<typeof TlvTimedRequest>;
 export type WriteRequest = TypeFromSchema<typeof TlvWriteRequest>;
 export type WriteResponse = TypeFromSchema<typeof TlvWriteResponse>;
@@ -97,6 +100,7 @@ const DATA_REPORT_MIN_AVAILABLE_BYTES_BEFORE_SENDING = 40;
 
 class InteractionMessenger {
     #exchange: MessageExchange;
+    #endMessagePromise?: Promise<unknown>;
 
     constructor(exchange: MessageExchange) {
         this.#exchange = exchange;
@@ -112,6 +116,15 @@ class InteractionMessenger {
 
     send(messageType: number, payload: Bytes, options?: ExchangeSendOptions) {
         return this.exchange.send(messageType, payload, options);
+    }
+
+    protected trackEndMessage(promise: Promise<unknown>, errorMessage: string) {
+        if (this.#endMessagePromise !== undefined) {
+            throw new InternalError("An interaction can only have one end message");
+        }
+        this.#endMessagePromise = promise
+            .catch(error => logger.info(errorMessage, Diagnostic.errorMessage(error)))
+            .finally(() => (this.#endMessagePromise = undefined));
     }
 
     sendStatus(status: Status, options?: ExchangeSendOptions) {
@@ -137,37 +150,16 @@ class InteractionMessenger {
         await this.nextMessage(MessageType.StatusResponse, options, `Success-${expectedMessageInfo}`);
     }
 
-    async nextMessage(
-        expectedMessageType: number,
-        options?: {
-            expectedProcessingTime?: Duration;
-            timeout?: Duration;
-        },
-        expectedMessageInfo?: string,
-    ) {
-        return this.#nextMessage(expectedMessageType, options, expectedMessageInfo);
+    async nextMessage(expectedMessageType: number, options?: ExchangeReceiveOptions, expectedMessageInfo?: string) {
+        return await this.#nextMessage(expectedMessageType, options, expectedMessageInfo);
     }
 
-    async anyNextMessage(
-        expectedMessageInfo: string,
-        options?: {
-            expectedProcessingTime?: Duration;
-            timeout?: Duration;
-        },
-    ) {
+    async anyNextMessage(expectedMessageInfo: string, options?: ExchangeReceiveOptions) {
         return this.#nextMessage(undefined, options, expectedMessageInfo);
     }
 
-    async #nextMessage(
-        expectedMessageType?: number,
-        options?: {
-            expectedProcessingTime?: Duration;
-            timeout?: Duration;
-        },
-        expectedMessageInfo?: string,
-    ) {
-        const { expectedProcessingTime, timeout } = options ?? {};
-        const message = await this.exchange.nextMessage({ expectedProcessingTime, timeout });
+    async #nextMessage(expectedMessageType?: number, options?: ExchangeReceiveOptions, expectedMessageInfo?: string) {
+        const message = await this.exchange.nextMessage(options);
         const messageType = message.payloadHeader.messageType;
         if (expectedMessageType !== undefined && expectedMessageInfo === undefined) {
             expectedMessageInfo = MessageType[expectedMessageType];
@@ -182,6 +174,9 @@ class InteractionMessenger {
     }
 
     async close() {
+        if (this.#endMessagePromise !== undefined) {
+            await this.#endMessagePromise;
+        }
         await this.exchange.close();
     }
 
@@ -195,7 +190,7 @@ class InteractionMessenger {
         const { status } = TlvStatusResponse.decode(payload);
         if (status !== Status.Success)
             throw new ReceivedStatusResponseError(
-                `Received error status: ${status}${logHint ? ` (${logHint})` : ""}`,
+                `Received error status: ${Status[status]}(${status})${logHint ? ` (${logHint})` : ""}`,
                 status,
             );
     }
@@ -211,7 +206,12 @@ export interface InteractionRecipient {
         request: ReadRequest,
         message: Message,
     ): Promise<{ dataReport: DataReport; payload?: DataReportPayloadIterator }>;
-    handleWriteRequest(exchange: MessageExchange, request: WriteRequest, message: Message): Promise<WriteResponse>;
+    handleWriteRequest(
+        exchange: MessageExchange,
+        request: WriteRequest,
+        messenger: InteractionServerMessenger,
+        message: Message,
+    ): Promise<void>;
     handleSubscribeRequest(
         exchange: MessageExchange,
         request: SubscribeRequest,
@@ -262,11 +262,8 @@ export class InteractionServerMessenger extends InteractionMessenger {
                     }
                     case MessageType.WriteRequest: {
                         const writeRequest = TlvWriteRequest.decode(message.payload);
-                        const { suppressResponse } = writeRequest;
-                        const writeResponse = await recipient.handleWriteRequest(this.exchange, writeRequest, message);
-                        if (!suppressResponse && !isGroupSession) {
-                            await this.send(MessageType.WriteResponse, TlvWriteResponse.encode(writeResponse));
-                        }
+                        await recipient.handleWriteRequest(this.exchange, writeRequest, this, message);
+                        // response is sent by the handler
                         break;
                     }
                     case MessageType.SubscribeRequest: {
@@ -278,7 +275,7 @@ export class InteractionServerMessenger extends InteractionMessenger {
                         }
                         const subscribeRequest = TlvSubscribeRequest.decode(message.payload);
                         await recipient.handleSubscribeRequest(this.exchange, subscribeRequest, this, message);
-                        // response is sent by handler
+                        // response is sent by the handler
                         break;
                     }
                     case MessageType.InvokeRequest: {
@@ -313,24 +310,26 @@ export class InteractionServerMessenger extends InteractionMessenger {
                 }
             }
         } catch (error) {
-            if (error instanceof NoResponseTimeoutError) {
-                logger.info(this.exchange.via, error);
+            if (causedBy(error, NoResponseTimeoutError, PeerUnresponsiveError)) {
+                logger.info(this.exchange.via, this.exchange.diagnostics, error);
                 return;
             }
 
             let errorStatusCode = Status.Failure;
-            if (error instanceof StatusResponseError) {
+            const sre = StatusResponseError.of(error);
+            if (sre) {
                 logger.info(
-                    this.exchange.via,
                     "Status response",
                     Mark.OUTBOUND,
-                    Diagnostic.strong(`${Status[error.code]}#${error.code}`),
+                    this.exchange.via,
+                    this.exchange.diagnostics,
+                    Diagnostic.strong(`${Status[sre.code]}#${sre.code}`),
                     "due to error:",
-                    Diagnostic.errorMessage(error),
+                    Diagnostic.errorMessage(sre),
                 );
-                errorStatusCode = error.code;
+                errorStatusCode = sre.code;
             } else {
-                logger.warn(this.exchange.via, error);
+                logger.warn(this.exchange.via, this.exchange.diagnostics, error);
             }
 
             if (!isGroupSession) {
@@ -797,11 +796,65 @@ export class InteractionServerMessenger extends InteractionMessenger {
             }
         }
     }
+
+    /**
+     * Send a WriteResponse message.
+     */
+    async sendWriteResponse(response: WriteResponse, options?: { logContext?: string }) {
+        await this.send(MessageType.WriteResponse, TlvWriteResponse.encode(response), {
+            logContext: options?.logContext ? { for: options.logContext } : undefined,
+        });
+    }
+
+    /**
+     * Wait for and decode the next WriteRequest message (for chunked writes).
+     */
+    async readNextWriteRequest(): Promise<{ writeRequest: WriteRequest; message: Message }> {
+        const message = await this.nextMessage(MessageType.WriteRequest, undefined, "WriteRequest-chunk");
+        return {
+            writeRequest: TlvWriteRequest.decode(message.payload),
+            message,
+        };
+    }
+
+    /**
+     * Send an intermediate InvokeResponse chunk with moreChunkedMessages=true and wait for Status.Success.
+     * Returns true if a client acknowledged, and we should continue, false if a client terminated the chunked series.
+     */
+    async sendInvokeResponseChunk(response: InvokeResponseForSend): Promise<boolean> {
+        await this.send(
+            MessageType.InvokeResponse,
+            TlvInvokeResponseForSend.encode({
+                ...response,
+                moreChunkedMessages: true,
+            }),
+            {
+                logContext: { for: "InvokeResponse-chunk" },
+            },
+        );
+
+        try {
+            await this.waitForSuccess("InvokeResponse-chunk");
+            return true; // Continue sending chunks
+        } catch (error) {
+            // Any non-success status or error terminate further transmission of InvokeResponseMessages,
+            // close the exchange, and consider the Invoke Interaction completed.
+            logger.debug("Chunked invoke response terminated by client", error);
+            return false;
+        }
+    }
+
+    /**
+     * Send the final InvokeResponse (without moreChunkedMessages flag).
+     */
+    async sendInvokeResponse(response: InvokeResponseForSend) {
+        await this.send(MessageType.InvokeResponse, TlvInvokeResponseForSend.encode(response));
+    }
 }
 
 export class IncomingInteractionClientMessenger extends InteractionMessenger {
-    async waitFor(expectedMessageInfo: string, messageType: number, timeout?: Duration) {
-        const message = await this.anyNextMessage(expectedMessageInfo, { timeout });
+    async waitFor(expectedMessageInfo: string, messageType: number, options?: ExchangeReceiveOptions) {
+        const message = await this.anyNextMessage(expectedMessageInfo, options);
         const {
             payloadHeader: { messageType: receivedMessageType },
         } = message;
@@ -824,9 +877,9 @@ export class IncomingInteractionClientMessenger extends InteractionMessenger {
      *
      * Data reports payloads are decoded but list attributes may be split across messages; these will require reassembly.
      */
-    async *readDataReports() {
+    async *readDataReports(options?: ExchangeReceiveOptions) {
         while (true) {
-            const dataReportMessage = await this.waitFor("DataReport", MessageType.ReportData);
+            const dataReportMessage = await this.waitFor("DataReport", MessageType.ReportData, options);
             const report = TlvDataReport.decode(dataReportMessage.payload);
 
             yield report;
@@ -837,12 +890,21 @@ export class IncomingInteractionClientMessenger extends InteractionMessenger {
                     logContext: this.#logContextOf(report),
                 });
             } else if (!report.suppressResponse) {
-                // We received the last message and need to send a final success, but we do not need to wait for it and
-                // also don't care if it fails
-                this.sendStatus(Status.Success, {
-                    multipleMessageInteraction: true,
-                    logContext: this.#logContextOf(report),
-                }).catch(error => logger.info("Error sending success after final data report chunk", error));
+                // We don't need to wait for this promise to succeed and any error is non-fatal.  But we do need to
+                // track the promise and thus prevent the session from closing prematurely to prevent errors in the logs
+                // if a dependent process closes its session after the read.
+                try {
+                    this.trackEndMessage(
+                        this.sendStatus(Status.Success, {
+                            multipleMessageInteraction: true,
+                            logContext: this.#logContextOf(report),
+                        }),
+                        "Error sending success after final data report chunk",
+                    );
+                } catch (e) {
+                    // This error is non-fatal
+                    logger.info(this.exchange.via, `Error reading successful datareport read to peer:`, e);
+                }
             }
 
             if (!report.moreChunkedMessages) {
@@ -866,51 +928,13 @@ export class IncomingInteractionClientMessenger extends InteractionMessenger {
 }
 
 export class InteractionClientMessenger extends IncomingInteractionClientMessenger {
-    #exchangeProvider: ExchangeProvider;
-
-    static async create(exchangeProvider: ExchangeProvider) {
-        const exchange = await exchangeProvider.initiateExchange();
-        return new this(exchange, exchangeProvider);
+    static async create(exchangeProvider: ExchangeProvider, options?: NewExchangeOptions) {
+        const exchange = await exchangeProvider.initiateExchange(options);
+        return new this(exchange);
     }
 
-    constructor(exchange: MessageExchange, exchangeProvider: ExchangeProvider) {
-        super(exchange);
-        this.#exchangeProvider = exchangeProvider;
-    }
-
-    /** Implements a send method with an automatic reconnection mechanism */
-    override async send(messageType: number, payload: Bytes, options?: ExchangeSendOptions) {
-        const now = Time.nowMs;
-        try {
-            if (this.exchange.channel.closed) {
-                throw new SessionClosedError("The exchange channel is closed. Please connect the device first.");
-            }
-
-            return await this.exchange.send(messageType, payload, options);
-        } catch (error) {
-            if (
-                this.#exchangeProvider.supportsReconnect &&
-                (error instanceof RetransmissionLimitReachedError || error instanceof SessionClosedError) &&
-                !options?.multipleMessageInteraction
-            ) {
-                // When retransmission failed (most likely due to a lost connection or invalid session),
-                // try to reconnect if possible and resend the message one more time
-                logger.debug(
-                    `${error instanceof RetransmissionLimitReachedError ? "Retransmission limit reached" : "Channel not connected"}, trying to reconnect and resend the message.`,
-                );
-                await this.exchange.close();
-                if (await this.#exchangeProvider.reconnectChannel({ asOf: now })) {
-                    this.exchange = await this.#exchangeProvider.initiateExchange();
-                    return await this.exchange.send(messageType, payload, options);
-                }
-            } else {
-                throw error;
-            }
-        }
-    }
-
-    async sendReadRequest(readRequest: ReadRequest) {
-        await this.send(MessageType.ReadRequest, this.#encodeReadingRequest(TlvReadRequest, readRequest));
+    async sendReadRequest(readRequest: ReadRequest, options?: ExchangeSendOptions) {
+        await this.send(MessageType.ReadRequest, this.#encodeReadingRequest(TlvReadRequest, readRequest), options);
     }
 
     #encodeReadingRequest<T extends TlvSchema<any>>(schema: T, request: TypeFromSchema<T>) {
@@ -967,34 +991,67 @@ export class InteractionClientMessenger extends IncomingInteractionClientMesseng
         return dataVersionFilters;
     }
 
-    async sendSubscribeRequest(subscribeRequest: SubscribeRequest) {
+    async sendSubscribeRequest(subscribeRequest: SubscribeRequest, options?: ExchangeSendOptions) {
         const request = this.#encodeReadingRequest(TlvSubscribeRequest, subscribeRequest);
-        await this.send(MessageType.SubscribeRequest, request);
+        await this.send(MessageType.SubscribeRequest, request, options);
     }
 
-    async sendInvokeCommand(invokeRequest: InvokeRequest, expectedProcessingTime?: Duration) {
+    /**
+     * Send an invoke command and handle chunked responses.
+     * Returns a combined InvokeResponse with all responses from all chunks, or undefined if suppressResponse
+     */
+    async sendInvokeCommand(
+        invokeRequest: InvokeRequest,
+        options?: ExchangeSendOptions,
+    ): Promise<InvokeResponse | undefined> {
         if (invokeRequest.suppressResponse) {
             await this.requestWithSuppressedResponse(
                 MessageType.InvokeRequest,
                 TlvInvokeRequest,
                 invokeRequest,
-                expectedProcessingTime,
+                options,
             );
-        } else {
-            return await this.request(
-                MessageType.InvokeRequest,
-                TlvInvokeRequest,
-                MessageType.InvokeResponse,
-                TlvInvokeResponse,
-                invokeRequest,
-                expectedProcessingTime,
-            );
+            return undefined;
         }
+
+        // Send invoke request
+        await this.send(MessageType.InvokeRequest, TlvInvokeRequest.encode(invokeRequest), options);
+
+        // Receive and accumulate responses from potentially multiple chunks
+        const allInvokeResponses: InvokeResponse["invokeResponses"] = [];
+        let finalResponse: InvokeResponse | undefined;
+
+        while (true) {
+            const responseMessage = await this.nextMessage(MessageType.InvokeResponse, options, "InvokeResponse");
+            const response = TlvInvokeResponse.decode(responseMessage.payload);
+
+            // Accumulate responses from this chunk
+            if (response.invokeResponses) {
+                allInvokeResponses.push(...response.invokeResponses);
+            }
+
+            // Check if more chunks are coming
+            if (response.moreChunkedMessages) {
+                await this.sendStatus(Status.Success, {
+                    multipleMessageInteraction: true,
+                    logContext: { for: "InvokeResponse-chunk" },
+                });
+            } else {
+                // This is the final chunk
+                finalResponse = {
+                    ...response,
+                    invokeResponses: allInvokeResponses,
+                };
+                break;
+            }
+        }
+
+        return finalResponse;
     }
 
-    async sendWriteCommand(writeRequest: WriteRequest) {
+    async sendWriteCommand(writeRequest: WriteRequest, options?: ExchangeSendOptions) {
         if (writeRequest.suppressResponse) {
-            await this.requestWithSuppressedResponse(MessageType.WriteRequest, TlvWriteRequest, writeRequest);
+            await this.requestWithSuppressedResponse(MessageType.WriteRequest, TlvWriteRequest, writeRequest, options);
         } else {
             return await this.request(
                 MessageType.WriteRequest,
@@ -1006,23 +1063,31 @@ export class InteractionClientMessenger extends IncomingInteractionClientMesseng
         }
     }
 
-    sendTimedRequest(timeout: Duration) {
-        return this.request(MessageType.TimedRequest, TlvTimedRequest, MessageType.StatusResponse, TlvStatusResponse, {
-            timeout,
-            interactionModelRevision: Specification.INTERACTION_MODEL_REVISION,
-        });
+    sendTimedRequest(timeout: Duration, options?: ExchangeSendOptions) {
+        return this.request(
+            MessageType.TimedRequest,
+            TlvTimedRequest,
+            MessageType.StatusResponse,
+            TlvStatusResponse,
+            {
+                timeout,
+                interactionModelRevision: Specification.INTERACTION_MODEL_REVISION,
+            },
+            options,
+        );
     }
 
     private async requestWithSuppressedResponse<RequestT>(
         requestMessageType: number,
         requestSchema: TlvSchema<RequestT>,
         request: RequestT,
-        expectedProcessingTime?: Duration,
+        options?: ExchangeSendOptions,
     ): Promise<void> {
         try {
             await this.send(requestMessageType, requestSchema.encode(request), {
                 expectAckOnly: true,
-                expectedProcessingTime: expectedProcessingTime,
+                expectedProcessingTime: options?.expectedProcessingTime,
+                abort: options?.abort,
                 logContext: {
                     invokeFlags: Diagnostic.asFlags({
                         suppressResponse: true,
@@ -1044,15 +1109,19 @@ export class InteractionClientMessenger extends IncomingInteractionClientMesseng
         responseMessageType: number,
         responseSchema: TlvSchema<ResponseT>,
         request: RequestT,
-        expectedProcessingTime?: Duration,
+        options?: ExchangeSendOptions,
     ): Promise<ResponseT> {
         await this.send(requestMessageType, requestSchema.encode(request), {
             expectAckOnly: false,
-            expectedProcessingTime,
+            expectedProcessingTime: options?.expectedProcessingTime,
+            abort: options?.abort,
         });
         const responseMessage = await this.nextMessage(
             responseMessageType,
-            { expectedProcessingTime },
+            {
+                expectedProcessingTime: options?.expectedProcessingTime,
+                abort: options?.abort,
+            },
             MessageType[responseMessageType] ?? `Response-${Diagnostic.hex(responseMessageType)}`,
         );
         return responseSchema.decode(responseMessage.payload);

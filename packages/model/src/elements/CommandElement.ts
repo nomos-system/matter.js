@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -30,6 +30,11 @@ export namespace CommandElement {
     export type Tag = ElementTag.Command;
     export const Tag = ElementTag.Command;
     export type Properties = BaseElement.Properties<CommandElement>;
+
+    /**
+     * Sentinel ID for non-Matter commands that should be invisible to the Matter protocol layer.
+     */
+    export const NO_ID = -1;
 
     /**
      * Indicates request vs response command.

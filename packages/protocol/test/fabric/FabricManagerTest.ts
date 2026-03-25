@@ -1,21 +1,21 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 import { FabricManager, FabricTableFullError } from "#fabric/FabricManager.js";
 import { TestFabric } from "#fabric/TestFabric.js";
-import { MatterFlowError, StandardCrypto, StorageBackendMemory, StorageManager } from "#general";
-import { FabricIndex } from "#types";
+import { MatterFlowError, MemoryStorageDriver, StandardCrypto, StorageManager } from "@matter/general";
+import { FabricIndex } from "@matter/types";
 
 describe("FabricManager", () => {
     const crypto = new StandardCrypto();
-    let storage: StorageBackendMemory;
+    let storage: MemoryStorageDriver;
     let storageManager: StorageManager;
     let fabrics: FabricManager;
 
     beforeEach(async () => {
-        storage = new StorageBackendMemory();
+        storage = new MemoryStorageDriver();
         storageManager = new StorageManager(storage);
         await storageManager.initialize();
         fabrics = new FabricManager(crypto, storageManager.createContext("Context"));
@@ -33,7 +33,7 @@ describe("FabricManager", () => {
         });
 
         it("adding a fabric with same index twice throws error", async () => {
-            const storage = new StorageManager(new StorageBackendMemory());
+            const storage = new StorageManager(new MemoryStorageDriver());
             await storage.initialize();
             const fabricManager = new FabricManager(crypto, storage.createContext("Context"));
             await fabricManager.construction.ready;

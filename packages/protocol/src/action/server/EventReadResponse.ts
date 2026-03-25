@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -11,8 +11,8 @@ import { ReadResult } from "#action/response/ReadResult.js";
 import { AccessControl, hasRemoteActor } from "#action/server/AccessControl.js";
 import { DataResponse, FallbackLimits } from "#action/server/DataResponse.js";
 import { NumberedOccurrence } from "#events/Occurrence.js";
-import { InternalError, isObject, Logger } from "#general";
-import { DataModelPath, ElementTag, EventModel } from "#model";
+import { InternalError, isObject, Logger } from "@matter/general";
+import { DataModelPath, ElementTag, EventModel } from "@matter/model";
 import {
     EventNumber,
     EventPath,
@@ -23,7 +23,7 @@ import {
     StatusCode,
     StatusResponseError,
     TlvSchema,
-} from "#types";
+} from "@matter/types";
 
 const logger = Logger.get("EventReadResponse");
 

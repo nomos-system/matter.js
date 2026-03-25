@@ -1,32 +1,42 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { config } from "#config.js";
 import { NodeJsCrypto } from "#crypto/NodeJsCrypto.js";
+import { NodeJsHttpEndpoint } from "#net/NodeJsHttpEndpoint.js";
+import { FileStorageDriver } from "#storage/fs/FileStorageDriver.js";
 import {
     asError,
     Boot,
     Crypto,
     Entropy,
     Environment,
+    Filesystem,
     HttpEndpointFactory,
     ImplementationError,
     LogFormat,
     Logger,
+    MemoryStorageDriver,
     Network,
     ServiceBundle,
+    StandardCrypto,
     StorageService,
     VariableService,
-} from "#general";
-import { NodeJsHttpEndpoint } from "#net/NodeJsHttpEndpoint.js";
+    WalStorageDriver,
+    type DataNamespace,
+} from "@matter/general";
+
+import { isBunjs } from "#util/runtimeChecks.js";
+
 import { existsSync, readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+
+import { NodeJsFilesystem } from "../fs/NodeJsFilesystem.js";
 import { NodeJsNetwork } from "../net/NodeJsNetwork.js";
-import { StorageBackendDisk } from "../storage/StorageBackendDisk.js";
 import { ProcessManager } from "./ProcessManager.js";
 
 /**
@@ -62,9 +72,11 @@ import { ProcessManager } from "./ProcessManager.js";
  * * `trace.enable` - Enable writing a trace file
  * * `storage.path` - Where to store storage files, Default: "path.root"
  * * `storage.clear` - Clear storage on start? Default: false
+ * * `storage.driver` - Storage driver to use: "file" (default) or "sqlite" (requires Node.js v22+). Automatically migrates data when switching drivers.
  * * `nodejs.crypto` - Enables crypto implementation in this package.  Default: true
+ * * `nodejs.filesystem` - Enables filesystem implementation in this package.  Default: true
  * * `nodejs.network` - Enables network implementation in this package.  Default: true
- * * `nodejs.storage` - Enables file-based storage implementation in this package.  Default: true
+ * * `nodejs.storage` - Enables storage implementation in this package.  Default: true
  * * `runtime.signals` - By default register SIGINT and SIGUSR2 (diag) handlers, set to false if not wanted
  * * `runtime.exitcode` - By default we set the process.exitcode to 0 (ok) or 1 (crash); set to false to disable
  * * `runtime.unhandlederrors` - By default we log unhandled errors to matter.js log; set to false to disable
@@ -79,6 +91,7 @@ export function NodeJsEnvironment() {
     configureRuntime(env);
     configureStorage(env);
     configureNetwork(env);
+    configureFilesystem(env);
 
     // When no logger format is set, we still use the default, and the process is running in a TTY, use ANSI formatting
     // If a user wants to change the log format he still can do after the environment was initialized (which should be
@@ -101,10 +114,10 @@ function loadVariables(env: Environment) {
     vars.addConfigStyle(getDefaults(vars));
 
     // Preload environment and argv so we can use it to find config file
-    if (config.loadProcessArgv) {
+    if (config.loadProcessEnv) {
         vars.addUnixEnvStyle(process.env);
     }
-    if (config.loadProcessEnv) {
+    if (config.loadProcessArgv) {
         vars.addArgvStyle(process.argv);
     }
 
@@ -115,10 +128,10 @@ function loadVariables(env: Environment) {
     }
 
     // Reload environment and argv so they override config
-    if (config.loadProcessArgv) {
+    if (config.loadProcessEnv) {
         vars.addUnixEnvStyle(process.env);
     }
-    if (config.loadProcessEnv) {
+    if (config.loadProcessArgv) {
         vars.addArgvStyle(process.argv);
     }
 
@@ -139,38 +152,42 @@ function rootDirOf(env: Environment) {
 
 function configureCrypto(env: Environment) {
     Boot.init(() => {
-        if (config.installCrypto || (env.vars.boolean("nodejs.crypto") ?? true)) {
-            const crypto = new NodeJsCrypto();
+        if (env.vars.boolean("nodejs.crypto")) {
+            let crypto: Crypto;
+            if (!isBunjs()) {
+                // Platform implemented crypto
+                crypto = new NodeJsCrypto();
+            } else {
+                // Unsupported environment fallback
+                crypto = new StandardCrypto(global.crypto);
+            }
             env.set(Entropy, crypto);
             env.set(Crypto, crypto);
-        } else {
-            if (Environment.default.has(Entropy)) {
-                env.set(Entropy, Environment.default.get(Entropy));
-            }
-            if (Environment.default.has(Crypto)) {
-                env.set(Crypto, Environment.default.get(Crypto));
-            }
+            return;
+        }
+        // Extends default crypto
+        if (Environment.default.has(Entropy)) {
+            env.set(Entropy, Environment.default.get(Entropy));
+        }
+        if (Environment.default.has(Crypto)) {
+            env.set(Crypto, Environment.default.get(Crypto));
         }
     });
 }
 
 function configureNetwork(env: Environment) {
-    if (!config.installNetwork || !(env.vars.boolean("nodejs.network") ?? true)) {
-        return;
-    }
-
     Boot.init(() => {
-        if (config.installNetwork || (env.vars.boolean("nodejs.network") ?? true)) {
-            const basePathForUnixSockets = rootDirOf(env);
+        if (env.vars.boolean("nodejs.network")) {
             env.set(Network, new NodeJsNetwork());
-            env.set(HttpEndpointFactory, new NodeJsHttpEndpoint.Factory(basePathForUnixSockets));
-        } else {
-            if (Environment.default.has(Network)) {
-                env.set(Network, Environment.default.get(Network));
-            }
-            if (Environment.default.has(HttpEndpointFactory)) {
-                env.set(HttpEndpointFactory, Environment.default.get(HttpEndpointFactory));
-            }
+            env.set(HttpEndpointFactory, new NodeJsHttpEndpoint.Factory());
+            return;
+        }
+        // Extends default Network
+        if (Environment.default.has(Network)) {
+            env.set(Network, Environment.default.get(Network));
+        }
+        if (Environment.default.has(HttpEndpointFactory)) {
+            env.set(HttpEndpointFactory, Environment.default.get(HttpEndpointFactory));
         }
     });
 }
@@ -181,20 +198,55 @@ function configureRuntime(env: Environment) {
 }
 
 function configureStorage(env: Environment) {
-    if (!config.initializeStorage || !(env.vars.boolean("nodejs.storage") ?? true)) {
-        return;
-    }
+    Boot.init(() => {
+        if (env.vars.boolean("nodejs.storage")) {
+            const service = env.get(StorageService);
 
-    const service = env.get(StorageService);
+            // Register general-package drivers
+            service.registerDriver(MemoryStorageDriver);
+            service.registerDriver(WalStorageDriver);
 
-    env.vars.use(() => {
-        service.location = env.vars.get("storage.path", rootDirOf(env));
+            // Register nodejs-specific drivers
+            service.registerDriver(FileStorageDriver);
+
+            service.registerDriver({
+                id: "sqlite",
+
+                async create(namespace: DataNamespace) {
+                    const { SqliteStorageDriver } = await import("#storage/sqlite/index.js");
+                    return SqliteStorageDriver.create(namespace);
+                },
+            });
+
+            // Default to "file" in nodejs (temporary until WAL is proven)
+            service.defaultDriver = "file";
+
+            // Apply user-configured driver
+            let storageDriver = env.vars.string("storage.driver");
+            if (storageDriver && storageDriver.length > 0) {
+                service.configuredDriver = storageDriver;
+            }
+
+            return;
+        }
+        // Extends default Storage
+        if (Environment.default.has(StorageService)) {
+            env.set(StorageService, Environment.default.get(StorageService));
+        }
     });
+}
 
-    service.factory = namespace =>
-        new StorageBackendDisk(resolve(service.location ?? ".", namespace), env.vars.get("storage.clear", false));
-
-    service.resolve = (...paths) => resolve(rootDirOf(env), ...paths);
+function configureFilesystem(env: Environment) {
+    Boot.init(() => {
+        if (env.vars.boolean("nodejs.filesystem")) {
+            env.set(Filesystem, new NodeJsFilesystem(() => env.vars.get("storage.path", rootDirOf(env))));
+            return;
+        }
+        // Extends default Filesystem
+        if (Environment.default.has(Filesystem)) {
+            env.set(Filesystem, Environment.default.get(Filesystem));
+        }
+    });
 }
 
 export function loadConfigFile(vars: VariableService) {
@@ -254,6 +306,15 @@ export function getDefaults(vars: VariableService) {
             signals: config.trapProcessSignals,
             exitcode: config.setProcessExitCodeOnError,
             unhandlederrors: config.trapUnhandledErrors,
+        },
+        nodejs: {
+            crypto: config.installCrypto,
+            filesystem: config.installFilesystem,
+            network: config.installNetwork,
+            storage: config.initializeStorage,
+        },
+        storage: {
+            driver: config.storageDriver,
         },
     };
 }

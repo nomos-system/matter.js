@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -96,5 +96,14 @@ export class NullableSchema<T> extends TlvSchema<T | null> {
     }
 }
 
+const nullableCache = new WeakMap<TlvSchema<any>, NullableSchema<any>>();
+
 /** Nullable TLV schema. */
-export const TlvNullable = <T>(schema: TlvSchema<T>) => new NullableSchema(schema);
+export const TlvNullable = <T>(schema: TlvSchema<T>): NullableSchema<T> => {
+    let result = nullableCache.get(schema) as NullableSchema<T> | undefined;
+    if (result === undefined) {
+        result = new NullableSchema(schema);
+        nullableCache.set(schema, result);
+    }
+    return result;
+};

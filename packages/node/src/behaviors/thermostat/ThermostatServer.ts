@@ -1,16 +1,17 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { Behavior } from "#behavior/Behavior.js";
 import { ActionContext } from "#behavior/context/ActionContext.js";
 import { ValueSupervisor } from "#behavior/supervision/ValueSupervisor.js";
 import { OccupancySensingServer } from "#behaviors/occupancy-sensing";
 import { TemperatureMeasurementServer } from "#behaviors/temperature-measurement";
-import { OccupancySensing } from "#clusters/occupancy-sensing";
-import { Thermostat } from "#clusters/thermostat";
 import { Endpoint } from "#endpoint/Endpoint.js";
+import { Node } from "#node/Node.js";
+import { ServerNode } from "#node/ServerNode.js";
 import {
     Bytes,
     cropValueRange,
@@ -20,12 +21,12 @@ import {
     InternalError,
     Logger,
     Observable,
-} from "#general";
-import { FieldElement } from "#model";
-import { Node } from "#node/Node.js";
-import { ServerNode } from "#node/ServerNode.js";
-import { hasLocalActor, Val } from "#protocol";
-import { ClusterType, StatusResponse, TypeFromPartialBitSchema } from "#types";
+} from "@matter/general";
+import { FieldElement } from "@matter/model";
+import { hasLocalActor, Val } from "@matter/protocol";
+import { ClusterType, StatusResponse, TypeFromPartialBitSchema } from "@matter/types";
+import { OccupancySensing } from "@matter/types/clusters/occupancy-sensing";
+import { Thermostat } from "@matter/types/clusters/thermostat";
 import { AtomicWriteHandler } from "./AtomicWriteHandler.js";
 import { ThermostatBehavior } from "./ThermostatBehavior.js";
 
@@ -105,6 +106,10 @@ export class ThermostatBaseServer extends ThermostatBehaviorLogicBase {
         }
         if (this.features.matterScheduleConfiguration) {
             logger.warn("MatterScheduleConfiguration feature is not yet implemented. Please do not activate it");
+        }
+
+        if (!this.features.presets && !this.features.matterScheduleConfiguration) {
+            this.atomicRequest = Behavior.unimplemented;
         }
 
         // Initialize persisted presets from defaults if not already set
@@ -335,7 +340,9 @@ export class ThermostatBaseServer extends ThermostatBehaviorLogicBase {
 
             // TODO Add support for correct Time handling, leave disabled for now
             if (this.state.setpointHoldExpiryTimestamp === undefined) {
-                //this.state.setpointHoldExpiryTimestamp = null;
+                //this.agent.asLocalActor(() => {
+                //    this.state.setpointHoldExpiryTimestamp = null;
+                //});
             } else {
                 logger.warn(
                     "Handling for setpointHoldExpiryTimestamp is not yet implemented. To use this attribute you need to install the needed logic yourself",
@@ -405,7 +412,9 @@ export class ThermostatBaseServer extends ThermostatBehaviorLogicBase {
                 }
                 break;
         }
-        this.state.thermostatRunningMode = newState;
+        this.agent.asLocalActor(() => {
+            this.state.thermostatRunningMode = newState;
+        });
     }
 
     /**
@@ -450,9 +459,11 @@ export class ThermostatBaseServer extends ThermostatBehaviorLogicBase {
             }
         } else {
             if (this.state.externalMeasuredIndoorTemperature === undefined) {
-                logger.warn(
-                    "No local TemperatureMeasurement cluster available and externalMeasuredIndoorTemperature state not set. Setting localTemperature to null",
-                );
+                if (this.state.localTemperatureCalibration !== undefined) {
+                    logger.warn(
+                        "No local TemperatureMeasurement cluster available, externalMeasuredIndoorTemperature state not set but localTemperatureCalibration is used: Ensure to correctly consider the calibration when updating the localTemperature value",
+                    );
+                }
             } else {
                 logger.info("Using measured temperature via externalMeasuredIndoorTemperature state");
                 localTemperature = this.state.externalMeasuredIndoorTemperature ?? null;
@@ -568,7 +579,7 @@ export class ThermostatBaseServer extends ThermostatBehaviorLogicBase {
         );
         this.maybeReactTo(this.events.remoteSensing$Changing, this.#assertRemoteSensingChanging);
 
-        // For backwards compatibility, this attributes is optionally writeable. However, any
+        // For backwards compatibility, this attribute is optionally writeable. However, any
         // writes to this attribute SHALL be silently ignored. So we just revert any changes.
         this.maybeReactTo(this.events.minSetpointDeadBand$Changing, this.#ensureMinSetpointDeadBandNotWritable);
         this.reactTo(
@@ -998,13 +1009,15 @@ export class ThermostatBaseServer extends ThermostatBehaviorLogicBase {
 
     #handleSystemModeChange(newMode: Thermostat.SystemMode) {
         if (this.state.thermostatRunningMode !== undefined && newMode !== Thermostat.SystemMode.Auto) {
-            if (newMode === Thermostat.SystemMode.Off) {
-                this.state.thermostatRunningMode = Thermostat.ThermostatRunningMode.Off;
-            } else if (newMode === Thermostat.SystemMode.Heat) {
-                this.state.thermostatRunningMode = Thermostat.ThermostatRunningMode.Heat;
-            } else if (newMode === Thermostat.SystemMode.Cool) {
-                this.state.thermostatRunningMode = Thermostat.ThermostatRunningMode.Cool;
-            }
+            this.agent.asLocalActor(() => {
+                if (newMode === Thermostat.SystemMode.Off) {
+                    this.state.thermostatRunningMode = Thermostat.ThermostatRunningMode.Off;
+                } else if (newMode === Thermostat.SystemMode.Heat) {
+                    this.state.thermostatRunningMode = Thermostat.ThermostatRunningMode.Heat;
+                } else if (newMode === Thermostat.SystemMode.Cool) {
+                    this.state.thermostatRunningMode = Thermostat.ThermostatRunningMode.Cool;
+                }
+            });
         }
     }
 

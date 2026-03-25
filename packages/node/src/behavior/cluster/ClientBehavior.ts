@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { ClusterType } from "#types";
+import type { ClusterType } from "@matter/types";
 import { ClusterBehavior } from "./ClusterBehavior.js";
 import { markClientBehavior } from "./cluster-behavior-utils.js";
 

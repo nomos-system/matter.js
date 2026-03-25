@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { UnitLocalization } from "#clusters/unit-localization";
-import { MaybePromise } from "#general";
+import { MaybePromise } from "@matter/general";
+import { UnitLocalization } from "@matter/types/clusters/unit-localization";
 import { UnitLocalizationBehavior } from "./UnitLocalizationBehavior.js";
 
 /**

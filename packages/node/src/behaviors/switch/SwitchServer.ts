@@ -1,14 +1,14 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { ActionContext } from "#behavior/context/ActionContext.js";
-import { Switch } from "#clusters/switch";
-import { Duration, Logger, MaybePromise, Millis, Observable, Seconds, Time, Timer } from "#general";
-import { FieldElement } from "#model";
-import { ClusterType, StatusCode, StatusResponseError } from "#types";
+import { Duration, Logger, MaybePromise, Millis, Observable, Seconds, Time, Timer } from "@matter/general";
+import { FieldElement } from "@matter/model";
+import { ClusterType, StatusCode, StatusResponseError } from "@matter/types";
+import { Switch } from "@matter/types/clusters/switch";
 import { SwitchBehavior } from "./SwitchBehavior.js";
 
 const DEFAULT_MULTIPRESS_DELAY = Millis(300);

@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Instrumentation } from "#node";
-import { Val } from "#protocol";
+import { Instrumentation } from "@matter/node";
+import { Val } from "@matter/protocol";
 import { inspect } from "node:util";
 
 /**

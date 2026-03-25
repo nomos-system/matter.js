@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -19,6 +19,7 @@ export type BackchannelCommand =
     | BackchannelCommand.RvcAddMap
     | BackchannelCommand.RvcRemoveArea
     | BackchannelCommand.RvcAddArea
+    | BackchannelCommand.SetBooleanState
     | BackchannelCommand.NoParameters;
 
 export namespace BackchannelCommand {
@@ -104,6 +105,12 @@ export namespace BackchannelCommand {
         areaId: number;
         mapId: number;
         locationName: string;
+    };
+
+    export type SetBooleanState = {
+        name: "setBooleanState";
+        endpointId: number;
+        newState: boolean;
     };
 
     export type NoParameters = {

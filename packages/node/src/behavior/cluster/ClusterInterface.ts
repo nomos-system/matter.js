@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { MaybePromise } from "#general";
-import type { BitSchema, ClusterComposer, ClusterType, TypeFromPartialBitSchema, TypeFromSchema } from "#types";
+import type { MaybePromise } from "@matter/general";
+import type { BitSchema, ClusterComposer, ClusterType, TypeFromPartialBitSchema, TypeFromSchema } from "@matter/types";
 
 /**
  * This type defines methods for a behavior grouped by named cluster component.

@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
-import { BitFlag, BitmapSchema, TypeFromPartialBitSchema } from "#types";
 import { Bytes } from "@matter/general";
+import { BitFlag, BitmapSchema, TypeFromPartialBitSchema } from "@matter/types";
 
 export const ExtensionKeyUsageBitmap = {
     digitalSignature: BitFlag(0),
@@ -19,7 +19,7 @@ export const ExtensionKeyUsageBitmap = {
 };
 export const ExtensionKeyUsageSchema = BitmapSchema(ExtensionKeyUsageBitmap);
 
-export interface X509Certificate {
+export interface MatterCertificate {
     serialNumber: Bytes;
     signatureAlgorithm: number;
     issuer: {};

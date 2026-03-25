@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -18,14 +18,14 @@ import {
     TlvNoResponse
 } from "../cluster/Cluster.js";
 import { TlvEnum, TlvEpochS } from "../tlv/TlvNumber.js";
-import { AccessLevel } from "#model";
+import { AccessLevel } from "@matter/model";
 import { Priority } from "../globals/Priority.js";
 import { TlvField, TlvObject } from "../tlv/TlvObject.js";
 import { TypeFromSchema } from "../tlv/TlvSchema.js";
 import { BitFlag } from "../schema/BitmapSchema.js";
 import { TlvBoolean } from "../tlv/TlvBoolean.js";
 import { TlvNoArguments } from "../tlv/TlvNoArguments.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace SmokeCoAlarm {
@@ -85,13 +85,16 @@ export namespace SmokeCoAlarm {
     }
 
     /**
-     * This value shall indicate that the smoke sensor has nominal contamination levels, no customer action is required.
-     *
      * @see {@link MatterSpecification.v142.Cluster} § 2.11.5.6
      */
     export enum ContaminationState {
         /**
          * Nominal state, the sensor is not contaminated
+         *
+         * This value shall indicate that the smoke sensor has nominal contamination levels, no customer action is
+         * required.
+         *
+         * @see {@link MatterSpecification.v142.Cluster} § 2.11.5.6.1
          */
         Normal = 0,
 
@@ -232,13 +235,15 @@ export namespace SmokeCoAlarm {
     export interface InterconnectCoAlarmEvent extends TypeFromSchema<typeof TlvInterconnectCoAlarmEvent> {}
 
     /**
-     * This value shall indicate that this alarm is not alarming.
-     *
      * @see {@link MatterSpecification.v142.Cluster} § 2.11.5.3
      */
     export enum ExpressedState {
         /**
          * Nominal state, the device is not alarming
+         *
+         * This value shall indicate that this alarm is not alarming.
+         *
+         * @see {@link MatterSpecification.v142.Cluster} § 2.11.5.3.1
          */
         Normal = 0,
 

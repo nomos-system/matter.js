@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -15,11 +15,12 @@ let initializeStorage = true;
 let trapProcessSignals = true;
 let trapUnhandledErrors = true;
 let setProcessExitCodeOnError = true;
+let installFilesystem = true;
 let installNetwork = true;
-
-// TODO - until we have proper feature detection, disable by default Node.js version of crypto in environments where
-// Node.js crypto emulation is insufficient
-let installCrypto = !process.versions.bun;
+// Automatic replace to `StandardCrypto` in bun.js
+let installCrypto = true;
+// Storage driver
+let storageDriver = "file";
 
 export class NodeJsAlreadyInitializedError extends Error {}
 
@@ -138,6 +139,18 @@ export const config = {
     },
 
     /**
+     * Enables installation of node.js filesystem into default environment.
+     */
+    get installFilesystem() {
+        return installFilesystem;
+    },
+
+    set installFilesystem(value: boolean) {
+        assertUninitialized("installNodeJsFilesystem");
+        installFilesystem = value;
+    },
+
+    /**
      * Enables installation of node.js networking into default environment.
      */
     get installNetwork() {
@@ -161,6 +174,20 @@ export const config = {
     set initializeStorage(value: boolean) {
         assertUninitialized("initializeStorage");
         initializeStorage = value;
+    },
+
+    /**
+     * Set storage driver to use (default: 'file').
+     *
+     * Built-in drivers: `"file"`, `"sqlite"` (Node.js v22+), `"wal"`, `"memory"`.
+     */
+    get storageDriver() {
+        return storageDriver;
+    },
+
+    set storageDriver(value: string) {
+        assertUninitialized("initializeStorage");
+        storageDriver = value;
     },
 
     /**

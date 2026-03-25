@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Bytes, Crypto, DataWriter, Endian, HashAlgorithm, HashFipsAlgorithmId } from "#general";
+import { Bytes, Crypto, DataWriter, Endian, HashAlgorithm, HashFipsAlgorithmId } from "@matter/general";
 import { TlvOtaImageHeader } from "./OtaImageHeader.js";
 
 /**

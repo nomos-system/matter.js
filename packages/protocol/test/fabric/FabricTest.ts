@@ -1,17 +1,17 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Fabric } from "#fabric/Fabric.js";
 import { FabricManager } from "#fabric/FabricManager.js";
 import { TestFabric } from "#fabric/TestFabric.js";
-import { b$, Bytes, MockCrypto, StorageBackendMemory, StorageManager } from "#general";
 import { ProtocolMocks } from "#protocol/ProtocolMocks.js";
 import { NodeSession } from "#session/NodeSession.js";
 import { SessionManager } from "#session/SessionManager.js";
-import { FabricId, GlobalFabricId, NodeId, VendorId } from "#types";
+import { b$, Bytes, MemoryStorageDriver, MockCrypto, StorageManager } from "@matter/general";
+import { FabricId, GlobalFabricId, NodeId, VendorId } from "@matter/types";
 
 const GLOBAL_ID = GlobalFabricId(0x6cf78388a7e78e3dn);
 
@@ -229,7 +229,7 @@ describe("Fabric", () => {
 });
 
 async function createManager() {
-    const storage = new StorageManager(new StorageBackendMemory());
+    const storage = new StorageManager(new MemoryStorageDriver());
     await storage.initialize();
     return new SessionManager({
         fabrics: new FabricManager(crypto),

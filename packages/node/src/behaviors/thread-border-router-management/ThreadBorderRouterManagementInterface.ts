@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { MaybePromise } from "#general";
-import { ThreadBorderRouterManagement } from "#clusters/thread-border-router-management";
+import { MaybePromise } from "@matter/general";
+import { ThreadBorderRouterManagement } from "@matter/types/clusters/thread-border-router-management";
 
 export namespace ThreadBorderRouterManagementInterface {
     export interface Base {

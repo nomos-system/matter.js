@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -9,7 +9,7 @@
 import { MutableCluster } from "../cluster/mutation/MutableCluster.js";
 import { OptionalFixedAttribute } from "../cluster/Cluster.js";
 import { TlvString, TlvByteString } from "../tlv/TlvString.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace WakeOnLan {
@@ -45,7 +45,7 @@ export namespace WakeOnLan {
              *
              * @see {@link MatterSpecification.v142.Cluster} § 1.12.4.2
              */
-            linkLocalAddress: OptionalFixedAttribute(0x1, TlvByteString)
+            linkLocalAddress: OptionalFixedAttribute(0x1, TlvByteString.bound({ length: 16 }))
         }
     });
 

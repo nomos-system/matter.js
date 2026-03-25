@@ -1,15 +1,18 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Behavior } from "#behavior/Behavior.js";
+import type { ActionContext } from "#behavior/context/ActionContext.js";
+import { DclBehavior } from "#behavior/system/dcl/DclBehavior.js";
 import { OtaAnnouncements } from "#behavior/system/software-update/OtaAnnouncements.js";
 import { BasicInformationClient } from "#behaviors/basic-information";
-import { OtaSoftwareUpdateProvider } from "#clusters/ota-software-update-provider";
-import { OtaSoftwareUpdateRequestor } from "#clusters/ota-software-update-requestor";
 import { Endpoint } from "#endpoint/Endpoint.js";
+import type { ClientNode } from "#node/ClientNode.js";
+import { Node } from "#node/Node.js";
+import type { ServerNode } from "#node/ServerNode.js";
 import {
     Bytes,
     Diagnostic,
@@ -19,21 +22,31 @@ import {
     ImplementationError,
     InternalError,
     Logger,
+    MatterError,
     Millis,
     Minutes,
     Observable,
     ObserverGroup,
     Seconds,
-    SharedEnvironmentServices,
     Time,
     Timer,
     Timestamp,
-} from "#general";
-import type { ClientNode } from "#node/ClientNode.js";
-import { Node } from "#node/Node.js";
-import type { ServerNode } from "#node/ServerNode.js";
-import { DclOtaUpdateService, FabricAuthority, FileDesignator, OtaUpdateError, PeerAddress } from "#protocol";
-import { VendorId } from "#types";
+} from "@matter/general";
+import type { Session } from "@matter/protocol";
+import {
+    BdxProtocol,
+    DclOtaUpdateService,
+    FabricAuthority,
+    FileDesignator,
+    hasRemoteActor,
+    OtaUpdateError,
+    OtaUpdateSource,
+    PeerAddress,
+    SessionManager,
+} from "@matter/protocol";
+import { VendorId } from "@matter/types";
+import { OtaSoftwareUpdateProvider } from "@matter/types/clusters/ota-software-update-provider";
+import { OtaSoftwareUpdateRequestor } from "@matter/types/clusters/ota-software-update-requestor";
 
 const logger = Logger.get("SoftwareUpdateManager");
 
@@ -73,11 +86,13 @@ export interface OtaUpdateAvailableDetails {
 
 export enum OtaUpdateStatus {
     Unknown,
+    WaitForConsent,
     Querying,
     Downloading,
     WaitForApply,
     Applying,
     Done,
+    Cancelled,
 }
 
 export interface SoftwareUpdateInfo {
@@ -98,6 +113,25 @@ export interface SoftwareUpdateInfo {
 
     /** SpecificationVersion of the updated device */
     specificationVersion?: number;
+
+    /** Source of the update returned, whether it is a local file, downloaded from test or production DCL */
+    source: OtaUpdateSource;
+}
+
+export interface PendingUpdateInfo {
+    peerAddress: PeerAddress;
+    vendorId: VendorId;
+    productId: number;
+    targetSoftwareVersion: number;
+
+    /**
+     * - `"queued"` — waiting for its turn; no announcement has been sent yet.
+     * - `"in-progress"` — the OTA provider has been announced to the node and we are waiting for it to complete.
+     * - `"stalled"` — no progress update received for 15 minutes. The entry will be automatically reset and retried.
+     */
+    status: "queued" | "in-progress" | "stalled";
+    lastProgressStatus?: OtaUpdateStatus;
+    lastProgressUpdateTime?: Timestamp;
 }
 
 /**
@@ -122,14 +156,18 @@ export class SoftwareUpdateManager extends Behavior {
     declare events: SoftwareUpdateManager.Events;
 
     override async initialize() {
-        this.internal.services = this.env.asDependent();
-        this.internal.otaService = this.internal.services.get(DclOtaUpdateService);
+        const rootNode = Node.forEndpoint(this.endpoint) as ServerNode;
+        rootNode.behaviors.require(DclBehavior);
+        this.internal.otaService = rootNode.agentFor(this.context).get(DclBehavior).otaUpdateService;
+        await this.internal.otaService.construction;
 
-        const node = Node.forEndpoint(this.endpoint);
-        this.reactTo(node.lifecycle.online, this.#nodeOnline);
-        if (node.lifecycle.isOnline) {
+        this.reactTo(rootNode.lifecycle.online, this.#nodeOnline);
+        if (rootNode.lifecycle.isOnline) {
             await this.#nodeOnline();
         }
+
+        this.reactTo(this.events.announceAsDefaultProvider$Changed, this.#updateAnnouncementSettings);
+        this.reactTo(this.events.announcementInterval$Changed, this.#updateAnnouncementSettings);
     }
 
     async #nodeOnline() {
@@ -149,13 +187,8 @@ export class SoftwareUpdateManager extends Behavior {
             fabricAuthority.fabricAdded.once(this.callback(this.#nodeOnline));
             return;
         }
-        if (this.state.announceAsDefaultProvider) {
-            this.internal.announcements = new OtaAnnouncements(
-                this.endpoint,
-                ownFabric,
-                this.state.announcementInterval,
-            );
-        }
+        this.internal.announcements = new OtaAnnouncements(this.endpoint, ownFabric);
+        this.#updateAnnouncementSettings();
 
         // Randomly force the first update check 5-10 minutes after startup
         const delay = Millis(Seconds(Math.floor(Math.random() * 300)) + Minutes(5));
@@ -166,6 +199,17 @@ export class SoftwareUpdateManager extends Behavior {
             delay,
             this.callback(this.#initializeUpdateCheck),
         ).start();
+    }
+
+    #updateAnnouncementSettings() {
+        if (this.internal.announcements === undefined) {
+            return;
+        }
+        if (this.state.announceAsDefaultProvider) {
+            this.internal.announcements.interval = this.state.announcementInterval;
+        } else {
+            this.internal.announcements.interval = undefined;
+        }
     }
 
     /**
@@ -192,14 +236,68 @@ export class SoftwareUpdateManager extends Behavior {
     }
 
     /**
+     * Returns a snapshot of the current update queue for introspection.
+     */
+    get queuedUpdates(): PendingUpdateInfo[] {
+        const now = Time.nowMs;
+        return this.internal.updateQueue.map(entry => {
+            let status: PendingUpdateInfo["status"];
+            if (entry.lastProgressUpdateTime === undefined) {
+                status = "queued";
+            } else if (entry.lastProgressUpdateTime + Minutes(15) < now) {
+                status = "stalled";
+            } else {
+                status = "in-progress";
+            }
+            return {
+                peerAddress: entry.peerAddress,
+                vendorId: entry.vendorId,
+                productId: entry.productId,
+                targetSoftwareVersion: entry.targetSoftwareVersion,
+                status,
+                lastProgressStatus: entry.lastProgressStatus,
+                lastProgressUpdateTime: entry.lastProgressUpdateTime,
+            };
+        });
+    }
+
+    /** Validate that we know the peer the update is requested for and the details match to what we know */
+    async #validatePeerDetails(
+        peerAddress: PeerAddress,
+        details: { softwareVersion: number; vendorId: VendorId; productId: number },
+    ) {
+        const { softwareVersion, vendorId, productId } = details;
+
+        const peers = (Node.forEndpoint(this.endpoint) as ServerNode).peers;
+        const node = peers.get(peerAddress);
+        const basicInfo = node?.maybeStateOf(BasicInformationClient);
+        if (
+            basicInfo?.softwareVersion === softwareVersion &&
+            basicInfo?.vendorId === vendorId &&
+            basicInfo?.productId === productId
+        ) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
      * Used to determine if an update is existing in our storage for a peer with a certain software version.
      *
-     * It uses the already checked details and does not check again on-demand. It considers consents already given.
+     * It uses the already checked details and does not check again on-demand. It considers consents already given,
+     * but validates the peer data.
      */
     async updateExistsFor(
         peerAddress: PeerAddress,
         { softwareVersion, vendorId, productId, requestorCanConsent }: OtaSoftwareUpdateProvider.QueryImageRequest,
     ): Promise<OtaUpdateAvailableDetails | undefined> {
+        if (!(await this.#validatePeerDetails(peerAddress, { softwareVersion, vendorId, productId }))) {
+            logger.info(
+                `Peer details for node ${peerAddress.toString()} do not match values the update was requested for, ignoring`,
+            );
+            return undefined;
+        }
+
         // We just use what we know from our last check here, so no on-demand DCL checks for now
         const availableUpdates = await this.internal.otaService.find({ vendorId, productId });
 
@@ -214,7 +312,7 @@ export class SoftwareUpdateManager extends Behavior {
                     softwareVersion < candidateSoftwareVersion &&
                     softwareVersion >= minApplicableSoftwareVersion &&
                     softwareVersion <= maxApplicableSoftwareVersion &&
-                    (this.state.allowTestOtaImages || mode !== "test"),
+                    (mode === "prod" || this.state.allowTestOtaImages),
             )
             .sort((a, b) => b.softwareVersion - a.softwareVersion);
 
@@ -237,7 +335,7 @@ export class SoftwareUpdateManager extends Behavior {
         let candidate: UpdateConsentEntry | undefined;
         let consentRequired = false;
         if (requestorCanConsent) {
-            // Ok the request can get consent himself, so we just use the first candidate version and determine if
+            // Ok, the request can get consent himself, so we just use the first candidate version and determine if
             // consent is needed to be requested or if we already have it
             candidate = candidatesWithConsent[0];
             consentRequired = !candidate.consentPeers.some(
@@ -273,12 +371,70 @@ export class SoftwareUpdateManager extends Behavior {
     /** Triggered by a Timer to call the update with different parameters */
     async #checkAvailableUpdates() {
         await this.queryUpdates();
+        await this.#cleanupObsoleteUpdates();
+    }
+
+    /**
+     * Clean up stored OTA files that no node in the system needs anymore.
+     * A stored version is obsolete when ALL nodes with that vendor/product ID are already at or above that version.
+     * Only cleans "prod" and "test" mode files; "local" files are user-managed.
+     */
+    async #cleanupObsoleteUpdates() {
+        const rootNode = Node.forEndpoint(this.endpoint) as ServerNode;
+
+        // Collect minimum software version per vendor/product across all nodes
+        const nodeVersions = new Map<string, number>();
+        for (const peer of rootNode.peers) {
+            const basicInfo = peer.maybeStateOf(BasicInformationClient);
+            if (basicInfo === undefined) {
+                continue;
+            }
+            const { vendorId, productId, softwareVersion } = basicInfo;
+            const key = `${vendorId}-${productId}`;
+            const existing = nodeVersions.get(key);
+            if (existing === undefined || softwareVersion < existing) {
+                nodeVersions.set(key, softwareVersion);
+            }
+        }
+
+        if (nodeVersions.size === 0) {
+            return;
+        }
+
+        // Check all stored updates against node versions
+        const storedUpdates = await this.internal.otaService.find({});
+        for (const update of storedUpdates) {
+            if (update.mode === "local") {
+                continue; // Never auto-delete user-added files
+            }
+
+            const key = `${update.vendorId}-${update.productId}`;
+            const minNodeVersion = nodeVersions.get(key);
+            if (minNodeVersion === undefined) {
+                continue; // No known nodes for this vid/pid, keep the file
+            }
+
+            // If all nodes are at or above this stored version, it's obsolete
+            if (update.softwareVersion <= minNodeVersion) {
+                try {
+                    await this.internal.otaService.delete({ filename: update.filename });
+                    logger.info(
+                        `Cleaned up obsolete OTA file ${update.filename} (all nodes at version >= ${minNodeVersion})`,
+                    );
+                } catch (error) {
+                    logger.warn(`Failed to clean up OTA file ${update.filename}:`, error);
+                }
+            }
+        }
     }
 
     /**
      * Checks all nodes, or optionally a defined one, for available updates from the DCL OTA Update Service.
      *
      * Returns a list of peers for which updates are available along with the collected update info.
+     *
+     * If `includeStoredUpdates` is set to true available and known local update will be returned without checking the
+     * DCL again.
      */
     async queryUpdates(options: { peerToCheck?: ClientNode; includeStoredUpdates?: boolean } = {}) {
         const { peerToCheck, includeStoredUpdates = false } = options;
@@ -313,11 +469,23 @@ export class SoftwareUpdateManager extends Behavior {
             return [];
         }
 
-        const peersWithUpdates = new Array<{ peerAddress: PeerAddress; info: CollectedNodesUpdateInfo }>();
+        const peersWithUpdates = new Array<{ peerAddress: PeerAddress; info: SoftwareUpdateInfo }>();
         for (const infos of updateDetails.values()) {
-            const peers = await this.#checkProductForUpdates(infos, includeStoredUpdates);
-            for (const peer of peers) {
-                peersWithUpdates.push({ peerAddress: peer, info: infos });
+            try {
+                const peers = await this.#checkProductForUpdates(infos, includeStoredUpdates);
+                for (const peer of peers) {
+                    const info = this.internal.knownUpdates.get(peer.toString());
+                    if (info === undefined) {
+                        continue; // Race condition should normally not happen
+                    }
+                    peersWithUpdates.push({ peerAddress: peer, info });
+                }
+            } catch (error) {
+                // We ignore any errors that occur, but log them
+                logger.warn(
+                    `Error while checking for updates for product ${infos.vendorId}-${infos.productId}:`,
+                    error,
+                );
             }
         }
 
@@ -331,11 +499,22 @@ export class SoftwareUpdateManager extends Behavior {
     async #checkProductForUpdates(infos: CollectedNodesUpdateInfo, includeStoredUpdates: boolean) {
         const { vendorId, productId, softwareVersion, otaEndpoints } = infos;
 
+        // No need to query again if we already did and know that updates are available
+        if (
+            includeStoredUpdates &&
+            [...otaEndpoints.values()].every(({ peerAddress }) =>
+                this.internal.knownUpdates.has(peerAddress.toString()),
+            )
+        ) {
+            return [...otaEndpoints.values()].map(({ peerAddress }) => peerAddress);
+        }
+
         const updateDetails = await this.internal.otaService.checkForUpdate({
             vendorId,
             productId,
             currentSoftwareVersion: softwareVersion,
             includeStoredUpdates,
+            isProduction: this.state.allowTestOtaImages ? undefined : true,
         });
         if (!updateDetails) {
             return [];
@@ -349,12 +528,25 @@ export class SoftwareUpdateManager extends Behavior {
                 productId,
                 softwareVersion,
                 file: `ota/${fd.text}`,
-                peers: [...otaEndpoints.values()].map(({ endpoint }) => Node.forEndpoint(endpoint).id),
+                peers: [...otaEndpoints.values()].map(({ peerAddress }) => peerAddress.toString()),
             }),
         );
 
         // Request consent or notify peers about the update if we have consent
         for (const { endpoint, peerAddress } of otaEndpoints) {
+            const { vid, pid, softwareVersion, softwareVersionString, releaseNotesUrl, specificationVersion, source } =
+                updateDetails;
+            const details: SoftwareUpdateInfo = {
+                vendorId: vid,
+                productId: pid,
+                softwareVersion,
+                softwareVersionString,
+                releaseNotesUrl,
+                specificationVersion,
+                source,
+            };
+            this.internal.knownUpdates.set(peerAddress.toString(), details);
+
             const hasConsent = this.internal.consents.some(
                 consent =>
                     consent.vendorId === vendorId &&
@@ -374,16 +566,7 @@ export class SoftwareUpdateManager extends Behavior {
                 });
             } else {
                 // Inform the application that an update is available and we need consent
-                const { vid, pid, softwareVersion, softwareVersionString, releaseNotesUrl, specificationVersion } =
-                    updateDetails;
-                this.requestConsentForUpdate(peerAddress, {
-                    vendorId: vid,
-                    productId: pid,
-                    softwareVersion,
-                    softwareVersionString,
-                    releaseNotesUrl,
-                    specificationVersion,
-                });
+                this.requestConsentForUpdate(peerAddress, details);
             }
         }
 
@@ -408,38 +591,99 @@ export class SoftwareUpdateManager extends Behavior {
 
         // Todo sort out test vendors?
 
-        const that = this;
-        function triggerVersionChange(newVersion: number) {
-            that.#onSoftwareVersionChanged(peerAddress, newVersion);
+        // Node is applicable for update checks, register listener on softwareVersion to allow resetting update state
+        const versionEvent = peer.eventsOf(BasicInformationClient).softwareVersion$Changed;
+        if (!this.internal.versionUpdateObservers.observes(versionEvent)) {
+            const that = this;
+            function triggerVersionChange(newVersion: number) {
+                that.#onSoftwareVersionChanged(peerAddress, newVersion);
+            }
+
+            this.internal.versionUpdateObservers.on(versionEvent, this.callback(triggerVersionChange));
         }
 
-        // Node is applicable for update checks, register listener on softwareVersion to allow resetting update state
-        this.internal.versionUpdateObservers.on(
-            peer.eventsOf(BasicInformationClient)?.softwareVersion$Changed,
-            this.callback(triggerVersionChange),
-        );
+        // Listen to startUp event to detect reboots after applying — if the device reboots with the old version
+        // softwareVersion$Changed won't fire (same value), so we feed the version through the same handler
+        const startUpEvent = peer.eventsOf(BasicInformationClient).startUp;
+        if (!this.internal.versionUpdateObservers.observes(startUpEvent)) {
+            const that = this;
+            function triggerStartUp({ softwareVersion }: { softwareVersion: number }, context?: ActionContext) {
+                that.#onSoftwareVersionChanged(
+                    peerAddress,
+                    softwareVersion,
+                    true,
+                    hasRemoteActor(context) ? context.session : undefined,
+                );
+            }
+
+            this.internal.versionUpdateObservers.on(startUpEvent, this.callback(triggerStartUp));
+        }
 
         return { otaEndpoint, peerAddress, vendorId, productId, softwareVersion, softwareVersionString };
     }
 
-    /** Handler for softwareVersion changes on a peer */
-    #onSoftwareVersionChanged(peerAddress: PeerAddress, newVersion: number) {
+    /**
+     * Handler for softwareVersion changes on a peer.
+     *
+     * Also called from the startUp event with `isStartUp = true`. When a device reboots after applying an update,
+     * softwareVersion$Changed fires if the version actually changed (success). But if the device reboots with the
+     * same version (failed apply), softwareVersion$Changed does NOT fire — so startUp feeds the version through
+     * this same handler to detect the failure.
+     */
+    #onSoftwareVersionChanged(
+        peerAddress: PeerAddress,
+        newVersion: number,
+        isStartUp = false,
+        currentSession?: Session,
+    ) {
         const entryIndex = this.internal.updateQueue.findIndex(
             e => e.peerAddress.fabricIndex === peerAddress.fabricIndex && e.peerAddress.nodeId === peerAddress.nodeId,
         );
+
+        if (isStartUp) {
+            const suppressedSessionId = this.internal.pendingStartUpSuppress.get(peerAddress.toString());
+            if (suppressedSessionId !== undefined) {
+                this.internal.pendingStartUpSuppress.delete(peerAddress.toString());
+                // Use session from event context when available (avoids extra lookup); fall back to
+                // SessionManager for local/test contexts where there is no remote actor.
+                const sessionId = currentSession?.id ?? this.env.get(SessionManager).maybeSessionFor(peerAddress)?.id;
+                if (sessionId === suppressedSessionId) {
+                    // startUp is from the reboot we already handled via queryImage — suppress it
+                    return;
+                }
+                // Different session — process normally
+            }
+        }
+
         if (entryIndex === -1) {
             return;
         }
         const entry = this.internal.updateQueue[entryIndex];
+        const previousProgressStatus = entry.lastProgressStatus;
         if (entry.lastProgressUpdateTime !== undefined) {
             logger.info(
-                `Clearing in-progress update for node ${peerAddress.toString()} due to software version change. Last State was ${OtaSoftwareUpdateRequestor.UpdateState[entry.lastProgressStatus!]}`,
+                `Clearing in-progress update for node ${peerAddress.toString()} due to software version change. Last State was ${OtaUpdateStatus[entry.lastProgressStatus!]}`,
             );
-            entry.lastProgressUpdateTime = OtaSoftwareUpdateRequestor.UpdateState.Unknown;
-            entry.lastProgressStatus = undefined;
+            entry.lastProgressUpdateTime = undefined;
+            entry.lastProgressStatus = OtaUpdateStatus.Unknown;
         }
         const expectedVersion = entry.targetSoftwareVersion;
         if (newVersion < expectedVersion) {
+            // Device rebooted during apply with old version — the update failed
+            if (
+                isStartUp &&
+                (previousProgressStatus === OtaUpdateStatus.Applying ||
+                    previousProgressStatus === OtaUpdateStatus.WaitForApply)
+            ) {
+                logger.warn(
+                    `Device ${peerAddress.toString()} rebooted after applying update but reports softwareVersion ${newVersion} (expected >= ${expectedVersion}), update failed to apply`,
+                );
+                this.internal.updateQueue.splice(entryIndex, 1);
+                this.internal.pendingStartUpSuppress.delete(peerAddress.toString());
+                this.events.updateFailed.emit(peerAddress);
+                this.#triggerQueuedUpdate();
+                return;
+            }
             logger.info(
                 `Software version for node ${peerAddress.toString()} changed to ${newVersion}, but still below target version ${expectedVersion}, keeping in update queue`,
             );
@@ -448,10 +692,16 @@ export class SoftwareUpdateManager extends Behavior {
         logger.info(
             `Software version changed to ${newVersion} (expected ${expectedVersion}) for node ${peerAddress.toString()}, removing from update queue`,
         );
-        if (newVersion >= entry.targetSoftwareVersion) {
-            this.events.updateDone.emit(peerAddress);
-        }
+        this.internal.knownUpdates.delete(peerAddress.toString());
+        this.internal.pendingStartUpSuppress.delete(peerAddress.toString());
+        this.events.updateDone.emit(peerAddress);
         this.internal.updateQueue.splice(entryIndex, 1);
+
+        // Also clean up consents
+        this.internal.consents = this.internal.consents.filter(
+            ({ peerAddress: consentAddress, targetSoftwareVersion }) =>
+                !PeerAddress.is(peerAddress, consentAddress) || targetSoftwareVersion > newVersion,
+        );
 
         this.#triggerQueuedUpdate();
     }
@@ -460,16 +710,37 @@ export class SoftwareUpdateManager extends Behavior {
      * Notify the application that consent is needed for the given update on the given peer
      */
     protected requestConsentForUpdate(peerAddress: PeerAddress, updateDetails: SoftwareUpdateInfo) {
-        this.internal.knownUpdates.set(peerAddress.toString(), updateDetails);
         this.events.updateAvailable.emit(peerAddress, updateDetails);
     }
 
     /**
-     * Add an update to the update queue and execute it
+     * Add an update to the update queue and execute it.
      */
     #queueUpdate(entry: UpdateQueueEntry) {
-        logger.info(`Queuing update consent for node ${entry.peerAddress.toString()}`);
-        this.internal.updateQueue.push(entry);
+        // Check for existing entry for this peer to avoid duplicates
+        const existing = this.internal.updateQueue.find(
+            e =>
+                e.peerAddress.fabricIndex === entry.peerAddress.fabricIndex &&
+                e.peerAddress.nodeId === entry.peerAddress.nodeId,
+        );
+        if (existing !== undefined) {
+            if (existing.lastProgressUpdateTime !== undefined) {
+                // Update is in progress — don't disrupt it; the new version will be picked up on the next cycle
+                logger.info(
+                    `Update for node ${entry.peerAddress.toString()} already in progress, skipping queue update`,
+                );
+                return;
+            }
+            // Not yet started — safe to update the queued entry
+            existing.vendorId = entry.vendorId;
+            existing.productId = entry.productId;
+            existing.targetSoftwareVersion = entry.targetSoftwareVersion;
+            existing.endpoint = entry.endpoint;
+            logger.info(`Updated existing queued update for node ${entry.peerAddress.toString()}`);
+        } else {
+            logger.info(`Queuing update consent for node ${entry.peerAddress.toString()}`);
+            this.internal.updateQueue.push(entry);
+        }
 
         this.#triggerQueuedUpdate();
     }
@@ -492,7 +763,7 @@ export class SoftwareUpdateManager extends Behavior {
             // No update in progress, stop timer
             this.internal.updateQueueTimer.stop();
         } else if (inProgressCount > 0) {
-            // Check if all last Status are at least 15 minutes old, reset them to unknown and no time
+            // Check if all last Status is at least 15 minutes old, reset them to unknown and no time
             for (const entry of inProgressEntries) {
                 if (entry.lastProgressUpdateTime! + Minutes(15) < now) {
                     logger.info(
@@ -508,8 +779,10 @@ export class SoftwareUpdateManager extends Behavior {
             // An update is already in progress
             return;
         }
-        // Re-sort queue to prioritize entries without an Unknown status. Means the lastProgressStatus of "undefined"
-        // is sorted first, all others last
+        // Re-sort queue to deprioritize entries with Unknown status (sort them last). Entries without a
+        // lastProgressStatus (undefined — never started) go first, while Unknown entries go last. Unknown
+        // arises when a BDX-cancelled entry is reset for retry (Fix 1); deprioritizing it lets any
+        // genuinely fresh entries go first before the retry is attempted.
         this.internal.updateQueue = this.internal.updateQueue.sort((a, b) => {
             const aStatus = a.lastProgressStatus === OtaUpdateStatus.Unknown ? 1 : 0;
             const bStatus = b.lastProgressStatus === OtaUpdateStatus.Unknown ? 1 : 0;
@@ -519,10 +792,9 @@ export class SoftwareUpdateManager extends Behavior {
         if (nextEntry) {
             this.#triggerUpdateOnNode(nextEntry).catch(error => {
                 logger.error(`Error while triggering OTA update on node ${nextEntry.peerAddress.toString()}:`, error);
-                // TODO Reset entry state?
             });
             if (!this.internal.updateQueueTimer?.isRunning) {
-                // Start periodic timer to check for stalled updates
+                // Start a periodic timer to check for stalled updates
                 this.internal.updateQueueTimer = Time.getPeriodicTimer(
                     "checkQueuedUpdates",
                     Minutes(5),
@@ -544,7 +816,12 @@ export class SoftwareUpdateManager extends Behavior {
         }
 
         const { endpoint, peerAddress } = entry;
-        entry.lastProgressUpdateTime = Time.nowMs;
+
+        // Guard: skip the announcement if a BDX session is already active for this peer
+        if (this.env.get(BdxProtocol).sessionFor(peerAddress, this.storage.scope) !== undefined) {
+            logger.info(`BDX transfer still active for node ${peerAddress.toString()}, skipping announcement`);
+            return;
+        }
 
         try {
             logger.info(`Announcing OTA provider to node ${peerAddress.toString()}`);
@@ -553,17 +830,16 @@ export class SoftwareUpdateManager extends Behavior {
                 peerAddress,
                 OtaSoftwareUpdateRequestor.AnnouncementReason.UpdateAvailable,
             );
-            const queueEntryIndex = this.internal.updateQueue.indexOf(entry);
-            if (queueEntryIndex >= 0) {
-                this.internal.updateQueue[queueEntryIndex].lastProgressUpdateTime = Time.nowMs;
-            } else {
-                this.internal.updateQueue.push({
-                    ...entry,
-                    lastProgressUpdateTime: Time.nowMs,
-                });
+            // Only mark in-progress if the entry still exists in the queue (it may have been canceled during the await)
+            if (this.internal.updateQueue.indexOf(entry) >= 0) {
+                entry.lastProgressUpdateTime = Time.nowMs;
             }
         } catch (error) {
             logger.error(`Failed to announce OTA provider to node ${peerAddress.toString()}:`, error);
+            // Reset entry state so the queue doesn't stay blocked
+            entry.lastProgressUpdateTime = undefined;
+            entry.lastProgressStatus = OtaUpdateStatus.Unknown;
+            this.#triggerQueuedUpdate();
         }
     }
 
@@ -575,8 +851,36 @@ export class SoftwareUpdateManager extends Behavior {
      * manner, please use `addUpdateConsent()`.
      */
     async forceUpdate(peerAddress: PeerAddress, vendorId: VendorId, productId: number, targetSoftwareVersion: number) {
-        if (this.internal.updateQueue.some(({ lastProgressUpdateTime }) => lastProgressUpdateTime !== undefined)) {
-            logger.warn(`Forcing update while another update might be in progress.`);
+        const existingEntry = this.internal.updateQueue.find(
+            e =>
+                e.peerAddress.fabricIndex === peerAddress.fabricIndex &&
+                e.peerAddress.nodeId === peerAddress.nodeId &&
+                e.lastProgressUpdateTime !== undefined,
+        );
+        if (existingEntry !== undefined) {
+            // Check whether a BDX session is still active for this peer
+            const bdxProtocol = this.env.get(BdxProtocol);
+            const activeSession = bdxProtocol.sessionFor(peerAddress, this.storage.scope);
+            if (activeSession !== undefined) {
+                // Update is legitimately in progress, don't disrupt it
+                logger.info(
+                    `Force update for node ${peerAddress.toString()} skipped: BDX transfer is actively in progress`,
+                );
+                return;
+            }
+            // No active BDX session — entry is stale, clean it up
+            logger.info(`Cleaning up stale update entry for node ${peerAddress.toString()} before forcing new update`);
+            const staleIndex = this.internal.updateQueue.indexOf(existingEntry);
+            if (staleIndex >= 0) {
+                this.internal.updateQueue.splice(staleIndex, 1);
+                this.internal.pendingStartUpSuppress.delete(peerAddress.toString());
+            }
+            try {
+                await bdxProtocol.disablePeerForScope(peerAddress, this.storage, true);
+            } catch (error) {
+                MatterError.accept(error);
+                logger.debug(`Error cleaning up stale BDX registration:`, error);
+            }
         }
 
         const added = await this.addUpdateConsent(peerAddress, vendorId, productId, targetSoftwareVersion);
@@ -602,6 +906,39 @@ export class SoftwareUpdateManager extends Behavior {
         await this.#triggerUpdateOnNode(entry);
     }
 
+    /** Tries to cancel an ongoing OTA update for the given peer address. */
+    async #cancelUpdate(peerAddress: PeerAddress) {
+        const bdxProtocol = this.env.get(BdxProtocol);
+
+        // Disable the Peer on BdxProtocol for the OTA scope if registered and also cancel an open BDX session, if any
+        await bdxProtocol.disablePeerForScope(peerAddress, this.storage, true);
+
+        const entryIndex = this.internal.updateQueue.findIndex(
+            e => e.peerAddress.fabricIndex === peerAddress.fabricIndex && e.peerAddress.nodeId === peerAddress.nodeId,
+        );
+        if (entryIndex < 0) {
+            logger.warn(`No Ota update queued for node ${peerAddress.toString()}`);
+            return;
+        }
+
+        const entry = this.internal.updateQueue[entryIndex];
+        if (
+            entry.lastProgressStatus === OtaUpdateStatus.Applying ||
+            entry.lastProgressStatus === OtaUpdateStatus.Done
+        ) {
+            // Too late, update is already applying or done
+            logger.info(`Cannot cancel update for node ${peerAddress.toString()}, already applying or done`);
+            return;
+        }
+        this.internal.updateQueue.splice(entryIndex, 1);
+        // Clean up any pending startUp suppression for this peer — it will never arrive if the peer
+        // is permanently removed from tracking (decommissioned / disconnected).
+        this.internal.pendingStartUpSuppress.delete(peerAddress.toString());
+        logger.info(`Cancelled OTA update for node ${peerAddress.toString()}`);
+        this.events.updateFailed.emit(peerAddress);
+        this.#triggerQueuedUpdate();
+    }
+
     /**
      * Adds or updates a consent for a given peer address, vendor ID, product ID, and target software version.
      * Filters out existing consents for the given peer address and replaces them with the new one.
@@ -618,7 +955,7 @@ export class SoftwareUpdateManager extends Behavior {
         // Filter out all existing consents for this peer, they are replaced by the new one
         const consents = this.internal.consents.filter(
             consent =>
-                consent.peerAddress.fabricIndex !== peerAddress.fabricIndex &&
+                consent.peerAddress.fabricIndex !== peerAddress.fabricIndex ||
                 consent.peerAddress.nodeId !== peerAddress.nodeId,
         );
 
@@ -641,14 +978,54 @@ export class SoftwareUpdateManager extends Behavior {
         this.internal.consents = consents;
 
         if (otaEndpoint === undefined) {
-            logger.info(
-                `Node ${peerAddress.toString()} has no OTA requestor and is currently not applicable for OTA updates, update delayed`,
-            );
+            logger.info(`Node ${peerAddress.toString()} is currently not applicable for OTA updates, try again later`);
             return false;
         }
 
         this.#queueUpdate({ vendorId, productId, targetSoftwareVersion, peerAddress, endpoint: otaEndpoint });
         return true;
+    }
+
+    /**
+     * Checks if consent exists for the given peer address and optionally for a specific target software version.
+     */
+    hasConsent(peerAddress: PeerAddress, targetSoftwareVersion?: number) {
+        return this.internal.consents.some(
+            consent =>
+                consent.peerAddress.fabricIndex === peerAddress.fabricIndex &&
+                consent.peerAddress.nodeId === peerAddress.nodeId &&
+                (targetSoftwareVersion === undefined || consent.targetSoftwareVersion === targetSoftwareVersion),
+        );
+    }
+
+    /**
+     * Checks for consent and removes it if present, also cancels if in progress. Use this to remove a formerly given
+     * consent.
+     */
+    removeConsent(peerAddress: PeerAddress, targetSoftwareVersion?: number) {
+        const consentIndex = this.internal.consents.findIndex(
+            consent =>
+                consent.peerAddress.fabricIndex === peerAddress.fabricIndex &&
+                consent.peerAddress.nodeId === peerAddress.nodeId &&
+                (targetSoftwareVersion === undefined || consent.targetSoftwareVersion === targetSoftwareVersion),
+        );
+        if (consentIndex >= 0) {
+            this.internal.consents.splice(consentIndex, 1);
+        } else {
+            logger.info(
+                `No consent to remove found for node ${peerAddress.toString()}${targetSoftwareVersion !== undefined ? ` for version ${targetSoftwareVersion}` : ""}`,
+            );
+        }
+        return this.#cancelUpdate(peerAddress);
+    }
+
+    /**
+     * Suppress the next startUp event from the given peer on the given session.
+     * Called by OtaSoftwareUpdateProviderServer when a queryImage is detected as a post-reboot query
+     * so the startUp event that follows is not treated as a new failure-after-apply.
+     */
+    suppressNextStartUp(peerAddress: PeerAddress, sessionId: number) {
+        this.internal.pendingStartUpSuppress.set(peerAddress.toString(), sessionId);
     }
 
     /**
@@ -663,9 +1040,11 @@ export class SoftwareUpdateManager extends Behavior {
             e => e.peerAddress.fabricIndex === peerAddress.fabricIndex && e.peerAddress.nodeId === peerAddress.nodeId,
         );
         if (entryIndex < 0) {
-            logger.warn(
-                `Received OTA status update from unknown node ${peerAddress.toString()}, status=${OtaUpdateStatus[status]}`,
-            );
+            if (status !== OtaUpdateStatus.Cancelled) {
+                logger.warn(
+                    `Received OTA status update from unknown node ${peerAddress.toString()}, status=${OtaUpdateStatus[status]}`,
+                );
+            }
             return;
         }
 
@@ -673,7 +1052,17 @@ export class SoftwareUpdateManager extends Behavior {
         if (status === OtaUpdateStatus.Done) {
             logger.info(`OTA update completed for node`, peerAddress.toString());
             this.internal.updateQueue.splice(entryIndex, 1);
+            this.internal.knownUpdates.delete(peerAddress.toString());
+            this.internal.pendingStartUpSuppress.delete(peerAddress.toString());
             this.events.updateDone.emit(peerAddress);
+            this.#triggerQueuedUpdate();
+        } else if (status === OtaUpdateStatus.Cancelled) {
+            // BDX transport interruption: reset the entry so it can be retried.
+            // The intentional cancel path (#cancelUpdate) handles removal and updateFailed independently.
+            logger.info(`OTA update BDX cancelled for node ${peerAddress.toString()}, resetting for retry`);
+            entry.lastProgressUpdateTime = undefined;
+            entry.lastProgressStatus = OtaUpdateStatus.Unknown;
+            this.#triggerQueuedUpdate();
         } else {
             logger.info(
                 `OTA update status for node ${peerAddress.toString()} changed to ${OtaUpdateStatus[status]}${
@@ -689,7 +1078,6 @@ export class SoftwareUpdateManager extends Behavior {
         this.internal.checkForUpdateTimer?.stop();
         this.internal.updateQueueTimer?.stop();
         await this.internal.announcements?.close();
-        this.internal.services?.close(DclOtaUpdateService);
         this.internal.versionUpdateObservers.close();
         await super[Symbol.asyncDispose]?.();
     }
@@ -704,7 +1092,7 @@ export namespace SoftwareUpdateManager {
         updateCheckInterval = Hours(24);
 
         /** Announce this controller as Update provider to all nodes */
-        announceAsDefaultProvider = true;
+        announceAsDefaultProvider = false;
 
         /** Interval to Announces this controller as Update provider. Must not be lower than 24h! */
         announcementInterval = Hours(24);
@@ -713,8 +1101,6 @@ export namespace SoftwareUpdateManager {
     export class Internal {
         /** Use this to pre-initialize consent to allow nodes to update automatically. The content will not be persisted! */
         consents = new Array<UpdateConsent>();
-
-        services?: SharedEnvironmentServices;
 
         otaService!: DclOtaUpdateService;
 
@@ -729,6 +1115,16 @@ export namespace SoftwareUpdateManager {
         versionUpdateObservers = new ObserverGroup();
 
         knownUpdates = new Map<string, SoftwareUpdateInfo>();
+
+        /**
+         * peer address string → session ID on which the reboot-triggering queryImage was received.
+         *
+         * Intentionally ephemeral (not persisted): the suppress window is sub-second — between the
+         * queryImage response and the subsequent startUp event that follows on the same session.
+         * Entries are consumed immediately when the matching startUp fires in #onSoftwareVersionChanged,
+         * or cleaned up in #cancelUpdate when the peer is permanently removed from tracking.
+         */
+        pendingStartUpSuppress = new Map<string, number>();
     }
 
     export class Events extends EventEmitter {
@@ -737,5 +1133,12 @@ export namespace SoftwareUpdateManager {
 
         /** Emitted when an update for a Peer is finished */
         updateDone = Observable<[peer: PeerAddress]>();
+
+        /** Emitted when an update for a Peer has failed or was cancelled */
+        updateFailed = Observable<[peer: PeerAddress]>();
+
+        announceAsDefaultProvider$Changed = Observable<[announceAsDefaultProvider: boolean]>();
+
+        announcementInterval$Changed = Observable<[announcementInterval: Duration]>();
     }
 }

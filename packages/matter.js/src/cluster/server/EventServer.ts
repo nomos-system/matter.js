@@ -1,13 +1,20 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Endpoint } from "#device/Endpoint.js";
-import { ImplementationError, InternalError, isObject, MatterAggregateError, MaybePromise, Time } from "#general";
-import { AccessLevel, ClusterModel, EventModel, MatterModel } from "#model";
-import { Message, NumberedOccurrence, Occurrence, OccurrenceManager, SecureSession, Session } from "#protocol";
+import {
+    ImplementationError,
+    InternalError,
+    isObject,
+    MatterAggregateError,
+    MaybePromise,
+    Time,
+} from "@matter/general";
+import { AccessLevel, Matter } from "@matter/model";
+import { Message, NumberedOccurrence, Occurrence, OccurrenceManager, SecureSession, Session } from "@matter/protocol";
 import {
     Attributes,
     BitSchema,
@@ -23,7 +30,7 @@ import {
     TlvSchema,
     TypeFromPartialBitSchema,
     TypeFromSchema,
-} from "#types";
+} from "@matter/types";
 
 export type AnyEventServer<T = any> = EventServer<T> | FabricSensitiveEventServer<T>;
 
@@ -43,9 +50,9 @@ export function createEventServer<
     readAcl: AccessLevel | undefined,
 ): EventServer<T> {
     let fabricSensitive = false;
-    const clusterFromModel = MatterModel.standard.get(ClusterModel, clusterDef.id);
+    const clusterFromModel = Matter.clusters(clusterDef.id);
     if (clusterFromModel !== undefined) {
-        const eventModel = clusterFromModel.get(EventModel, eventDef.id);
+        const eventModel = clusterFromModel.events(eventDef.id);
         if (eventModel !== undefined) {
             fabricSensitive = eventModel.fabricSensitive;
         }

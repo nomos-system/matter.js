@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Bytes, deepCopy, ImplementationError, UnexpectedDataError, Verhoeff } from "#general";
+import { Bytes, deepCopy, ImplementationError, UnexpectedDataError, Verhoeff } from "@matter/general";
 import { VendorId } from "../datatype/VendorId.js";
 import { TlvAny } from "../tlv/TlvAny.js";
 import { TlvType } from "../tlv/TlvCodec.js";

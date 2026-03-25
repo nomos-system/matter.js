@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -52,7 +52,8 @@ export namespace Stream {
             return;
         }
 
-        const reader = stream.getReader();
+        // tsgo narrows stream to never after the in check above; cast back
+        const reader = (stream as ReadableStream<T>).getReader();
         try {
             while (true) {
                 const next = await reader.read();

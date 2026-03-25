@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { OnOffLightDevice } from "#devices/on-off-light";
 import { EndpointBehaviorsError } from "#endpoint/errors.js";
-import { Environment } from "#general";
+import { Environment } from "@matter/general";
 import { MockServerNode } from "../node/mock-server-node.js";
 import { MockEndpoint } from "./mock-endpoint.js";
 

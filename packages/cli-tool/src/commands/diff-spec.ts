@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { LogFormat, MatterError } from "#general";
-import { AnyElement, ElementTag, Model, ModelDiff, Specification } from "#model";
+import { LogFormat, MatterError } from "@matter/general";
+import { AnyElement, ElementTag, Model, ModelDiff, Specification } from "@matter/model";
 import { Command } from "./command.js";
 
 Command({

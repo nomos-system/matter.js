@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { camelize, ImplementationError, isObject } from "#general";
-import type { Schema } from "#model";
-import { DataModelPath, Metatype, ValueModel } from "#model";
-import { SchemaImplementationError, Val, WriteError } from "#protocol";
+import { ImplementationError, isObject } from "@matter/general";
+import type { Schema } from "@matter/model";
+import { DataModelPath, Metatype, ValueModel } from "@matter/model";
+import { SchemaImplementationError, Val, WriteError } from "@matter/protocol";
 import { RootSupervisor } from "../../../supervision/RootSupervisor.js";
 import { ValueSupervisor } from "../../../supervision/ValueSupervisor.js";
 
@@ -43,12 +43,12 @@ function getDefaults(supervisor: RootSupervisor, schema: Schema): Val.Struct {
     const defaults = {} as Val.Struct;
     for (const member of supervisor.membersOf(schema)) {
         if (member.default !== undefined) {
-            defaults[camelize(member.name)] = member.default;
+            defaults[member.propertyName] = member.default;
             continue;
         }
 
         if (member.mandatory && member.nullable) {
-            defaults[camelize(member.name)] = null;
+            defaults[member.propertyName] = null;
             continue;
         }
 
@@ -84,7 +84,7 @@ function StructPatcher(schema: ValueModel, supervisor: RootSupervisor): ValueSup
             handler = supervisor.get(member).patch;
         }
 
-        const key = camelize(member.name);
+        const key = member.propertyName;
         if (member.id !== undefined) {
             memberAltKeys[member.id.toString()] = key;
         }
@@ -161,7 +161,7 @@ function StructPatcher(schema: ValueModel, supervisor: RootSupervisor): ValueSup
 function ListPatcher(schema: ValueModel, supervisor: RootSupervisor): ValueSupervisor.Patch {
     const entry = schema.listEntry;
     if (entry === undefined) {
-        throw new SchemaImplementationError(DataModelPath(schema.path), "List schema has no entry definition");
+        throw new SchemaImplementationError(new DataModelPath(schema.path), "List schema has no entry definition");
     }
 
     const entryMetatype = entry?.effectiveMetatype;
@@ -189,7 +189,7 @@ function ListPatcher(schema: ValueModel, supervisor: RootSupervisor): ValueSuper
 
         // eslint reports error here when linting entire project but not individual file.  Unsure if this is a bug but
         // disabling as code is correct as written
-        // eslint-disable-next-line @typescript-eslint/no-for-in-array
+        // oxlint-disable-next-line @typescript-eslint/no-for-in-array
         for (const indexStr in changes) {
             const index = Number.parseInt(indexStr);
 

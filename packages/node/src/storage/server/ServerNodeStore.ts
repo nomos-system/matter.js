@@ -1,12 +1,14 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Endpoint } from "#endpoint/Endpoint.js";
+import type { ServerNode } from "#node/ServerNode.js";
 import {
     asyncNew,
+    DatafileRoot,
     Destructable,
     Diagnostic,
     Environment,
@@ -14,8 +16,7 @@ import {
     Logger,
     StorageManager,
     StorageService,
-} from "#general";
-import type { ServerNode } from "#node/ServerNode.js";
+} from "@matter/general";
 import { NodeStore } from "../NodeStore.js";
 import { ClientNodeStores } from "../client/ClientNodeStores.js";
 import { ServerEndpointStores } from "./ServerEndpointStores.js";
@@ -26,11 +27,12 @@ const logger = Logger.get("ServerNodeStore");
  * {@link ServerNode} persistence.
  *
  * Each {@link ServerNode} has an instance of this store.
+ *
+ * Exclusive access is enforced by {@link Directory.lock} when a filesystem-backed storage driver is in use.
  */
 export class ServerNodeStore extends NodeStore implements Destructable {
     #env: Environment;
     #nodeId: string;
-    #location: string;
     #endpointStores: ServerEndpointStores;
     #storageManager?: StorageManager;
     #clientStores?: ClientNodeStores;
@@ -51,7 +53,6 @@ export class ServerNodeStore extends NodeStore implements Destructable {
 
         this.#env = environment;
         this.#nodeId = nodeId;
-        this.#location = this.#env.get(StorageService).location ?? "(unknown location)";
 
         this.construction.start();
     }
@@ -64,6 +65,7 @@ export class ServerNodeStore extends NodeStore implements Destructable {
         await this.construction.close(async () => {
             await this.#clientStores?.close();
             await this.#storageManager?.close();
+            await this.#env.get(StorageService).close(this.#nodeId);
             this.#logChange("Closed");
         });
     }
@@ -82,8 +84,24 @@ export class ServerNodeStore extends NodeStore implements Destructable {
         return this.construction.assert("client stores", this.#clientStores);
     }
 
+    /**
+     * The underlying {@link StorageManager} that provides node data.
+     */
+    get storage() {
+        return this.construction.assert("storage manager", this.#storageManager);
+    }
+
     #logChange(what: "Opened" | "Closed") {
-        logger.info(what, Diagnostic.strong(this.#nodeId ?? "node"), "storage at", `${this.#location}/${this.#nodeId}`);
+        const root = this.#env.has(DatafileRoot) ? this.#env.get(DatafileRoot) : undefined;
+        logger.info(
+            what,
+            Diagnostic.strong(this.#nodeId ?? "node"),
+            "storage",
+            Diagnostic.dict({
+                location: root?.path ?? "(unknown location)",
+                driver: this.#storageManager?.driverId ?? "unknown",
+            }),
+        );
     }
 
     storeForEndpoint(endpoint: Endpoint) {
@@ -95,7 +113,8 @@ export class ServerNodeStore extends NodeStore implements Destructable {
     }
 
     async load() {
-        this.#storageManager = await this.#env.get(StorageService).open(this.#nodeId);
+        const root = this.#env.has(DatafileRoot) ? this.#env.get(DatafileRoot) : undefined;
+        this.#storageManager = await this.#env.get(StorageService).open(root ?? this.#nodeId);
         this.#env.set(StorageManager, this.#storageManager);
 
         this.#clientStores = await asyncNew(ClientNodeStores, this.#storageManager.createContext("nodes"));

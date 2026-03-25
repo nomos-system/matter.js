@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -49,7 +49,7 @@ export class TvTestInstance extends NodeTestInstance {
                     productLabel: "MorePowerPro 6100",
                     productId: 0x8001,
                     serialNumber: `9999-9999-9999`,
-                    manufacturingDate: "20210101",
+                    manufacturingDate: "20200101",
                     partNumber: "123456",
                     productUrl: "https://test.com",
                     uniqueId: `node-matter-unique`,

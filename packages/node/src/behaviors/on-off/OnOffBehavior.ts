@@ -1,15 +1,15 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { OnOff } from "#clusters/on-off";
+import { OnOff } from "@matter/types/clusters/on-off";
 import { ClusterBehavior } from "../../behavior/cluster/ClusterBehavior.js";
 import { OnOffInterface } from "./OnOffInterface.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 
 /**
  * OnOffBehavior is the base class for objects that support interaction with {@link OnOff.Cluster}.

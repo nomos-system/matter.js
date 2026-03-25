@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { GeneratedClass } from "#general";
-import { Val } from "#protocol";
+import { GeneratedClass } from "@matter/general";
+import { Val } from "@matter/protocol";
 
 /**
  * State is a plain JS object.

@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { MaybePromise } from "#general";
-import { JointFabricAdministrator } from "#clusters/joint-fabric-administrator";
+import { MaybePromise } from "@matter/general";
+import { JointFabricAdministrator } from "@matter/types/clusters/joint-fabric-administrator";
 
 export namespace JointFabricAdministratorInterface {
     export interface Base {
@@ -80,7 +80,7 @@ export namespace JointFabricAdministratorInterface {
          * This command shall be used for communicating to client the endpoint that holds the Joint Fabric Administrator
          * Cluster.
          *
-         * ### This field shall contain the unique identifier for the endpoint that holds the Joint Fabric Administrator
+         * This field shall contain the unique identifier for the endpoint that holds the Joint Fabric Administrator
          * Cluster.
          *
          * @see {@link MatterSpecification.v142.Core} § 11.25.7.9

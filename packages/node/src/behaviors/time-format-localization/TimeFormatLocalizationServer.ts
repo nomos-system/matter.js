@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { TimeFormatLocalization } from "#clusters/time-format-localization";
-import { Logger, MaybePromise } from "#general";
+import { Logger, MaybePromise } from "@matter/general";
+import { TimeFormatLocalization } from "@matter/types/clusters/time-format-localization";
 import { TimeFormatLocalizationBehavior } from "./TimeFormatLocalizationBehavior.js";
 
 const logger = Logger.get("TimeFormatLocalizationServer");

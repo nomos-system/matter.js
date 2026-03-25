@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { b$, Bytes, EcdsaSignature, PublicKey, StandardCrypto } from "#general";
 import { TlvEncryptedDataSigma2, TlvEncryptedDataSigma3, TlvSignedData } from "#session/case/CaseMessages.js";
+import { b$, Bytes, EcdsaSignature, PublicKey, StandardCrypto } from "@matter/general";
 
 describe("CasePairing", () => {
     const crypto = new StandardCrypto();

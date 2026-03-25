@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -14,7 +14,7 @@ import {
     Key,
     PrivateKey,
     PublicKey,
-} from "#general";
+} from "@matter/general";
 import * as assert from "node:assert";
 import * as crypto from "node:crypto";
 

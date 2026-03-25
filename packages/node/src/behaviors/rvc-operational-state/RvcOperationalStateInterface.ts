@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { MaybePromise } from "#general";
-import { RvcOperationalState } from "#clusters/rvc-operational-state";
+import { MaybePromise } from "@matter/general";
+import { RvcOperationalState } from "@matter/types/clusters/rvc-operational-state";
 
 export namespace RvcOperationalStateInterface {
     export interface Base {
@@ -35,9 +35,9 @@ export namespace RvcOperationalStateInterface {
          *
          * Otherwise, on success:
          *
-         *   • The OperationalState attribute shall be set to SeekingCharger.
+         *   - The OperationalState attribute shall be set to SeekingCharger.
          *
-         *   • The device shall respond with an OperationalCommandResponse command with an ErrorStateID of NoError.
+         *   - The device shall respond with an OperationalCommandResponse command with an ErrorStateID of NoError.
          *
          * @see {@link MatterSpecification.v142.Cluster} § 7.4.5.1
          */

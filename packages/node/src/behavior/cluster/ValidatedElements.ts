@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Diagnostic, ImplementationError, Logger, MatterAggregateError, Observable } from "#general";
-import { ClusterType } from "#types";
+import { Diagnostic, ImplementationError, Logger, MatterAggregateError, Observable } from "@matter/general";
+import { ClusterType } from "@matter/types";
 import { Behavior } from "../Behavior.js";
 import { ClusterBehavior } from "./ClusterBehavior.js";
 import { introspectionInstanceOf } from "./cluster-behavior-utils.js";

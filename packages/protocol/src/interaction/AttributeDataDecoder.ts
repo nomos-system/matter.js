@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Diagnostic, Logger, UnexpectedDataError } from "#general";
+import { Diagnostic, Logger, UnexpectedDataError } from "@matter/general";
 import {
     ArraySchema,
     Attribute,
@@ -24,7 +24,7 @@ import {
     TlvSchema,
     TlvType,
     TypeFromSchema,
-} from "#types";
+} from "@matter/types";
 
 const logger = Logger.get("AttributeDataDecoder");
 
@@ -148,7 +148,7 @@ export function expandPathsInAttributeData(
 }
 
 /**
- * Normalizes (e.g. prepare data for array un-chinking and resolve Tag compression if used) the attribute details from
+ * Normalizes (e.g. prepare data for array un-chunking and resolve Tag compression if used) the attribute details from
  * a received DataReport.
  */
 export function normalizeAttributeData(
@@ -237,10 +237,6 @@ export function normalizeAndDecodeAttributeData(
             const cluster = getClusterById(clusterId);
             const attributeDetail = getClusterAttributeById(cluster, attributeId);
             if (attributeDetail === undefined) {
-                logger.debug(
-                    `Decode unknown attribute ${Diagnostic.hex(clusterId)}/${Diagnostic.hex(attributeId)} via the AnySchema.`,
-                );
-
                 const attributeName = `Unknown (${Diagnostic.hex(attributeId)})`;
                 const value = decodeUnknownAttributeValue(values);
                 result.push({
@@ -259,7 +255,7 @@ export function normalizeAndDecodeAttributeData(
                 value,
             });
         } catch (error: any) {
-            logger.error(
+            logger.warn(
                 `Error decoding attribute ${endpointId}/${Diagnostic.hex(clusterId)}/${Diagnostic.hex(attributeId)}: ${
                     error.message
                 }`,

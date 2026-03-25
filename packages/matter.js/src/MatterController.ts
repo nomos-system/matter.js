@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -10,16 +10,19 @@
  * @deprecated
  */
 
-import { BasicInformationClient } from "#behaviors/basic-information";
 import { ClusterClient } from "#cluster/client/ClusterClient.js";
-import { InteractionClientProvider } from "#cluster/client/InteractionClient.js";
-import { GeneralCommissioning } from "#clusters";
+import {
+    InteractionClientProvider,
+    NodeDiscoveryType,
+    PeerConnectionOptions,
+} from "#cluster/client/InteractionClient.js";
 import type { NodeCommissioningOptions } from "#CommissioningController.js";
 import { ControllerStore, ControllerStoreInterface } from "#ControllerStore.js";
 import { DeviceInformationData } from "#device/DeviceInformation.js";
-import { OtaProviderEndpoint } from "#endpoints/ota-provider";
 import {
+    BasicMultiplex,
     Bytes,
+    causedBy,
     ChannelType,
     ClassExtends,
     ConnectionlessTransportSet,
@@ -33,17 +36,21 @@ import {
     isObject,
     Logger,
     MatterError,
-    MaybePromise,
     Minutes,
+    MockStorageService,
+    ObserverGroup,
     ServerAddress,
     ServerAddressUdp,
-    StorageBackendMemory,
     StorageManager,
     StorageService,
     SupportedStorageTypes,
-} from "#general";
+    Time,
+    UnexpectedDataError,
+} from "@matter/general";
 import {
     ClientNode,
+    ClientNodePhysicalProperties,
+    ClusterState,
     CommissioningClient,
     ControllerBehavior,
     Endpoint,
@@ -53,22 +60,19 @@ import {
     RemoteDescriptor,
     ServerNode,
     ServerNodeStore,
-} from "#node";
+} from "@matter/node";
+import { BasicInformationClient } from "@matter/node/behaviors/basic-information";
+import { OtaProviderEndpoint } from "@matter/node/endpoints/ota-provider";
 import {
     CertificateAuthority,
     CommissioningError,
     ControllerCommissioner,
     ControllerCommissioningFlow,
-    DiscoveryAndCommissioningOptions,
     DiscoveryData,
     Fabric,
     FabricAuthority,
     FabricManager,
-    NodeDiscoveryType,
     PeerAddress,
-    PeerAddressStore,
-    PeerConnectionOptions,
-    PeerDataStore,
     PeerDescriptor,
     PeerSet,
     PhysicalDeviceProperties,
@@ -76,7 +80,7 @@ import {
     ScannerSet,
     SecureSession,
     SessionManager,
-} from "#protocol";
+} from "@matter/protocol";
 import {
     CaseAuthenticatedTag,
     DiscoveryCapabilitiesBitmap,
@@ -87,8 +91,9 @@ import {
     NodeId,
     TypeFromPartialBitSchema,
     VendorId,
-} from "#types";
-import type { ClientNodeInteraction } from "@matter/node";
+} from "@matter/types";
+import { BasicInformation } from "@matter/types/clusters/basic-information";
+import { GeneralCommissioning } from "@matter/types/clusters/general-commissioning";
 
 export type CommissionedNodeDetails = {
     operationalServerAddress?: ServerAddressUdp;
@@ -135,6 +140,7 @@ export class MatterController {
         localPort?: number;
         environment: Environment;
         enableOtaProvider?: boolean;
+        basicInformation?: Partial<Omit<ClusterState.PropertiesOf<typeof BasicInformation.Complete>, "vendorId">>;
     }): Promise<MatterController> {
         const {
             rootFabric,
@@ -154,45 +160,53 @@ export class MatterController {
 
         const baseStorage: StorageManager = await options.environment.get(StorageService).open(options.id);
 
-        // Storage data migration from legacy Controller to ServerNode based controller
-        const oldStorage = baseStorage.createContext("credentials");
-        const newStorage = baseStorage.createContext("certificates");
-        const newFabricStorage = baseStorage.createContext("fabrics");
+        try {
+            // Storage data migration from legacy Controller to ServerNode based controller
+            const oldStorage = baseStorage.createContext("credentials");
+            const newStorage = baseStorage.createContext("certificates");
+            const newFabricStorage = baseStorage.createContext("fabrics");
 
-        const keys = await oldStorage.keys();
+            const keys = await oldStorage.keys();
 
-        const newFabrics = await newFabricStorage.get<Fabric.Config[]>("fabrics", []);
-        if (keys.length !== 0) {
-            for (const key of await oldStorage.keys()) {
-                if (key === "fabric") {
-                    if (rootFabric !== undefined) {
-                        logger.debug("Skipping fabric migration because a rootFabric was provided.");
-                        continue;
-                    }
-                    const oldFabric = await oldStorage.get<Fabric.Config>("fabric");
-                    if (
-                        newFabrics.length &&
-                        newFabrics.some(
-                            fab =>
-                                fab.fabricIndex === oldFabric.fabricIndex &&
-                                Bytes.areEqual(fab.rootCert, oldFabric.rootCert),
-                        )
-                    ) {
-                        logger.debug("Skipping fabric migration because a new storage already has matching fabric");
-                        continue;
-                    }
-                    fabric = await Fabric.create(Environment.default.get(Crypto), oldFabric);
-                } else {
-                    // Migrates Certificate Authority data to a new location
-                    if (!(await newStorage.has(key))) {
-                        newStorage.set(key, await oldStorage.get(key));
+            const newFabrics = await newFabricStorage.get<Fabric.Config[]>("fabrics", []);
+            if (keys.length !== 0) {
+                for (const key of await oldStorage.keys()) {
+                    if (key === "fabric") {
+                        if (rootFabric !== undefined) {
+                            logger.debug("Skipping fabric migration because a rootFabric was provided.");
+                            continue;
+                        }
+                        const oldFabric = await oldStorage.get<Fabric.Config>("fabric");
+                        if (
+                            newFabrics.length &&
+                            newFabrics.some(
+                                fab =>
+                                    fab.fabricIndex === oldFabric.fabricIndex &&
+                                    Bytes.areEqual(fab.rootCert, oldFabric.rootCert),
+                            )
+                        ) {
+                            logger.debug("Skipping fabric migration because a new storage already has matching fabric");
+                            continue;
+                        }
+                        fabric = await Fabric.create(Environment.default.get(Crypto), oldFabric);
+                    } else {
+                        // Migrates Certificate Authority data to a new location
+                        if (!(await newStorage.has(key))) {
+                            await newStorage.set(key, await oldStorage.get(key));
+                        }
                     }
                 }
             }
-        }
 
-        if (rootCertificateAuthority !== undefined) {
-            environment.set(CertificateAuthority, rootCertificateAuthority);
+            if (rootCertificateAuthority !== undefined) {
+                environment.set(CertificateAuthority, rootCertificateAuthority);
+            }
+        } finally {
+            try {
+                await baseStorage.close();
+            } catch (closeError) {
+                logger.warn("Error closing base storage:", closeError);
+            }
         }
 
         controller = new MatterController({
@@ -228,7 +242,7 @@ export class MatterController {
         environment.set(CertificateAuthority, ca);
 
         // Stored data are temporary anyway and no node will be connected, so just use an in-memory storage
-        environment.set(StorageService, new StorageService(environment, () => new StorageBackendMemory()));
+        new MockStorageService(environment);
 
         const fabric = await Fabric.create(crypto, fabricConfig);
         if (!Bytes.areEqual(fabric.rootCert, ca.rootCert)) {
@@ -264,6 +278,8 @@ export class MatterController {
     #peers?: PeerSet;
     #fabric?: Fabric;
     #clients?: InteractionClientProvider;
+    #migratedPeerObservers = new ObserverGroup();
+    #legacyPeerStore?: CommissionedNodeStore;
 
     get construction() {
         return this.#construction;
@@ -284,6 +300,7 @@ export class MatterController {
         localPort?: number;
         environment: Environment;
         enableOtaProvider?: boolean;
+        basicInformation?: Partial<Omit<ClusterState.PropertiesOf<typeof BasicInformation.Complete>, "vendorId">>;
     }) {
         const crypto = options.environment.get(Crypto);
         const {
@@ -301,11 +318,12 @@ export class MatterController {
             id,
             fabric,
             enableOtaProvider = false,
+            basicInformation = {},
         } = options;
 
         this.#construction = Construction(this, async () => {
             // Now after all Legacy stuff is prepared, initialize the ServerNode
-            this.#node = await ServerNode.create({
+            this.#node = await ServerNode.create(ServerNode.RootEndpoint.with(ControllerBehavior), {
                 environment,
                 id,
                 network: {
@@ -316,6 +334,7 @@ export class MatterController {
                     port: localPort,
                 },
                 basicInformation: {
+                    ...basicInformation,
                     vendorId: adminVendorId,
                 },
                 controller: {
@@ -362,7 +381,7 @@ export class MatterController {
                     adminFabricId,
                     caseAuthenticatedTags,
                 },
-                fabric === undefined, // When no fabric is provided we rotate the NOC operational keypair on start.
+                fabric === undefined, // When no fabric is provided, we rotate the NOC operational keypair on start.
                 // This avoids long-lived operational keys for controllers that bootstrap their own fabric state,
                 // which is a security best practice: each restart derives a fresh keypair for the same logical fabric.
                 // Already-commissioned devices remain accessible because the NOC is reissued under the same CA and
@@ -390,12 +409,18 @@ export class MatterController {
             }
 
             // TODO
-            //await (await options.environment.get(StorageService).open(options.id))
+            //await (await server.env.get(ServerNodeStore).storage
             //    .createContext("credentials")
             //    .clearAll(); // Clear old credentials storage
 
             this.#peers = this.#node.env.get(PeerSet);
         });
+    }
+
+    get peers() {
+        this.construction.assert();
+
+        return this.#peers!;
     }
 
     #enableOtaProvider() {
@@ -409,7 +434,7 @@ export class MatterController {
     }
 
     get ble() {
-        return this.node.state.controller.ble ?? false;
+        return this.node.stateOf(ControllerBehavior).ble ?? false;
     }
 
     get fabric() {
@@ -457,7 +482,7 @@ export class MatterController {
      * Commission a device by its identifier and the Passcode. If a known address is provided this is tried first
      * before discovering devices in the network. If multiple addresses or devices are found, they are tried all after
      * each other. It returns the NodeId of the commissioned device.
-     * If it throws an PairRetransmissionLimitReachedError that means that no found device responded to the pairing
+     * If it throws a PairRetransmissionLimitReachedError that means that no found device responded to the pairing
      * request or the passode did not match to any discovered device/address.
      *
      * Use the connectNodeAfterCommissioning callback to implement an own logic to do the operative device discovery and
@@ -471,30 +496,67 @@ export class MatterController {
             commissioningFlowImpl?: ClassExtends<ControllerCommissioningFlow>;
         },
     ): Promise<NodeId> {
-        const commissioningOptions: DiscoveryAndCommissioningOptions = {
-            ...options.commissioning,
-            fabric: this.fabric,
-            discovery: options.discovery,
-            passcode: options.passcode,
-        };
-
         const { completeCommissioningCallback, commissioningFlowImpl } = customizations ?? {};
 
-        if (completeCommissioningCallback) {
-            commissioningOptions.finalizeCommissioning = async (peerAddress, discoveryData) => {
-                const result = await completeCommissioningCallback(peerAddress.nodeId, discoveryData);
-                if (!result) {
-                    throw new RetransmissionLimitReachedError("Device could not be discovered");
-                }
-            };
-        }
-        commissioningOptions.commissioningFlowImpl = commissioningFlowImpl;
+        // Wrap the optional PASE-only callback into the finalizeCommissioning hook understood by CommissioningClient
+        const finalizeCommissioning = completeCommissioningCallback
+            ? async (peerAddress: PeerAddress, discoveryData?: DiscoveryData) => {
+                  const result = await completeCommissioningCallback(peerAddress.nodeId, discoveryData);
+                  if (!result) {
+                      throw new RetransmissionLimitReachedError("Device could not be discovered");
+                  }
+              }
+            : undefined;
 
-        const address = await this.node.env.get(ControllerCommissioner).commissionWithDiscovery(commissioningOptions);
+        const caseAuthenticatedTags = options.caseAuthenticatedTags;
+        const { knownAddress, timeout, discoveryCapabilities } = options.discovery;
+        const commissionableDevice =
+            "commissionableDevice" in options.discovery ? options.discovery.commissionableDevice : undefined;
+
+        let clientNode: ClientNode;
+
+        const addresses = commissionableDevice?.addresses ?? (knownAddress !== undefined ? [knownAddress] : undefined);
+        if (addresses !== undefined) {
+            // Pre-discovered device or known address — find/create the ClientNode and commission via CommissioningClient
+            const descriptor: RemoteDescriptor = commissionableDevice ?? { addresses };
+            clientNode = await this.node.peers.forDescriptor(descriptor);
+            await clientNode.commission({
+                fabric: this.fabric,
+                passcode: options.passcode,
+                commissioningFlowImpl,
+                caseAuthenticatedTags,
+                autoSubscribe: false,
+                wifiNetwork: options.commissioning.wifiNetwork,
+                threadNetwork: options.commissioning.threadNetwork,
+                regulatoryLocation: options.commissioning.regulatoryLocation,
+                regulatoryCountryCode: options.commissioning.regulatoryCountryCode,
+                nodeId: options.commissioning.nodeId,
+                finalizeCommissioning,
+            });
+        } else {
+            // Pure discovery by identifier — use CommissioningDiscovery for full parallel PASE support
+            const identifierData = "identifierData" in options.discovery ? options.discovery.identifierData : {};
+            clientNode = await this.node.peers.commission({
+                ...identifierData,
+                ...options.commissioning,
+                fabric: this.fabric,
+                passcode: options.passcode,
+                commissioningFlowImpl,
+                caseAuthenticatedTags,
+                autoSubscribe: false,
+                timeout,
+                discoveryCapabilities,
+                finalizeCommissioning,
+            });
+        }
+
+        const peerAddress = clientNode.peerAddress;
+        if (peerAddress === undefined) {
+            throw new ImplementationError("Commissioned node has no peer address");
+        }
 
         await this.fabric.persist();
-
-        return address.nodeId;
+        return peerAddress.nodeId;
     }
 
     async disconnect(nodeId: NodeId) {
@@ -503,27 +565,64 @@ export class MatterController {
     }
 
     async connectPaseChannel(options: NodeCommissioningOptions) {
-        const { paseSession } = await this.node.env.get(ControllerCommissioner).discoverAndEstablishPase({
-            ...options.commissioning,
-            fabric: this.fabric,
-            discovery: options.discovery,
-            passcode: options.passcode,
-        });
-        logger.warn("PASE channel established", paseSession.via, paseSession.isSecure);
+        const { discovery, passcode } = options;
+        const timeout = discovery.timeout;
+
+        if ("commissionableDevice" in discovery) {
+            // Pre-discovered device: addresses already known, skip discovery.
+            let { addresses } = discovery.commissionableDevice;
+            if (discovery.discoveryCapabilities?.ble !== true) {
+                addresses = addresses.filter(a => a.type !== "ble");
+            }
+            const commissioner = this.node.env.get(ControllerCommissioner);
+            const { paseSession } = await commissioner.establishPase({
+                addresses,
+                discoveryData: discovery.commissionableDevice,
+                passcode,
+                timeout,
+            });
+            logger.warn("PASE channel established", paseSession.via, paseSession.isSecure);
+            return paseSession;
+        }
+
+        const identifierData = "identifierData" in discovery ? discovery.identifierData : {};
+
+        // If we have a known address, try it first before falling back to full discovery.
+        if (discovery.knownAddress !== undefined) {
+            const commissioner = this.node.env.get(ControllerCommissioner);
+            try {
+                const { paseSession } = await commissioner.establishPase({
+                    addresses: [discovery.knownAddress],
+                    passcode,
+                    timeout,
+                });
+                logger.warn("PASE channel established via known address", paseSession.via, paseSession.isSecure);
+                return paseSession;
+            } catch (error) {
+                // Intentional: fall back to full discovery when the known address is stale, unreachable, or
+                // points to a different device.  Re-throw on unexpected errors (e.g. config problems).
+                if (!causedBy(error, UnexpectedDataError, RetransmissionLimitReachedError)) {
+                    throw error;
+                }
+            }
+        }
+
+        // Pure discovery: use PaseDiscovery which manages scanner lifecycle automatically.
+        const paseSession = await this.node.peers.pase({ ...identifierData, timeout, passcode });
+        logger.warn("PASE channel established via discovery", paseSession.via, paseSession.isSecure);
         return paseSession;
     }
 
     async removeNode(nodeId: NodeId) {
         const peerAddress = this.fabric.addressOf(nodeId);
-        const node = await this.node.peers.forAddress(peerAddress);
-        const peer = this.node.env.get(PeerSet).for(peerAddress);
-        await node.delete();
-        await peer.delete();
+        const node = this.node.peers.get(peerAddress);
+        const peer = this.node.env.get(PeerSet).get(peerAddress);
+        await node?.delete();
+        await peer?.delete();
     }
 
     /**
      * Method to complete the commissioning process to a node which was initialized with a PASE secure channel.
-     * TODO validate
      */
     async completeCommissioning(peerNodeId: NodeId, discoveryData?: DiscoveryData) {
         this.#construction.assert();
@@ -535,7 +634,7 @@ export class MatterController {
                 discoveryData,
             },
             allowUnknownPeer: true,
-        }); // Wait maximum 120s to find the operational device for commissioning process
+        }); // Wait maximum 120s to find the operational device for a commissioning process
         const generalCommissioningClusterClient = ClusterClient(
             GeneralCommissioning.Cluster,
             EndpointNumber(0),
@@ -549,6 +648,11 @@ export class MatterController {
             await this.#peers?.get(this.fabric.addressOf(peerNodeId))?.delete();
             throw new CommissioningError(`Commission error on commissioningComplete: ${errorCode}, ${debugText}`);
         }
+
+        await (
+            await this.node.peers.forAddress(this.fabric.addressOf(peerNodeId))
+        ).setStateOf(CommissioningClient, { commissionedAt: Time.nowMs });
+
         await this.fabric.persist();
     }
 
@@ -558,11 +662,7 @@ export class MatterController {
 
     getCommissionedNodes() {
         return this.node.peers
-            .map(
-                peer =>
-                    (peer.lifecycle.isReady && peer.maybeStateOf(CommissioningClient)?.peerAddress?.nodeId) ||
-                    undefined,
-            )
+            .map(peer => peer.maybeStateOf(CommissioningClient)?.peerAddress?.nodeId)
             .filter(nodeId => nodeId !== undefined);
     }
 
@@ -582,14 +682,14 @@ export class MatterController {
 
     getCommissionedNodesDetails(): PairedNodeDetails[] {
         return this.node.peers
-            .filter(peer => peer.lifecycle.isReady && peer.maybeStateOf(CommissioningClient)?.peerAddress !== undefined)
+            .filter(peer => peer.maybeStateOf(CommissioningClient)?.peerAddress !== undefined)
             .map(peer => this.#commissionedNodeDetailsForNode(peer));
     }
 
     getCommissionedNodeDetails(nodeId: NodeId) {
         const address = this.fabric.addressOf(nodeId);
         const peer = this.node.peers.get(address);
-        if (peer === undefined || !peer.lifecycle.isReady) {
+        if (peer === undefined) {
             throw new Error(`Node ${nodeId} is not commissioned.`);
         }
         return this.#commissionedNodeDetailsForNode(peer);
@@ -597,7 +697,7 @@ export class MatterController {
 
     /**
      * Connect to the device by opening a channel and creating a new CASE session if necessary.
-     * Returns a InteractionClient on success.
+     * Returns an InteractionClient on success.
      */
     async connect(peerNodeId: NodeId, options: MatterController.ConnectOptions) {
         const address = this.fabric.addressOf(peerNodeId);
@@ -610,9 +710,9 @@ export class MatterController {
         }
         if (
             options.caseAuthenticatedTags !== undefined &&
-            !isDeepEqual(options.caseAuthenticatedTags, node.state.network.caseAuthenticatedTags)
+            !isDeepEqual(options.caseAuthenticatedTags, node.state.commissioning.caseAuthenticatedTags)
         ) {
-            await node.setStateOf(NetworkClient, { caseAuthenticatedTags: options.caseAuthenticatedTags });
+            await node.setStateOf(CommissioningClient, { caseAuthenticatedTags: options.caseAuthenticatedTags });
         }
         await node.enable();
         return this.#clients!.connect(this.fabric.addressOf(peerNodeId), options);
@@ -633,8 +733,11 @@ export class MatterController {
     }
 
     async close() {
+        this.#migratedPeerObservers.close();
+        await this.#legacyPeerStore?.close();
         await this.#node?.close();
         this.#clients = undefined;
+        await this.#construction.close();
     }
 
     getActiveSessionInformation() {
@@ -651,13 +754,17 @@ export class MatterController {
     }
 
     async #migrateNodeData(server: ServerNode, fabric: Fabric) {
-        const baseStorage = await server.env.get(StorageService).open(server.id);
+        const serverStore = server.env.get(ServerNodeStore);
+
+        const baseStorage = serverStore.storage;
+
+        // Note that we're assuming this is invoked prior to the node initializing peers
         const baseNodeStorage = baseStorage.createContext("nodes");
 
-        // Initialize a custom PeerAddressStore to manage commissioned nodes storage in legacy storage format
-        // Data migration needed
-        const controllerStore = await ControllerStore.create(server.id, server.env);
+        // Initialize component to manage commissioned nodes storage in legacy storage format data migration needed
+        const controllerStore = new ControllerStore(server.id, baseStorage);
         if (!(await controllerStore.nodesStorage.has("commissionedNodes"))) {
+            logger.debug("No former commissioned nodes to migrate.");
             // No commissionedNodes key, so simply migrate nothing
             return;
         }
@@ -668,9 +775,11 @@ export class MatterController {
             logger.debug("No former commissioned nodes to migrate.");
             return;
         }
+        this.#legacyPeerStore = peerStore;
+
         const migratedPeers = new Set<string>();
 
-        const newClientStores = server.env.get(ServerNodeStore).clientStores;
+        const newClientStores = serverStore.clientStores;
         for (const { address: peerAddress, discoveryData, deviceData, operationalAddress } of peers) {
             logger.debug(`Migrating data for commissioned node ${peerAddress.toString()}`);
             const clientNode = server.peers.get(peerAddress);
@@ -746,20 +855,21 @@ export class MatterController {
 
         //await controllerStore.nodesStorage.delete("commissionedNodes"); // TODO
 
-        server.peers.clusterInstalled(BasicInformationClient).on(peer => {
+        this.#migratedPeerObservers.on(server.peers.clusterInstalled(BasicInformationClient), peer => {
             if (!migratedPeers.has(peer.id)) {
                 logger.info(`Migrating commissioned node ${peer.id} to old format`);
                 migratedPeers.add(peer.id);
-                peerStore.save().catch(error => logger.warn("Failed to persist legacy commissioned nodes", error));
+                peerStore.save();
             }
         });
-        server.peers.deleted.on(peer => {
+        this.#migratedPeerObservers.on(server.peers.deleted, async peer => {
             migratedPeers.delete(peer.id);
             logger.info(`Deleted commissioned node ${peer.id} from old format`);
-            peerStore.save().catch(error => logger.warn("Failed to persist legacy commissioned nodes", error));
+            peerStore.save(peer.id);
         });
 
         logger.info("Commissioned nodes migration completed.");
+        await controllerStore.close();
     }
 }
 
@@ -772,20 +882,16 @@ export namespace MatterController {
 /**
  * Only used for Node data migration
  */
-class CommissionedNodeStore extends PeerAddressStore {
+class CommissionedNodeStore {
     #peers: Peers;
     #controllerStore: ControllerStoreInterface;
     #fabric: Fabric;
+    #saves = new BasicMultiplex();
 
     constructor(controllerStore: ControllerStoreInterface, fabric: Fabric, peers: Peers) {
-        super();
         this.#controllerStore = controllerStore;
         this.#fabric = fabric;
         this.#peers = peers;
-    }
-
-    createNodeStore(_address: PeerAddress): MaybePromise<PeerDataStore | undefined> {
-        throw new ImplementationError("Not implemented");
     }
 
     async loadPeers() {
@@ -793,8 +899,9 @@ class CommissionedNodeStore extends PeerAddressStore {
             return [];
         }
 
-        const commissionedNodes =
-            await this.#controllerStore.nodesStorage.get<StoredOperationalPeer[]>("commissionedNodes");
+        const commissionedNodes = (await this.#controllerStore.nodesStorage.get(
+            "commissionedNodes",
+        )) as StoredOperationalPeer[];
 
         const nodes = new Array<CommissionedPeer>();
 
@@ -810,48 +917,48 @@ class CommissionedNodeStore extends PeerAddressStore {
         return nodes;
     }
 
-    async updatePeer() {
-        return this.save();
-    }
+    save(ignorePeer?: string) {
+        this.#saves.add(
+            this.#controllerStore.nodesStorage.set(
+                "commissionedNodes",
+                this.#peers
+                    .map(peer => {
+                        if ((ignorePeer !== undefined && peer.id === ignorePeer) || !peer.lifecycle.isCommissioned) {
+                            return undefined;
+                        }
+                        const commissioningState = peer.maybeStateOf(CommissioningClient);
+                        const address = commissioningState?.peerAddress;
+                        const operationalServerAddress = commissioningState?.addresses?.[0];
+                        const discoveryData =
+                            commissioningState !== undefined
+                                ? RemoteDescriptor.fromLongForm(commissioningState)
+                                : undefined;
+                        const deviceData = {
+                            meta: ClientNodePhysicalProperties(peer),
+                            basicInformation: peer.maybeStateOf(BasicInformationClient),
+                        };
 
-    async deletePeer(address: PeerAddress) {
-        await (await this.#controllerStore.clientNodeStore(address.nodeId.toString())).clearAll();
-        return this.save();
-    }
-
-    async save() {
-        await this.#controllerStore.nodesStorage.set(
-            "commissionedNodes",
-            this.#peers
-                .map(peer => {
-                    const commissioningState = peer.maybeStateOf(CommissioningClient);
-                    const address = commissioningState?.peerAddress;
-                    const operationalServerAddress = commissioningState?.addresses?.[0];
-                    const discoveryData =
-                        commissioningState !== undefined
-                            ? RemoteDescriptor.fromLongForm(commissioningState)
-                            : undefined;
-                    const deviceData = {
-                        meta: (peer.interaction as ClientNodeInteraction).physicalProperties,
-                        basicInformation: peer.maybeStateOf(BasicInformationClient),
-                    };
-
-                    if (address === undefined) {
-                        return;
-                    }
-                    return [
-                        address.nodeId,
-                        {
-                            operationalServerAddress:
-                                operationalServerAddress !== undefined && operationalServerAddress.type === "udp"
-                                    ? (ServerAddress(operationalServerAddress) as ServerAddressUdp)
-                                    : undefined,
-                            discoveryData,
-                            deviceData,
-                        },
-                    ] satisfies StoredOperationalPeer;
-                })
-                .filter(details => details !== undefined),
+                        if (address === undefined) {
+                            return;
+                        }
+                        return [
+                            address.nodeId,
+                            {
+                                operationalServerAddress:
+                                    operationalServerAddress !== undefined && operationalServerAddress.type === "udp"
+                                        ? (ServerAddress(operationalServerAddress) as ServerAddressUdp)
+                                        : undefined,
+                                discoveryData,
+                                deviceData,
+                            },
+                        ] satisfies StoredOperationalPeer;
+                    })
+                    .filter(details => details !== undefined) as SupportedStorageTypes,
+            ),
         );
+    }
+
+    async close() {
+        await this.#saves;
     }
 }

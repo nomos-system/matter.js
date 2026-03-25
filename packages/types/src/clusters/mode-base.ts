@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -22,7 +22,7 @@ import { TlvField, TlvOptionalField, TlvObject } from "../tlv/TlvObject.js";
 import { TlvString } from "../tlv/TlvString.js";
 import { TlvVendorId } from "../datatype/VendorId.js";
 import { TypeFromSchema } from "../tlv/TlvSchema.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 
 export namespace ModeBase {
     /**
@@ -174,19 +174,19 @@ export namespace ModeBase {
          *
          * A few examples are provided below.
          *
-         *   • A mode named "100%" can have both the High (manufacturer specific) and Max (standard) mode tag. Clients
+         *   - A mode named "100%" can have both the High (manufacturer specific) and Max (standard) mode tag. Clients
          *     seeking the mode for either High or Max will find the same mode in this case.
          *
-         *   • A mode that includes a LowEnergy tag can be displayed by the client using a widget icon that shows a
+         *   - A mode that includes a LowEnergy tag can be displayed by the client using a widget icon that shows a
          *     green leaf.
          *
-         *   • A mode that includes a LowNoise tag may be used by the client when the user wishes for a lower level of
+         *   - A mode that includes a LowNoise tag may be used by the client when the user wishes for a lower level of
          *     audible sound, less likely to disturb the household’s activities.
          *
-         *   • A mode that includes a LowEnergy tag (standard, defined in this cluster specification) and also a
+         *   - A mode that includes a LowEnergy tag (standard, defined in this cluster specification) and also a
          *     Delicate tag (standard, defined in the namespace of a Laundry Mode derived cluster).
          *
-         *   • A mode that includes both a generic Quick tag (defined here), and Vacuum and Mop tags, (defined in the
+         *   - A mode that includes both a generic Quick tag (defined here), and Vacuum and Mop tags, (defined in the
          *     RVC Clean cluster that is a derivation of this cluster).
          *
          * @see {@link MatterSpecification.v142.Cluster} § 1.10.5.2.3
@@ -215,10 +215,10 @@ export namespace ModeBase {
          * If the NewMode field matches the Mode field of one entry of the SupportedModes list, but the device is not
          * able to transition as requested, the ChangeToModeResponse command shall:
          *
-         *   • Have the Status set to a product-specific Status value representing the error, or GenericFailure if a
+         *   - Have the Status set to a product-specific Status value representing the error, or GenericFailure if a
          *     more specific error cannot be provided. See Status field for details.
          *
-         *   • Provide a human readable string in the StatusText field.
+         *   - Provide a human readable string in the StatusText field.
          *
          * If the NewMode field matches the Mode field of one entry of the SupportedModes list and the device is able to
          * transition as requested, the server shall transition into the mode associated with NewMode, the
@@ -337,8 +337,9 @@ export namespace ModeBase {
              * attribute. Each item in this list represents a unique mode as indicated by the Mode field of the
              * ModeOptionStruct.
              *
-             * Each entry in this list shall have a unique value for the Mode field. Each entry in this list shall have
-             * a unique value for the Label field.
+             * Each entry in this list shall have a unique value for the Mode field.
+             *
+             * Each entry in this list shall have a unique value for the Label field.
              *
              * The set of ModeTags listed in each entry in this list shall be distinct from the sets of ModeTags listed
              * in the other entries. This comparison shall NOT depend on the order of the ModeTags in the lists. Two

@@ -1,15 +1,15 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { GlobalAttributeState } from "#behavior/cluster/ClusterState.js";
 import { DatasourceCache } from "#endpoint/index.js";
 import { SupportedElements } from "#endpoint/properties/Behaviors.js";
-import { camelize, MaybePromise } from "#general";
-import { ClusterModel } from "#model";
-import { AttributeId, CommandId } from "#types";
+import { MaybePromise } from "@matter/general";
+import { ClusterModel } from "@matter/model";
+import { AttributeId, CommandId } from "@matter/types";
 import { BehaviorBacking } from "./BehaviorBacking.js";
 
 /**
@@ -30,7 +30,7 @@ export class ClientBehaviorBacking extends BehaviorBacking {
         const attributeIds = new Set(attributeList);
         for (const attr of schema.attributes) {
             if (attributeIds.has(attr.id as AttributeId)) {
-                attributes.add(camelize(attr.name));
+                attributes.add(attr.propertyName);
             }
         }
 
@@ -38,7 +38,7 @@ export class ClientBehaviorBacking extends BehaviorBacking {
         const commandIds = new Set(acceptedCommandList);
         for (const cmd of schema.commands) {
             if (cmd.isRequest && commandIds.has(cmd.id as CommandId)) {
-                commands.add(camelize(cmd.name));
+                commands.add(cmd.propertyName);
             }
         }
 
@@ -56,11 +56,23 @@ export class ClientBehaviorBacking extends BehaviorBacking {
         return options;
     }
 
+    /**
+     * Map attribute ID keys back to property names before broadcasting.
+     *
+     * The Datasource reports changed keys using the backing's primaryKey format.  Since this backing uses
+     * `primaryKey: "id"`, props are attribute ID strings (e.g. "0" for onOff).  Downstream consumers
+     * ({@link ChangeNotificationService}, {@link ProtocolService}) expect property names.
+     */
+    protected override broadcastChanges(props: string[]) {
+        const idToName = this.type.supervisor.propertyIdsAndNames;
+        super.broadcastChanges(props.map(id => idToName.get(id) ?? id));
+    }
+
     override close(): MaybePromise {
         // Prepare the store for reuse in the case of reset
         (this.store as DatasourceCache).reclaimValues?.();
 
         // Omit the agent to skip disposal logic as client behaviors have none
-        super.close();
+        return super.close();
     }
 }

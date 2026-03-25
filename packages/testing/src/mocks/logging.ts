@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { ansi, Wrapper } from "#tools/ansi-text";
+import { ansi, Wrapper } from "@matter/tools/ansi-text";
 
 export interface DiagnosticMessageLike {
     level: number;

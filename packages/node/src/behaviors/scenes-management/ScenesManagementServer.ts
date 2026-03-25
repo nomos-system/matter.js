@@ -1,14 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Events } from "#behavior/Events.js";
 import { ClusterBehavior } from "#behavior/cluster/ClusterBehavior.js";
 import { ClusterEvents } from "#behavior/cluster/ClusterEvents.js";
-import { ScenesManagement } from "#clusters/scenes-management";
-import { BasicSet, camelize, deepCopy, InternalError, Logger, ObserverGroup, serialize } from "#general";
+import { BasicSet, deepCopy, InternalError, Logger, MaybePromise, ObserverGroup, serialize } from "@matter/general";
 import {
     AccessLevel,
     any,
@@ -39,8 +38,8 @@ import {
     uint56,
     uint64,
     uint8,
-} from "#model";
-import { assertRemoteActor, Fabric, FabricManager, GroupSession, Val } from "#protocol";
+} from "@matter/model";
+import { assertRemoteActor, Fabric, FabricManager, GroupSession, Val } from "@matter/protocol";
 import {
     AttributeId,
     ClusterId,
@@ -62,8 +61,8 @@ import {
     TlvUInt32,
     TlvUInt8,
     ValidationOutOfBoundsError,
-} from "#types";
-import { MaybePromise } from "@matter/general";
+} from "@matter/types";
+import { ScenesManagement } from "@matter/types/clusters/scenes-management";
 import { ScenesManagementBehavior } from "./ScenesManagementBehavior.js";
 
 const logger = Logger.get("ScenesManagementServer");
@@ -855,7 +854,7 @@ export class ScenesManagementServer extends ScenesManagementBase {
         if (!type.schema.id) {
             return;
         }
-        const clusterName = camelize(type.schema.name);
+        const clusterName = type.schema.propertyName;
 
         const clusterId = ClusterId(type.schema.id);
         let sceneClusterDetails;
@@ -865,7 +864,7 @@ export class ScenesManagementServer extends ScenesManagementBase {
             }
 
             const attributeId = AttributeId(attribute.id);
-            const attributeName = camelize(attribute.name);
+            const attributeName = attribute.propertyName;
 
             // Ignore attributes that are not present on the endpoint or do not have change events
             const event = (this.endpoint.events as Events.Generic<ClusterEvents.ChangedObservable<any>>)[clusterName]?.[

@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { SwitchServer } from "#behaviors/switch";
-import { Switch } from "#clusters/switch";
 import { EndpointType } from "#endpoint/type/EndpointType.js";
 import { Instant, Millis } from "@matter/general";
+import { Switch } from "@matter/types/clusters/switch";
 import { MockEndpoint } from "../../endpoint/mock-endpoint.js";
 
 function createEventCatcher(device: MockEndpoint<EndpointType>) {

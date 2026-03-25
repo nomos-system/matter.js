@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Subject } from "#action/server/Subject.js";
 import type { Fabric } from "#fabric/Fabric.js";
-import { BasicMap, DataWriter, ImplementationError, ipv6BytesToString } from "#general";
-import { EndpointNumber, GroupId } from "#types";
+import { BasicMap, DataWriter, ImplementationError, ipv6BytesToString } from "@matter/general";
+import { EndpointNumber, GroupId } from "@matter/types";
 import { KeySets, OperationalKeySet } from "./KeySets.js";
 
 export class Groups {

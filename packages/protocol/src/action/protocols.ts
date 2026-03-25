@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { InteractionSession } from "#action/Interactable.js";
 import { OccurrenceManager } from "#events/OccurrenceManager.js";
-import { MaybePromise, Observable } from "#general";
-import { DataModelPath, MatterModel } from "#model";
+import { MaybePromise, Observable } from "@matter/general";
+import { DataModelPath, MatterModel } from "@matter/model";
 import type {
     AttributeId,
     ClusterId,
@@ -17,8 +17,8 @@ import type {
     FabricIndex,
     NodeId,
     TlvSchema,
-} from "#types";
-import { AttributePath, CommandPath, EventId, EventPath } from "#types";
+} from "@matter/types";
+import { AttributePath, CommandPath, EventId, EventPath } from "@matter/types";
 import { AccessControl } from "./server/AccessControl.js";
 import { Val } from "./Val.js";
 

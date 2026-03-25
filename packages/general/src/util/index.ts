@@ -1,11 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 export * from "./Abort.js";
 export * from "./Array.js";
+export * from "./AsyncIterator.js";
 export * from "./Boot.js";
 export * from "./Bytes.js";
 export * from "./Cache.js";
@@ -23,6 +24,8 @@ export * from "./FormattedText.js";
 export * from "./Function.js";
 export * from "./GeneratedClass.js";
 export * from "./Github.js";
+export * from "./Gzip.js";
+export * from "./Heap.js";
 export * from "./identifier-case.js";
 export * from "./Ip.js";
 export * from "./Lifecycle.js";
@@ -33,8 +36,10 @@ export * from "./Multiplex.js";
 export * from "./Mutex.js";
 export * from "./NamedHandler.js";
 export * from "./Number.js";
+export * from "./Object.js";
 export * from "./Observable.js";
 export * from "./Promises.js";
+export * from "./Scheduler.js";
 export * from "./Semaphore.js";
 export * from "./serialize.js";
 export * from "./Set.js";

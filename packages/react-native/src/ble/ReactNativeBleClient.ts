@@ -1,12 +1,16 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Bytes, Diagnostic, Logger, MatterError } from "#general";
-import { BLE_MATTER_SERVICE_UUID } from "#protocol";
+import { Bytes, Diagnostic, Logger, MatterError } from "@matter/general";
+import { BLE_MATTER_SERVICE_UUID, BlePeripheral } from "@matter/protocol";
 import { BleError, BleErrorCode, BleManager, State as BluetoothState, Device } from "react-native-ble-plx";
+
+export interface ReactNativeBlePeripheral extends BlePeripheral {
+    readonly device: Device;
+}
 
 const logger = Logger.get("ReactNativeBleClient");
 
@@ -19,7 +23,7 @@ export class ReactNativeBleClient {
     private shouldScan = false;
     private isScanning = false;
     private bleState = BluetoothState.Unknown;
-    private deviceDiscoveredCallback: ((peripheral: Device, manufacturerData: Bytes) => void) | undefined;
+    private deviceDiscoveredCallback: ((peripheral: BlePeripheral, manufacturerData: Bytes) => void) | undefined;
 
     constructor() {
         // this.bleManager.setLogLevel(LogLevel.Verbose)
@@ -56,10 +60,10 @@ export class ReactNativeBleClient {
         }, true);
     }
 
-    public setDiscoveryCallback(callback: (peripheral: Device, manufacturerData: Bytes) => void) {
+    public setDiscoveryCallback(callback: (peripheral: BlePeripheral, manufacturerData: Bytes) => void) {
         this.deviceDiscoveredCallback = callback;
         for (const { peripheral, matterServiceData } of this.discoveredPeripherals.values()) {
-            this.deviceDiscoveredCallback(peripheral, matterServiceData);
+            this.deviceDiscoveredCallback(this.#asBlePeripheral(peripheral), matterServiceData);
         }
     }
 
@@ -116,7 +120,7 @@ export class ReactNativeBleClient {
         );
 
         if (!peripheral.isConnectable) {
-            logger.info(`Peripheral ${peripheral.id} is not connectable ... ignoring`);
+            logger.debug(`Peripheral ${peripheral.id} is not connectable ... ignoring`);
             return;
         }
         const matterServiceDataBase64 = peripheral.serviceData?.[BLE_MATTER_SERVICE_UUID.toLowerCase()];
@@ -135,6 +139,10 @@ export class ReactNativeBleClient {
             matterServiceData: matterServiceData,
         });
 
-        this.deviceDiscoveredCallback?.(peripheral, matterServiceData);
+        this.deviceDiscoveredCallback?.(this.#asBlePeripheral(peripheral), matterServiceData);
+    }
+
+    #asBlePeripheral(device: Device): ReactNativeBlePeripheral {
+        return { device, address: device.id };
     }
 }

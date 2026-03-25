@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { ReadResult } from "#action/response/ReadResult.js";
 import { DecodedDataReport } from "#interaction/DecodedDataReport.js";
-import { DataReport, Status, TlvAny, TlvAttributeReport, TypeFromSchema } from "#types";
+import { DataReport, Status, TlvAny, TlvAttributeReport, TypeFromSchema } from "@matter/types";
 
 /**
  * Converts a {@link DataReport} into a {@link ReadResult.Chunk}.

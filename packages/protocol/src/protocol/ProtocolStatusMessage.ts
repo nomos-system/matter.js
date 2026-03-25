@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Bytes, DataReader, DataWriter, Endian } from "#general";
-import { GeneralStatusCode, Schema, VendorId } from "#types";
+import { Bytes, DataReader, DataWriter, Endian } from "@matter/general";
+import { GeneralStatusCode, Schema, VendorId } from "@matter/types";
 
 export type ProtocolStatusMessage<T> = {
     generalStatus: GeneralStatusCode;

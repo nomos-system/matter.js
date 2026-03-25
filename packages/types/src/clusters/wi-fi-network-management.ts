@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -11,11 +11,11 @@ import { Attribute, Command } from "../cluster/Cluster.js";
 import { TlvByteString } from "../tlv/TlvString.js";
 import { TlvNullable } from "../tlv/TlvNullable.js";
 import { TlvUInt64 } from "../tlv/TlvNumber.js";
-import { AccessLevel } from "#model";
+import { AccessLevel } from "@matter/model";
 import { TlvNoArguments } from "../tlv/TlvNoArguments.js";
 import { TlvField, TlvObject } from "../tlv/TlvObject.js";
 import { TypeFromSchema } from "../tlv/TlvSchema.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace WiFiNetworkManagement {
@@ -29,9 +29,9 @@ export namespace WiFiNetworkManagement {
          * This field shall indicate the current WPA-Personal passphrase or PSK associated with the primary Wi-Fi
          * network provided by this device, in one of the following formats:
          *
-         *   • 8..63 bytes: WPA/WPA2/WPA3 passphrase.
+         *   - 8..63 bytes: WPA/WPA2/WPA3 passphrase.
          *
-         *   • 64 bytes: WPA/WPA2/WPA3 raw hex PSK. Each byte shall be a ASCII hexadecimal digit.
+         *   - 64 bytes: WPA/WPA2/WPA3 raw hex PSK. Each byte shall be a ASCII hexadecimal digit.
          *
          * This matches the formats defined for WPA networks by the Credentials field in the Network Commissioning
          * cluster (see [MatterCore]).

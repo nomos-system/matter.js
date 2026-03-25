@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -14,7 +14,7 @@ import { TlvString, TlvByteString } from "../tlv/TlvString.js";
 import { TypeFromSchema } from "../tlv/TlvSchema.js";
 import { StatusResponseError } from "../common/StatusResponseError.js";
 import { Status as GlobalStatus } from "../globals/Status.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace DiagnosticLogs {
@@ -259,8 +259,9 @@ export namespace DiagnosticLogs {
     }
 
     /**
-     * This shall be generated as a response to the RetrieveLogsRequest. The data for this command is shown in the
-     * following.
+     * This shall be generated as a response to the RetrieveLogsRequest.
+     *
+     * The data for this command is shown in the following.
      *
      * @see {@link MatterSpecification.v142.Core} § 11.11.5.2
      */
@@ -301,8 +302,9 @@ export namespace DiagnosticLogs {
     });
 
     /**
-     * This shall be generated as a response to the RetrieveLogsRequest. The data for this command is shown in the
-     * following.
+     * This shall be generated as a response to the RetrieveLogsRequest.
+     *
+     * The data for this command is shown in the following.
      *
      * @see {@link MatterSpecification.v142.Core} § 11.11.5.2
      */

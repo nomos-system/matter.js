@@ -1,76 +1,77 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import type { ActionContext } from "#behavior/context/ActionContext.js";
+import { NetworkClient } from "#behavior/system/network/NetworkClient.js";
 import { EndpointInitializer } from "#endpoint/properties/EndpointInitializer.js";
 import type { ClientNode } from "#node/ClientNode.js";
-import { NodePhysicalProperties } from "#node/NodePhysicalProperties.js";
+import { ImplementationError, Lifecycle, Logger, MatterAggregateError, ObserverGroup } from "@matter/general";
 import {
     ClientBdxRequest,
     ClientBdxResponse,
     ClientInteraction,
     ClientInvoke,
+    ClientProbeOptions,
     ClientRead,
     ClientSubscribe,
     ClientSubscription,
     ClientWrite,
     DecodedInvokeResult,
     Interactable,
+    OperationalAddressChangedError,
+    PeerSet,
     PhysicalDeviceProperties,
-    QueuedClientInteraction,
     ReadResult,
+    ShutdownError,
     Val,
     WriteResult,
-} from "#protocol";
-import { EndpointNumber } from "#types";
+} from "@matter/protocol";
+import { EndpointNumber } from "@matter/types";
 import { ClientEndpointInitializer } from "./ClientEndpointInitializer.js";
+import { ClientNodePhysicalProperties } from "./ClientNodePhysicalProperties.js";
+
+const logger = Logger.get("ClientNodeInteraction");
 
 /**
  * A {@link ClientInteraction} that brings the node online before attempting interaction.
  */
 export class ClientNodeInteraction implements Interactable<ActionContext> {
-    #node: ClientNode;
-    #physicalProps?: PhysicalDeviceProperties;
+    readonly #node: ClientNode;
+    #observers = new ObserverGroup();
+    #interactable?: ClientInteraction;
+    #interactableClosed?: Promise<unknown>;
 
     constructor(node: ClientNode) {
         this.#node = node;
+
+        this.#observers.on(this.#node.events.commissioning.peerAddress$Changed, () =>
+            this.#closeInteraction(new OperationalAddressChangedError()),
+        );
+        this.#observers.on(this.#node.owner?.lifecycle.goingOffline, () => this.#closeInteraction(new ShutdownError()));
     }
 
-    /**
-     * The current session used for interaction with the node if any session is established, otherwise undefined.
-     */
-    get session() {
-        if (this.#node.env.has(ClientInteraction)) {
-            return this.#node.env.get(ClientInteraction).session;
-        }
-    }
-
-    get physicalProperties() {
-        if (this.#physicalProps === undefined) {
-            this.#physicalProps = NodePhysicalProperties(this.#node);
-            this.structure?.changed.on(() => {
-                // When structure changes, physical properties may change, so clear cached value to recompute on the next access
-                this.#physicalProps = undefined;
-            });
-        }
-        return this.#physicalProps;
+    async close() {
+        this.#observers.close();
+        this.#closeInteraction(new ShutdownError());
+        await this.#interactableClosed;
     }
 
     /**
      * Read chosen attributes remotely from the node. Known data versions are automatically injected into the request to
-     * optimize the read.
-     * Therefore, the returned data only contains attributes that have changed since the last read or subscription.
-     * TODO: Allow control of data version injection and enrich response with attribute data missing in response due to data versioning?
+     * optimize the read. Set `skipDataVersionInjection` in the request to prevent adding data versions.
+     * When data versions are used to filter the read request, the returned data only contains attributes that have
+     * changed since the last read or subscription.
      */
     async *read(request: ClientRead, context?: ActionContext): ReadResult {
-        request = this.structure.injectVersionFilters(request);
-        const interaction = await this.#connect();
+        if (!request.includeKnownVersions) {
+            request = this.#structure.injectVersionFilters(request);
+        }
 
-        const response = interaction.read(request, context);
-        yield* this.structure.mutate(request, response);
+        const response = this.#interaction.read(request, context);
+        yield* this.#structure.mutate(request, response);
     }
 
     /**
@@ -88,17 +89,17 @@ export class ClientNodeInteraction implements Interactable<ActionContext> {
      */
     async subscribe(request: ClientSubscribe, context?: ActionContext): Promise<ClientSubscription> {
         const intermediateRequest: ClientSubscribe = {
-            ...this.structure.injectVersionFilters(request),
+            ...this.#structure.injectVersionFilters(request),
             ...PhysicalDeviceProperties.subscriptionIntervalBoundsFor({
                 description: this.#node.toString(),
-                properties: this.physicalProperties,
+                properties: ClientNodePhysicalProperties(this.#node),
                 request,
             }),
 
             sustain: !!request.sustain,
 
             updated: async data => {
-                const result = this.structure.mutate(request, data);
+                const result = this.#structure.mutate(request, data);
                 if (request.updated) {
                     await request.updated(result);
                 } else {
@@ -106,12 +107,19 @@ export class ClientNodeInteraction implements Interactable<ActionContext> {
                 }
             },
 
+            refreshRequest: request => {
+                const updated = {
+                    ...request,
+                    dataVersionFilters: undefined,
+                    eventFilters: [{ eventMin: this.#node.stateOf(NetworkClient).maxEventNumber + 1n }],
+                };
+                return this.#structure.injectVersionFilters(updated);
+            },
+
             closed: request.closed?.bind(request),
         };
 
-        const client = await this.#connect();
-
-        return client.subscribe(intermediateRequest, context);
+        return this.#interaction.subscribe(intermediateRequest, context);
     }
 
     /**
@@ -119,48 +127,94 @@ export class ClientNodeInteraction implements Interactable<ActionContext> {
      * The returned attribute write status information is returned.
      */
     async write<T extends ClientWrite>(request: T, context?: ActionContext): WriteResult<T> {
-        const client = await this.#connect();
-
-        return client.write(request, context);
+        return this.#interaction.write(request, context);
     }
 
     /**
      * Invoke a command remotely on the node.
-     * The returned command response is returned as response chunks
+     * The returned command response is returned as response chunks (attr-status).
+     *
+     * When the number of commands exceeds the peer's MaxPathsPerInvoke limit (or 1 for older nodes),
+     * commands are split across multiple parallel exchanges automatically by ClientInteraction.
+     *
+     * Single commands may be automatically batched with other commands invoked in the same timer tick.
      */
     async *invoke(request: ClientInvoke, context?: ActionContext): DecodedInvokeResult {
-        const client = await this.#connect();
+        // For commands, by default ignore the queue because the user is responsible for managing that themselves
+        if (request.network === undefined) {
+            request.network = "unlimited";
+        }
 
-        yield* client.invoke(request, context);
+        yield* this.#interaction.invoke(request, context);
     }
 
     /**
      * Initiate a BDX Message Exchange with the node.
+     *
      * The provided function is called with the established context to perform BDX operations.
-     * Request options can be omitted if defaults are used.
+     *
+     * Request options may be omitted to use defaults.
      */
     async initBdx(request: ClientBdxRequest = {}, context?: ActionContext): Promise<ClientBdxResponse> {
-        const client = await this.#connect();
+        return this.#interaction.initBdx(request, context);
+    }
 
-        return client.initBdx(request, context);
+    async probe(options?: ClientProbeOptions): Promise<boolean> {
+        return this.#interaction.probe(options);
+    }
+
+    get #interaction() {
+        if (this.#node.construction.status !== Lifecycle.Status.Active) {
+            throw new ImplementationError(
+                `Cannot interact with ${this.#node} because it is ${this.#node.construction.status}`,
+            );
+        }
+
+        if (!this.#node.owner?.lifecycle.isOnline) {
+            throw new ImplementationError(`Cannot interact with ${this.#node} because the local node is not online`);
+        }
+
+        if (this.#interactable) {
+            return this.#interactable;
+        }
+
+        const address = this.#node.state.commissioning.peerAddress;
+        if (address === undefined) {
+            throw new ImplementationError(`Cannot interact with ${this.#node} because it is uncommissioned`);
+        }
+
+        const peer = this.#node.env.get(PeerSet).for(address);
+        this.#interactable = new ClientInteraction({
+            environment: this.#node.env,
+            exchangeProvider: peer.exchangeProvider,
+        });
+
+        return this.#interactable;
     }
 
     /**
-     * Ensure the node is online and return the ClientInteraction.
+     * Close currently open interaction.
      */
-    async #connect(): Promise<ClientInteraction> {
-        if (!this.#node.lifecycle.isOnline) {
-            await this.#node.start();
+    #closeInteraction(reason?: Error) {
+        if (!this.#interactable) {
+            return;
         }
-        const props = this.physicalProperties;
-        // When we have a thread device, then we use the queue, or when we do not know anything
-        // (usually before the initial subscription)
-        return props.threadConnected || !props.rootEndpointServerList.length
-            ? this.#node.env.get(QueuedClientInteraction)
-            : this.#node.env.get(ClientInteraction);
+
+        const closed = this.#interactable.close(reason).catch(e => {
+            logger.error(`Unhandled error closing client interaction`, e);
+        });
+
+        this.#interactable = undefined;
+
+        if (this.#interactableClosed) {
+            // Unlikely to have two active closes but if we do, handle it
+            this.#interactableClosed = MatterAggregateError.allSettled([this.#interactableClosed, closed]);
+        } else {
+            this.#interactableClosed = closed;
+        }
     }
 
-    get structure() {
+    get #structure() {
         return (this.#node.env.get(EndpointInitializer) as ClientEndpointInitializer).structure;
     }
 

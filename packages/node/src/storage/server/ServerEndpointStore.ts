@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Endpoint } from "#endpoint/Endpoint.js";
-import { ImplementationError, StorageContext } from "#general";
 import { EndpointStore } from "#storage/EndpointStore.js";
+import { ImplementationError, StorageContext } from "@matter/general";
 import { DatasourceStore } from "./DatasourceStore.js";
 
 const NUMBER_KEY = "__number__";

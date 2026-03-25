@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -15,6 +15,7 @@ import { Endpoints } from "#endpoint/properties/Endpoints.js";
 import { EndpointType } from "#endpoint/type/EndpointType.js";
 import { MutableEndpoint } from "#endpoint/type/MutableEndpoint.js";
 import {
+    asError,
     Construction,
     Diagnostic,
     DiagnosticPresentation,
@@ -23,10 +24,9 @@ import {
     Identity,
     ImplementationError,
     Logger,
-    MatterError,
-} from "#general";
-import { Interactable } from "#protocol";
-import type { EndpointNumber } from "#types";
+} from "@matter/general";
+import { Interactable } from "@matter/protocol";
+import type { EndpointNumber } from "@matter/types";
 import { RootEndpoint } from "../endpoints/root.js";
 import { NodeLifecycle } from "./NodeLifecycle.js";
 import { ProtocolService } from "./integration/ProtocolService.js";
@@ -46,6 +46,9 @@ export abstract class Node<T extends Node.CommonRootEndpoint = Node.CommonRootEn
 
     constructor(config: Node.Configuration<T>) {
         const parentEnvironment = config.environment ?? config.owner?.env ?? Environment.default;
+
+        // Ensure runtime is shared across components
+        void parentEnvironment.root.runtime;
 
         if (config.id === undefined) {
             config.id = `node${parentEnvironment.vars.increment("node.nextFallbackId")}`;
@@ -134,18 +137,19 @@ export abstract class Node<T extends Node.CommonRootEndpoint = Node.CommonRootEn
             await this.#runtime.construction.ready;
             await this.act("network startup", agent => agent.get(NetworkBehavior).startup());
         } catch (e) {
-            // If a runtime instance got created, tear it down
+            // If a runtime instance got created, tear it down.  Detach state synchronously to avoid a deadlock:
+            // runtime.close() awaits activity.inactive, but we may be called from within an activity (e.g.
+            // commissioning) that can't close until we return.  Closing in the background breaks the cycle.
             if (this.#runtime) {
-                this.#environment.delete(NetworkRuntime, this.#runtime);
-                try {
-                    await this.#runtime.close();
-                } catch (error) {
-                    MatterError.accept(error);
-                    // Ignore all errors that might, likely we cannot tear down because construction never completed
-                    logger.info("Failed to tear down runtime", error.message);
-                }
+                const runtime = this.#runtime;
+                this.#environment.delete(NetworkRuntime, runtime);
                 this.#runtime = undefined;
                 this.behaviors.internalsOf(NetworkBehavior).runtime = undefined;
+
+                // We intentionally do not track this promise because it is likely to hang
+                runtime.close().catch(e => {
+                    logger.info("Error closing network runtime", asError(e));
+                });
             }
             this.env.runtime.delete(this);
             throw e;
@@ -172,9 +176,16 @@ export abstract class Node<T extends Node.CommonRootEndpoint = Node.CommonRootEn
      *
      * Once the node is offline you may use {@link start} to bring the node online again.
      */
-    async cancel() {
+    async stop() {
         this.lifecycle.targetState = "offline";
         await this.lifecycle.mutex.produce(this.cancelWithMutex.bind(this));
+    }
+
+    /**
+     * @deprecated use {@link stop}
+     */
+    cancel() {
+        return this.stop();
     }
 
     /**

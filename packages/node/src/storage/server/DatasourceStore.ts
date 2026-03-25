@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Datasource } from "#behavior/state/managed/Datasource.js";
-import { MaybePromise, Transaction } from "#general";
-import { Val } from "#protocol";
 import type { EndpointStore } from "#storage/EndpointStore.js";
+import { MaybePromise, Transaction } from "@matter/general";
+import { Val } from "@matter/protocol";
 import type { ServerEndpointStore } from "./ServerEndpointStore.js";
 
 interface StorageParticipant extends Transaction.Participant {

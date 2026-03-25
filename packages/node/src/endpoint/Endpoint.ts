@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -9,6 +9,9 @@ import { ActionContext } from "#behavior/context/ActionContext.js";
 import { NodeActivity } from "#behavior/context/NodeActivity.js";
 import { ContextAgents } from "#behavior/context/server/ContextAgents.js";
 import { LocalActorContext } from "#behavior/context/server/LocalActorContext.js";
+import { ProtocolService } from "#node/integration/ProtocolService.js";
+import type { Node } from "#node/Node.js";
+import { IdentityService } from "#node/server/IdentityService.js";
 import {
     Construction,
     Diagnostic,
@@ -22,13 +25,10 @@ import {
     Observable,
     toHex,
     UninitializedDependencyError,
-} from "#general";
-import { DataModelPath } from "#model";
-import { ProtocolService } from "#node/integration/ProtocolService.js";
-import type { Node } from "#node/Node.js";
-import { IdentityService } from "#node/server/IdentityService.js";
-import { Val } from "#protocol";
-import { EndpointNumber } from "#types";
+} from "@matter/general";
+import { DataModelPath } from "@matter/model";
+import { Val } from "@matter/protocol";
+import { EndpointNumber } from "@matter/types";
 import { RootEndpoint } from "../endpoints/root.js";
 import { Agent } from "./Agent.js";
 import { Behaviors } from "./properties/Behaviors.js";
@@ -291,7 +291,7 @@ export class Endpoint<T extends EndpointType = EndpointType.Empty> {
      * @param type the {@link Behavior} to patch
      * @param values the values to change
      */
-    async setStateOf<T extends Behavior.Type>(type: T, values: Behavior.PatchStateOf<T>): Promise<void>;
+    setStateOf<T extends Behavior.Type>(type: T, values: Behavior.PatchStateOf<T>): Promise<void>;
 
     /**
      * Update state values for a single behavior ID.
@@ -305,7 +305,7 @@ export class Endpoint<T extends EndpointType = EndpointType.Empty> {
      * @param type the {@link Behavior} to patch
      * @param values the values to change
      */
-    async setStateOf(type: string, values: Val.Struct): Promise<void>;
+    setStateOf(type: string, values: Val.Struct): Promise<void>;
 
     async setStateOf(type: Behavior.Type | string, values: Val.Struct) {
         if (typeof type === "string") {
@@ -512,7 +512,7 @@ export class Endpoint<T extends EndpointType = EndpointType.Empty> {
             }
 
             if (this.lifecycle.isInstalled) {
-                this.env.get(IdentityService).assertNumberAvailable(number, this);
+                this.env.get(IdentityService).assertEndpointNumberAvailable(number, this);
             }
         }
 
@@ -765,6 +765,7 @@ export class Endpoint<T extends EndpointType = EndpointType.Empty> {
      * Erase all persisted data and destroy the endpoint.
      */
     async delete() {
+        this.construction.assert(this.toString());
         this.lifecycle.change(EndpointLifecycle.Change.Destroying);
         await this.erase();
         await this.close();
@@ -828,7 +829,7 @@ export class Endpoint<T extends EndpointType = EndpointType.Empty> {
             return this.#owner.path.at(this.identity, this.#type.name);
         }
 
-        return DataModelPath(this.identity, this.type?.name);
+        return new DataModelPath(this.identity, this.type?.name);
     }
 
     /**
@@ -904,14 +905,21 @@ export class Endpoint<T extends EndpointType = EndpointType.Empty> {
      * Hierarchical diagnostics of endpoint and children.
      */
     get [Diagnostic.value](): unknown {
-        return [
-            Diagnostic.strong(this.id),
+        const diagnostics: unknown[] = [
+            Diagnostic.strong(this.#id === undefined ? "(no id)" : this.id),
             Diagnostic.dict({
                 ...this.#diagnosticProps,
                 class: this.constructor.name,
             }),
-            Diagnostic.list([...this.behaviors.detailedDiagnostic, ...this.parts]),
         ];
+
+        if (this.#construction.status === Lifecycle.Status.Active) {
+            diagnostics.push(Diagnostic.list([...this.behaviors.detailedDiagnostic, ...this.parts]));
+        } else {
+            diagnostics.push(Diagnostic.weak(`(${this.#construction.status})`));
+        }
+
+        return diagnostics;
     }
 
     get [Lifetime.owner](): Lifetime.Owner | undefined {
@@ -931,7 +939,7 @@ export class Endpoint<T extends EndpointType = EndpointType.Empty> {
     get #diagnosticProps() {
         const type = this.type;
         return {
-            "endpoint#": this.number,
+            "endpoint#": this.#number ? this.number : "(unassigned)",
             type: `${type.name} (${
                 type.deviceType === EndpointType.UNKNOWN_DEVICE_TYPE
                     ? "unknown"

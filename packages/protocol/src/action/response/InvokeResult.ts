@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { ClusterId, CommandId, CommandPath, EndpointNumber, StatusCode, TlvStream } from "#types";
+import type { ClusterId, CommandId, CommandPath, EndpointNumber, StatusCode, TlvStream } from "@matter/types";
 
 export type InvokeResult = AsyncIterable<InvokeResult.Chunk>;
 

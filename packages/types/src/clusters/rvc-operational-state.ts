@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -17,7 +17,7 @@ import { OperationalState as OperationalStateNamespace } from "./operational-sta
 import { TypeFromSchema } from "../tlv/TlvSchema.js";
 import { TlvNoArguments } from "../tlv/TlvNoArguments.js";
 import { Priority } from "../globals/Priority.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace RvcOperationalState {
@@ -27,11 +27,7 @@ export namespace RvcOperationalState {
      *
      * RVC Pause Compatibility defines the compatibility of the states this cluster defines with the Pause command.
      *
-     * ### Table 13. RVC Pause Compatibility
-     *
      * RVC Resume Compatibility defines the compatibility of the states this cluster defines with the Resume command.
-     *
-     * ### Table 14. RVC Resume Compatibility
      *
      * While in the Charging or Docked states, the device shall NOT attempt to resume unless it transitioned to those
      * states while operating and can resume, such as, for example, if it is recharging while in a cleaning cycle. Else,
@@ -344,18 +340,18 @@ export namespace RvcOperationalState {
              *
              * Changes to this attribute shall only be marked as reportable in the following cases:
              *
-             *   • If it has changed due to a change in the CurrentPhase or OperationalState attributes, or
+             *   - If it has changed due to a change in the CurrentPhase or OperationalState attributes, or
              *
-             *   • When it changes from 0 to any other value and vice versa, or
+             *   - When it changes from 0 to any other value and vice versa, or
              *
-             *   • When it changes from null to any other value and vice versa, or
+             *   - When it changes from null to any other value and vice versa, or
              *
-             *   • When it increases, or
+             *   - When it increases, or
              *
-             *   • When there is any increase or decrease in the estimated time remaining that was due to progressing
+             *   - When there is any increase or decrease in the estimated time remaining that was due to progressing
              *     insight of the server’s control logic, or
              *
-             *   • When it changes at a rate significantly different from one unit per second.
+             *   - When it changes at a rate significantly different from one unit per second.
              *
              * Changes to this attribute merely due to the normal passage of time with no other dynamic change of device
              * state shall NOT be reported.
@@ -429,9 +425,9 @@ export namespace RvcOperationalState {
              *
              * Otherwise, on success:
              *
-             *   • The OperationalState attribute shall be set to SeekingCharger.
+             *   - The OperationalState attribute shall be set to SeekingCharger.
              *
-             *   • The device shall respond with an OperationalCommandResponse command with an ErrorStateID of NoError.
+             *   - The device shall respond with an OperationalCommandResponse command with an ErrorStateID of NoError.
              *
              * @see {@link MatterSpecification.v142.Cluster} § 7.4.5.1
              */

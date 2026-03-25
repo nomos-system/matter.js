@@ -1,25 +1,32 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { ActionContext } from "#behavior/context/ActionContext.js";
 import { CommissioningServer } from "#behavior/system/commissioning/CommissioningServer.js";
-import { ControllerBehavior } from "#behavior/system/controller/ControllerBehavior.js";
 import { EventsBehavior } from "#behavior/system/events/EventsBehavior.js";
 import { NetworkServer } from "#behavior/system/network/NetworkServer.js";
 import { ServerNetworkRuntime } from "#behavior/system/network/ServerNetworkRuntime.js";
 import { ProductDescriptionServer } from "#behavior/system/product-description/ProductDescriptionServer.js";
 import { SessionsBehavior } from "#behavior/system/sessions/SessionsBehavior.js";
-import { SubscriptionsBehavior } from "#behavior/system/subscriptions/SubscriptionsServer.js";
+import { SubscriptionsServer } from "#behavior/system/subscriptions/SubscriptionsServer.js";
 import { Endpoint } from "#endpoint/Endpoint.js";
-import type { Environment } from "#general";
-import { asyncNew, Construction, DiagnosticSource, errorOf, Identity, MatterError } from "#general";
-import { FabricManager, Interactable, OccurrenceManager, ServerInteraction, SessionManager } from "#protocol";
 import { ServerNodeStore } from "#storage/server/ServerNodeStore.js";
+import type { Environment } from "@matter/general";
+import { asyncNew, Construction, DiagnosticSource, errorOf, Identity, MatterError } from "@matter/general";
+import {
+    FabricManager,
+    Interactable,
+    OccurrenceManager,
+    PeerSet,
+    ServerInteraction,
+    SessionManager,
+} from "@matter/protocol";
 import { RootEndpoint as BaseRootEndpoint } from "../endpoints/root.js";
 import { Node } from "./Node.js";
+import { Plugins } from "./Plugins.js";
 import { Peers } from "./client/Peers.js";
 import { ServerEnvironment } from "./server/ServerEnvironment.js";
 
@@ -41,6 +48,7 @@ class FactoryResetError extends MatterError {
 export class ServerNode<T extends ServerNode.RootEndpoint = ServerNode.RootEndpoint> extends Node<T> {
     #peers?: Peers;
     #interaction?: Interactable<ActionContext>;
+    #plugins: Plugins;
 
     /**
      * Construct a new ServerNode.
@@ -62,7 +70,11 @@ export class ServerNode<T extends ServerNode.RootEndpoint = ServerNode.RootEndpo
     constructor(config: Partial<Node.Configuration<T>>);
 
     constructor(definition?: T | Node.Configuration<T>, options?: Node.Options<T>) {
-        super(Node.nodeConfigFor(ServerNode.RootEndpoint as T, definition, options ?? ({} as Node.Options<T>)));
+        const config = Node.nodeConfigFor(ServerNode.RootEndpoint as T, definition, options ?? ({} as Node.Options<T>));
+
+        super(config);
+
+        this.#plugins = new Plugins(this);
 
         this.env.set(Node, this);
         this.env.set(ServerNode, this);
@@ -114,6 +126,7 @@ export class ServerNode<T extends ServerNode.RootEndpoint = ServerNode.RootEndpo
     }
 
     override async prepareRuntimeShutdown() {
+        await this.env.maybeGet(PeerSet)?.disconnect();
         await this.env.get(SessionManager).closeAllSessions();
     }
 
@@ -185,7 +198,7 @@ export class ServerNode<T extends ServerNode.RootEndpoint = ServerNode.RootEndpo
 
     protected override async initialize() {
         await ServerEnvironment.initialize(this);
-
+        await this.#plugins.load();
         await super.initialize();
     }
 
@@ -216,10 +229,9 @@ export namespace ServerNode {
         CommissioningServer,
         NetworkServer,
         ProductDescriptionServer,
-        SubscriptionsBehavior,
+        SubscriptionsServer,
         SessionsBehavior,
         EventsBehavior,
-        ControllerBehavior,
     );
 
     export interface RootEndpoint extends Identity<typeof RootEndpoint> {}

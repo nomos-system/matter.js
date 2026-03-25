@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -8,8 +8,15 @@ import { Write } from "#action/request/Write.js";
 import { ExpandedPath } from "#common/ExpandedPath.js";
 import { ExpandedStatus } from "#common/ExpandedStatus.js";
 import { PathError } from "#common/PathError.js";
-import { MatterAggregateError } from "#general";
-import { Status, type AttributeId, type AttributePath, type ClusterId, type EndpointNumber, type NodeId } from "#types";
+import { MatterAggregateError } from "@matter/general";
+import {
+    Status,
+    type AttributeId,
+    type AttributePath,
+    type ClusterId,
+    type EndpointNumber,
+    type NodeId,
+} from "@matter/types";
 
 export type WriteResult<T extends Write = Write> = Promise<
     T extends { suppressResponse: true } ? void : WriteResult.AttributeStatus[]

@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -20,8 +20,5 @@ if (globalThis.SuppressedError === undefined) {
         }
     }
 
-    const factory = (error: any, suppressed: any, message?: string) => new SuppressedError(error, suppressed, message);
-    factory.prototype = SuppressedError.prototype;
-
-    globalThis.SuppressedError = factory as typeof globalThis.SuppressedError;
+    globalThis.SuppressedError = SuppressedError as typeof globalThis.SuppressedError;
 }

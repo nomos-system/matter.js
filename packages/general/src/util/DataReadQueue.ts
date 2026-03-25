@@ -2,62 +2,73 @@
  * Promise-based blocking queue.
  *
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Duration } from "#time/Duration.js";
 import { Minutes } from "#time/TimeUnit.js";
-import { MatterFlowError } from "../MatterError.js";
-import { Time, Timer } from "../time/Time.js";
-import { asError } from "./Error.js";
+import { AbortedError, ClosedError, InternalError } from "../MatterError.js";
+import { Abort } from "./Abort.js";
 import { createPromise } from "./Promises.js";
-import { EndOfStreamError, NoResponseTimeoutError } from "./Streams.js";
+import { EndOfStreamError } from "./Streams.js";
 
 export class DataReadQueue<T> {
     readonly #queue = new Array<T>();
-    #pendingRead?: { resolver: (data: T) => void; rejecter: (reason: any) => void; timeoutTimer?: Timer };
-    #closed = false;
+    #pendingRead?: { resolver: (data: T) => void; rejecter: (reason: any) => void };
+    #closeCause?: Error;
 
-    async read(timeout = Minutes.one): Promise<T> {
-        const { promise, resolver, rejecter } = createPromise<T>();
-        if (this.#closed) throw new EndOfStreamError();
+    async read(abort?: AbortSignal): Promise<T> {
+        const { promise, resolver } = createPromise<T>();
+        if (this.#closeCause) {
+            throw new ClosedError("Channel is closed", { cause: this.#closeCause });
+        }
+
         const data = this.#queue.shift();
         if (data !== undefined) {
             return data;
         }
-        if (this.#pendingRead !== undefined) throw new MatterFlowError("Only one pending read is supported");
+
+        if (this.#pendingRead !== undefined) throw new InternalError("Only one pending read is supported");
+
+        using localAbort = new Abort({
+            timeout: abort ? undefined : Minutes.one,
+            abort,
+        });
+
         this.#pendingRead = {
             resolver,
-            rejecter,
-            timeoutTimer: Time.getTimer("Queue timeout", timeout, () =>
-                rejecter(
-                    new NoResponseTimeoutError(
-                        `Expected response data missing within timeout of ${Duration.format(timeout)}`,
-                    ),
-                ),
-            ).start(),
+            rejecter(cause) {
+                localAbort.abort(cause);
+            },
         };
 
         try {
-            return await promise;
+            return await localAbort.attempt(promise);
         } catch (e) {
-            // The stack trace where we created the error is useless (either a timer or close()) so replace here
-            const error = asError(e);
-            error.stack = new Error().stack;
-            throw error;
+            if (e instanceof AbortedError) {
+                // Stack trace is already correct
+                throw e;
+            }
+
+            // Above is the only expected errors
+            throw e;
+        } finally {
+            this.#pendingRead = undefined;
         }
     }
 
     write(data: T) {
-        if (this.#closed) throw new EndOfStreamError();
-        if (this.#pendingRead !== undefined) {
-            this.#pendingRead.timeoutTimer?.stop();
-            const pendingRead = this.#pendingRead;
-            this.#pendingRead = undefined;
+        if (this.#closeCause) {
+            throw new ClosedError("Channel is closed", { cause: this.#closeCause });
+        }
+
+        const pendingRead = this.#pendingRead;
+        this.#pendingRead = undefined;
+        if (pendingRead) {
             pendingRead.resolver(data);
             return;
         }
+
         this.#queue.push(data);
     }
 
@@ -65,11 +76,18 @@ export class DataReadQueue<T> {
         return this.#queue.length;
     }
 
-    close() {
-        if (this.#closed) return;
-        this.#closed = true;
-        if (this.#pendingRead === undefined) return;
-        this.#pendingRead.timeoutTimer?.stop();
-        this.#pendingRead.rejecter(new EndOfStreamError());
+    close(cause: Error = new EndOfStreamError()) {
+        if (this.#closeCause) {
+            return;
+        }
+
+        this.#closeCause = cause;
+
+        const pendingRead = this.#pendingRead;
+        this.#pendingRead = undefined;
+
+        if (pendingRead) {
+            pendingRead.rejecter(cause);
+        }
     }
 }

@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { ActionContext } from "#behavior/context/ActionContext.js";
-import { MaybePromise } from "#general";
-import { FabricIndex, NodeId } from "#types";
+import { MaybePromise } from "@matter/general";
+import { FabricIndex, NodeId } from "@matter/types";
 import { MockExchange } from "../../../../node/mock-exchange.js";
 import { TestStruct, aclEndpoint, listOf, structOf } from "./value-utils.js";
 

@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -8,20 +8,20 @@ import { CertificateAuthority } from "#certificate/CertificateAuthority.js";
 import { Noc } from "#certificate/kinds/Noc.js";
 import { FabricAuthority } from "#fabric/FabricAuthority.js";
 import { FabricManager } from "#fabric/FabricManager.js";
-import { Bytes, StandardCrypto, StorageBackendMemory, StorageManager } from "#general";
-import { CaseAuthenticatedTag, FabricId, NodeId, VendorId } from "#types";
+import { Bytes, MemoryStorageDriver, StandardCrypto, StorageManager } from "@matter/general";
+import { CaseAuthenticatedTag, FabricId, NodeId, VendorId } from "@matter/types";
 
 const crypto = new StandardCrypto();
 
 describe("FabricAuthority", () => {
-    let storage: StorageBackendMemory;
+    let storage: MemoryStorageDriver;
     let storageManager: StorageManager;
     let fabricManager: FabricManager;
     let ca: CertificateAuthority;
     let authority: FabricAuthority;
 
     beforeEach(async () => {
-        storage = new StorageBackendMemory();
+        storage = new MemoryStorageDriver();
         storageManager = new StorageManager(storage);
         await storageManager.initialize();
         fabricManager = new FabricManager(crypto, storageManager.createContext("fabrics"));

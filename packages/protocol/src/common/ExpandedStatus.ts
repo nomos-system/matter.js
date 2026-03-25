@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { decamelize } from "#general";
-import { ClusterModel, Matter, MatterModel } from "#model";
-import { ClusterId, Status } from "#types";
+import { decamelize } from "@matter/general";
+import { ClusterModel, Matter, MatterModel } from "@matter/model";
+import { ClusterId, Status } from "@matter/types";
 
 /**
  * Detailed status information expanded from status codes.
@@ -40,7 +40,7 @@ export class ExpandedStatus {
         let clusterStr;
         if (typeof cluster === "number") {
             matter ??= Matter;
-            const model = matter.get(ClusterModel, cluster);
+            const model = matter.clusters(cluster);
             if (model === undefined) {
                 clusterStr = `cluster-${cluster}`;
             } else {

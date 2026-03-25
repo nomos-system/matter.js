@@ -1,15 +1,15 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 // Must import these via index to ensure proper initialization
 import { DatatypeModel, FieldModel, Model } from "#models/index.js";
 
-import { camelize, InternalError } from "#general";
 import { Scope } from "#logic/Scope.js";
 import { any, struct } from "#standard/elements/models.js";
+import { camelize, InternalError } from "@matter/general";
 import { InvalidMetadataError, MetadataConflictError } from "../errors.js";
 import { FieldSemantics } from "./FieldSemantics.js";
 import { Semantics } from "./Semantics.js";
@@ -172,7 +172,7 @@ export class ClassSemantics extends Semantics {
             ? new Set(
                   Scope(this.semanticModel)
                       .membersOf(this.semanticModel)
-                      .map(model => camelize(model.name)),
+                      .map(model => model.propertyName),
               )
             : new Set();
 
@@ -291,15 +291,15 @@ export class ClassSemantics extends Semantics {
         // Invoke any custom extension logic
         this.#new?.[ClassSemantics.extend]?.(this);
 
-        // Apply base finalization
-        super.finalize();
-
         // Finalize fields
         if (this.#definedFields) {
             for (const field of this.#definedFields.values()) {
                 field.finalize();
             }
         }
+
+        // Apply base finalization
+        super.finalize();
     }
 
     #applyBaseSemantics() {
@@ -354,6 +354,10 @@ export class ClassSemantics extends Semantics {
             name = "Unnamed";
         }
         return new type({ name, operationalBase: struct });
+    }
+
+    get owner() {
+        return this;
     }
 }
 

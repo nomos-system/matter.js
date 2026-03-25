@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Behavior } from "#behavior/Behavior.js";
-import { camelize, ImplementationError } from "#general";
+import { camelize, ImplementationError } from "@matter/general";
 import { DescriptorBehavior } from "../../behaviors/descriptor/DescriptorBehavior.js";
 
 /**
@@ -111,6 +111,13 @@ function addBehaviors(target: SupportedBehaviors, types: SupportedBehaviors.List
         if (typeof type.id !== "string") {
             throw new ImplementationError("Behavior type has no ID");
         }
-        target[camelize(type.id)] = type;
+
+        if (!/^[a-z]/.test(type.id)) {
+            throw new ImplementationError(
+                `Behavior ID "${type.id}" must start with a lowercase letter (for example "${camelize(type.id)}")`,
+            );
+        }
+
+        target[type.id] = type;
     }
 }

@@ -1,13 +1,14 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import type { Behavior } from "#behavior/Behavior.js";
 import type { BehaviorBacking } from "#behavior/internal/BehaviorBacking.js";
 import type { Agent } from "#endpoint/Agent.js";
-import { MaybePromise } from "#general";
+import { EndpointVariableService } from "#endpoint/EndpointVariableService.js";
+import { MaybePromise } from "@matter/general";
 import type { Endpoint } from "../Endpoint.js";
 
 /**
@@ -37,6 +38,11 @@ export abstract class EndpointInitializer {
      * @returns a new {@link BehaviorBacking}
      */
     abstract createBacking(endpoint: Endpoint, type: Behavior.Type): BehaviorBacking;
+
+    /**
+     * Environmental configuration if supported on this node.
+     */
+    variableService?: EndpointVariableService;
 
     /**
      * Invoked after behaviors are initialized but before the initialization transaction commits.

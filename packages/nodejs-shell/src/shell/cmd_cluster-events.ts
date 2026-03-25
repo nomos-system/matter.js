@@ -1,17 +1,17 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { camelize, Diagnostic } from "#general";
-import { ClusterModel, EventModel, MatterModel } from "#model";
-import { ClusterId } from "#types";
+import { Diagnostic } from "@matter/general";
+import { ClusterModel, EventModel, Matter } from "@matter/model";
+import { ClusterId } from "@matter/types";
 import type { Argv } from "yargs";
 import { MatterNode } from "../MatterNode.js";
 
 function generateAllEventHandlersForCluster(yargs: Argv, theNode: MatterNode) {
-    MatterModel.standard.clusters.forEach(cluster => {
+    Matter.clusters.forEach(cluster => {
         yargs = generateClusterEventHandlers(yargs, cluster, theNode);
     });
     return yargs;
@@ -48,7 +48,7 @@ function generateEventHandler(
     theNode: MatterNode,
 ) {
     //console.log("Generating event handler for ", event.name, JSON.stringify(event));
-    const eventName = camelize(event.name);
+    const eventName = event.propertyName;
     return yargs.command(
         [`${event.name.toLowerCase()} <node-id> <endpoint-id>`, `0x${event.id.toString(16)}`],
         `Read ${clusterName}.${event.name} event`,

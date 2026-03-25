@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Diagnostic, Seconds } from "#general";
-import { CommissionableDeviceIdentifiers } from "#protocol";
-import { ManualPairingCodeCodec, VendorId } from "#types";
+import { Diagnostic, Seconds } from "@matter/general";
+import { CommissionableDeviceIdentifiers } from "@matter/protocol";
+import { ManualPairingCodeCodec, VendorId } from "@matter/types";
 import type { Argv } from "yargs";
 import { MatterNode } from "../MatterNode.js";
 

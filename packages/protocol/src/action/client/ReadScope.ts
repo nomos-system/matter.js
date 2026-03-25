@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Read } from "#action/request/Read.js";
-import { ClusterId, EndpointNumber } from "#types";
+import { ClusterId, EndpointNumber } from "@matter/types";
 
 /**
  * This utility tells you whether a given endpoint/cluster is in scope for a read.

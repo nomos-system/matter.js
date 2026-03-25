@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -15,12 +15,20 @@ import { EndpointInitializer } from "#endpoint/properties/EndpointInitializer.js
 import { EndpointLifecycle } from "#endpoint/properties/EndpointLifecycle.js";
 import { EndpointType } from "#endpoint/type/EndpointType.js";
 import { MutableEndpoint } from "#endpoint/type/MutableEndpoint.js";
-import { Diagnostic, Identity, Lifecycle, Logger, MaybePromise } from "#general";
-import { Matter, MatterModel } from "#model";
-import { Interactable, OccurrenceManager, PeerAddress } from "#protocol";
 import { ClientNodeStore } from "#storage/client/ClientNodeStore.js";
 import { RemoteWriter } from "#storage/client/RemoteWriter.js";
 import { ServerNodeStore } from "#storage/server/ServerNodeStore.js";
+import {
+    Diagnostic,
+    Identity,
+    ImplementationError,
+    InternalError,
+    Lifecycle,
+    Logger,
+    MaybePromise,
+} from "@matter/general";
+import { Matter, MatterModel } from "@matter/model";
+import { Interactable, OccurrenceManager, PeerAddress, PeerSet } from "@matter/protocol";
 import { ClientEndpointInitializer } from "./client/ClientEndpointInitializer.js";
 import { ClientNodeInteraction } from "./client/ClientNodeInteraction.js";
 import { Node } from "./Node.js";
@@ -37,6 +45,7 @@ const logger = Logger.get("ClientNode");
 export class ClientNode extends Node<ClientNode.RootEndpoint> {
     #matter: MatterModel;
     #interaction?: ClientNodeInteraction;
+    #blockInteractions = false;
 
     constructor(options: ClientNode.Options) {
         const opts = {
@@ -49,7 +58,7 @@ export class ClientNode extends Node<ClientNode.RootEndpoint> {
 
         super(opts);
 
-        // Block the OccurrenceManager from parent environment so we don't attempt to record events from peers
+        // Block the OccurrenceManager from the parent environment so we don't attempt to record events from peers
         this.env.close(OccurrenceManager);
 
         this.env.set(Node, this);
@@ -79,9 +88,9 @@ export class ClientNode extends Node<ClientNode.RootEndpoint> {
         return this.env.get(ServerNodeStore).clientStores.storeForNode(this);
     }
 
-    override async initialize() {
+    // This needs to be sync to ensure a sync initialization
+    override initialize() {
         const store = this.store;
-        await store.construction;
 
         this.env.set(ClientNodeStore, store);
 
@@ -90,13 +99,26 @@ export class ClientNode extends Node<ClientNode.RootEndpoint> {
 
         store.write = RemoteWriter(this, initializer.structure);
 
-        initializer.structure.loadCache();
+        initializer.structure.loadCache(store.endpointStores);
 
-        await super.initialize();
+        const promise = super.initialize();
+
+        if (store.isPreexisting && promise !== undefined) {
+            // We initialize ClientNodes on-demand but want them fully initialized for immediate use.  This means
+            // initialization must be synchronous.  Enforce this here to ensure we don't accidentally break this
+            // contract
+            throw new InternalError("Unsupported async initialization detected when loading known peer");
+        }
+
+        return promise;
     }
 
-    override get owner(): ServerNode | undefined {
-        return super.owner as ServerNode | undefined;
+    override get owner(): ServerNode {
+        const owner = super.owner;
+        if (owner === undefined) {
+            throw new InternalError("Client node is missing owner");
+        }
+        return super.owner as ServerNode;
     }
 
     override set owner(owner: ServerNode) {
@@ -124,6 +146,7 @@ export class ClientNode extends Node<ClientNode.RootEndpoint> {
 
             await this.act("decommission", agent => agent.commissioning.decommission());
         }
+
         await this.delete();
     }
 
@@ -131,15 +154,18 @@ export class ClientNode extends Node<ClientNode.RootEndpoint> {
      * Force-remove the node without first decommissioning.
      *
      * If the node is still available, you should use {@link decommission} to remove it properly from the fabric and only use
-     * this method as fallback.  You should also tell the user that he needs to manually factory-reset the device.
+     * this method as fallback.  You should inform the user that manual factory-reset may be necessary.
      */
     override async delete() {
-        // TODO If we know a peer address, get the Peer for it to delete it as well
-        //const peerAddress = this.behaviors.maybeStateOf("commissioning")?.peerAddress as PeerAddress | undefined;
-        //const peer = peerAddress !== undefined ? this.owner?.env.get(PeerSet).for(peerAddress) : undefined;
+        const address = this.peerAddress;
 
         await super.delete();
-        //await peer?.delete();
+
+        // Ensure there is no remaining @matter/protocol Peer installed.  This may occur if deleted while still
+        // commissioned
+        if (address) {
+            await this.env.maybeGet(PeerSet)?.get(address)?.delete();
+        }
     }
 
     override async erase() {
@@ -177,11 +203,14 @@ export class ClientNode extends Node<ClientNode.RootEndpoint> {
     }
 
     protected async eraseWithMutex() {
-        // First ensure we're offline
+        // First, ensure we're offline
         await this.cancelWithMutex();
 
         // Then reset
-        await this.resetWithMutex();
+        await super.resetWithMutex();
+
+        // and erase
+        await this.env.get(EndpointInitializer).eraseDescendant(this);
     }
 
     protected createRuntime(): NetworkRuntime {
@@ -189,6 +218,20 @@ export class ClientNode extends Node<ClientNode.RootEndpoint> {
     }
 
     async prepareRuntimeShutdown() {}
+
+    protected override async cancelWithMutex() {
+        // TODO Revisit this blocking mechanism because we might need it more general?
+        //  Maybe let it be created but have a check in ClientNodeInteraction which decided if allowed or not?
+        this.#blockInteractions = true;
+        try {
+            const interaction = this.#interaction;
+            this.#interaction = undefined;
+            await interaction?.close();
+            await super.cancelWithMutex();
+        } finally {
+            this.#blockInteractions = false;
+        }
+    }
 
     protected override get container() {
         return this.owner?.peers;
@@ -218,24 +261,33 @@ export class ClientNode extends Node<ClientNode.RootEndpoint> {
 
     get interaction(): Interactable<ActionContext> {
         if (this.#interaction === undefined) {
+            if (this.#blockInteractions) {
+                throw new ImplementationError("Cannot access interaction of a shutting-down node");
+            }
             this.#interaction = new ClientNodeInteraction(this);
         }
 
         return this.#interaction;
     }
 
-    override get identity() {
+    get peerAddress(): PeerAddress | undefined {
         // If commissioned, use the peer address for logging purposes
-        let address = this.behaviors.maybeStateOf("commissioning")?.peerAddress as PeerAddress | undefined;
+        let address = PeerAddress(this.behaviors.maybeStateOf("commissioning")?.peerAddress as PeerAddress | undefined);
 
         // During early initialization commissioning state may not be loaded, so check directly in storage too
         if (!address) {
-            address = this.store.storeForEndpoint(this).peerAddress as PeerAddress | undefined;
+            address = PeerAddress(this.store.storeForEndpoint(this).peerAddress as PeerAddress | undefined);
         }
 
+        return address;
+    }
+
+    override get identity() {
+        const peerAddress = this.peerAddress;
+
         // Use the peer address as a log identifier if present
-        if (address) {
-            return PeerAddress(address).toString();
+        if (peerAddress) {
+            return PeerAddress(peerAddress).toString();
         }
 
         // Fall back to persistence ID

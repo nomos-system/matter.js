@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Model } from "#model";
 import { Directory, Stat } from "#stat.js";
+import { Model } from "@matter/model";
 
 Stat.provide(model => {
     if (!isModel(model)) {

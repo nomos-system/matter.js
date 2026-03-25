@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Construction, ImplementationError, Lifecycle, Logger, MutableSet } from "#general";
 import { IdentityConflictError, IdentityService } from "#node/server/IdentityService.js";
+import { Construction, ImplementationError, Lifecycle, Logger, MutableSet } from "@matter/general";
 import { Agent } from "../Agent.js";
 import { Endpoint } from "../Endpoint.js";
 import { EndpointPartsError, PartNotFoundError } from "../errors.js";
@@ -49,7 +49,7 @@ export class Parts extends EndpointContainer implements MutableSet<Endpoint, End
 
         super.add(endpoint);
 
-        endpoint.lifecycle.changed.on((type, endpoint) => this.#bubbleChange(type, endpoint));
+        endpoint.lifecycle.changed.on(this.#bubbleChange);
 
         // If the part is already fully initialized we initialize the child now
         if (this.owner.lifecycle.isPartsReady) {
@@ -169,7 +169,7 @@ export class Parts extends EndpointContainer implements MutableSet<Endpoint, End
 
     #validateInsertion(forefather: Endpoint, endpoint: Endpoint, usedNumbers?: Set<number>) {
         if (endpoint.lifecycle.hasNumber) {
-            this.owner.env.get(IdentityService).assertNumberAvailable(endpoint.number, endpoint);
+            this.owner.env.get(IdentityService).assertEndpointNumberAvailable(endpoint.number, endpoint);
             if (usedNumbers?.has(endpoint.number)) {
                 throw new IdentityConflictError(
                     `Cannot add endpoint ${forefather} because descendents have conflicting definitions for endpoint number ${endpoint.number}`,

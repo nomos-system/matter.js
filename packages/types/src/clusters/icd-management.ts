@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -23,10 +23,10 @@ import { TlvSubjectId } from "../datatype/SubjectId.js";
 import { TlvEnum, TlvUInt32, TlvUInt16, TlvBitmap } from "../tlv/TlvNumber.js";
 import { TlvFabricIndex } from "../datatype/FabricIndex.js";
 import { TypeFromSchema } from "../tlv/TlvSchema.js";
-import { AccessLevel } from "#model";
+import { AccessLevel } from "@matter/model";
 import { TlvByteString, TlvString } from "../tlv/TlvString.js";
 import { BitFlag } from "../schema/BitmapSchema.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace IcdManagement {
@@ -109,9 +109,9 @@ export namespace IcdManagement {
          * different CheckInNodeID from the MonitoredSubject. A subscription shall count as an active subscription for
          * this entry if:
          *
-         *   • It is on the associated fabric of this entry, and
+         *   - It is on the associated fabric of this entry, and
          *
-         *   • The subject of this entry matches the ISD of the SubscriptionRequest message that created the
+         *   - The subject of this entry matches the ISD of the SubscriptionRequest message that created the
          *     subscription. Matching shall be determined using the subject_matches function defined in the Access
          *     Control Privilege Granting Algorithm.
          *
@@ -504,6 +504,18 @@ export namespace IcdManagement {
          * The minimum value of the PromisedActiveDuration field shall be equal to either 30000 milliseconds or
          * StayActiveDuration (from the received StayActiveRequest command), whichever is smaller.
          *
+         * Example scenarios:
+         *
+         *   - A Client requests an ICD to stay awake for 20000 milliseconds in its StayActiveDuration field. The ICD
+         *     responds with 20000 in its PromisedActiveDuration if it can stay active for that duration.
+         *
+         *   - A Client requests an ICD to stay awake for 35000 milliseconds in its StayActiveDuration field. The ICD
+         *     responds with 30000 in its PromisedActiveDuration since it can only stay active for that minimal amount.
+         *
+         *   - A Client requests an ICD to stay awake for 10000 milliseconds in its StayActiveDuration field, but the
+         *     ICD’s remaining active time is 20000 milliseconds. The ICD responds with 20000 milliseconds in its
+         *     PromisedActiveDuration field since it intends to stay active that long.
+         *
          * @see {@link MatterSpecification.v142.Core} § 9.16.7.5.1
          */
         promisedActiveDuration: TlvField(0, TlvUInt32)
@@ -621,8 +633,8 @@ export namespace IcdManagement {
              * a dependency on the UserActiveModeTriggerInstruction attribute but do not require the attribute to be
              * present.
              *
-             * ### An ICD can indicate multiple ways of being put into Active Mode by setting multiple bits in the
-             * bitmap at the same time. However, a device shall NOT set more than one bit which has a dependency on the
+             * An ICD can indicate multiple ways of being put into Active Mode by setting multiple bits in the bitmap at
+             * the same time. However, a device shall NOT set more than one bit which has a dependency on the
              * UserActiveModeTriggerInstruction attribute.
              *
              * @see {@link MatterSpecification.v142.Core} § 9.16.6.7
@@ -639,9 +651,9 @@ export namespace IcdManagement {
             /**
              * Indicates the operating mode of the ICD as specified in the OperatingModeEnum.
              *
-             *   • If the ICD is operating as a LIT ICD, OperatingMode shall be LIT.
+             *   - If the ICD is operating as a LIT ICD, OperatingMode shall be LIT.
              *
-             *   • If the ICD is operating as a SIT ICD, OperatingMode shall be SIT.
+             *   - If the ICD is operating as a SIT ICD, OperatingMode shall be SIT.
              *
              * @see {@link MatterSpecification.v142.Core} § 9.16.6.9
              */
@@ -663,9 +675,9 @@ export namespace IcdManagement {
              * When receiving a StayActiveRequest command, the server shall calculate the maximum PromisedActiveDuration
              * it can remain active as the greater of the following two values:
              *
-             *   • StayActiveDuration: Specified in the received command by the client.
+             *   - StayActiveDuration: Specified in the received command by the client.
              *
-             *   • Remaining Active Time: The server’s planned remaining active time based on the ActiveModeThreshold
+             *   - Remaining Active Time: The server’s planned remaining active time based on the ActiveModeThreshold
              *     and its internal resources and power budget.
              *
              * A server may replace StayActiveDuration with Minimum Active Duration in the above calculation.
@@ -792,9 +804,9 @@ export namespace IcdManagement {
              * When receiving a StayActiveRequest command, the server shall calculate the maximum PromisedActiveDuration
              * it can remain active as the greater of the following two values:
              *
-             *   • StayActiveDuration: Specified in the received command by the client.
+             *   - StayActiveDuration: Specified in the received command by the client.
              *
-             *   • Remaining Active Time: The server’s planned remaining active time based on the ActiveModeThreshold
+             *   - Remaining Active Time: The server’s planned remaining active time based on the ActiveModeThreshold
              *     and its internal resources and power budget.
              *
              * A server may replace StayActiveDuration with Minimum Active Duration in the above calculation.

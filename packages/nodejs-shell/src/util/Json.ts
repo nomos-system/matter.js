@@ -1,12 +1,12 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Bytes, camelize } from "#general";
-import { ValueModel } from "#model";
-import { ValidationDatatypeMismatchError } from "#types";
+import { Bytes } from "@matter/general";
+import { ValueModel } from "@matter/model";
+import { ValidationDatatypeMismatchError } from "@matter/types";
 
 export function convertJsonDataWithModel(model: ValueModel, data: any): any {
     const definingModel = model.definingModel ?? model;
@@ -21,7 +21,7 @@ export function convertJsonDataWithModel(model: ValueModel, data: any): any {
                 throw new ValidationDatatypeMismatchError(`Expected object, got ${typeof data}`);
             }
             for (const child of definingModel.children) {
-                const childKeyName = camelize(child.name);
+                const childKeyName = child.propertyName;
                 data[childKeyName] = convertJsonDataWithModel(child, data[childKeyName]);
             }
             return data;

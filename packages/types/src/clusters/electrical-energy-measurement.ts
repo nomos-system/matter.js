@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -15,7 +15,7 @@ import { TlvNullable } from "../tlv/TlvNullable.js";
 import { Priority } from "../globals/Priority.js";
 import { BitFlag } from "../schema/BitmapSchema.js";
 import { TlvMeasurementAccuracy } from "../globals/MeasurementAccuracy.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace ElectricalEnergyMeasurement {
@@ -383,7 +383,7 @@ export namespace ElectricalEnergyMeasurement {
         Frequency = 11,
 
         /**
-         * Power Factor ratio in+/- 1/100ths of a percent.
+         * Power Factor ratio in +/- 1/100ths of a percent.
          */
         PowerFactor = 12,
 

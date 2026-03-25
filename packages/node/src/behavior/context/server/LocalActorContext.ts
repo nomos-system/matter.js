@@ -1,13 +1,13 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { ValueSupervisor } from "#behavior/supervision/ValueSupervisor.js";
-import { Diagnostic, InternalError, Lifetime, MaybePromise, Transaction } from "#general";
-import { AccessLevel } from "#model";
-import { AccessControl, Mark } from "#protocol";
+import { Diagnostic, InternalError, Lifetime, MaybePromise, Transaction } from "@matter/general";
+import { AccessLevel } from "@matter/model";
+import { AccessControl, InteractionSettings, Mark } from "@matter/protocol";
 import { Contextual } from "../Contextual.js";
 import type { NodeActivity } from "../NodeActivity.js";
 export let nextInternalId = 1;
@@ -139,7 +139,7 @@ export namespace LocalActorContext {
     /**
      * {@link LocalActorContext} configuration options.
      */
-    export interface Options {
+    export interface Options extends Omit<InteractionSettings, "transaction"> {
         lifetime?: Lifetime.Owner;
         command?: boolean;
         activity?: NodeActivity;

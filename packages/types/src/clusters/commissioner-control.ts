@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -10,7 +10,7 @@ import { MutableCluster } from "../cluster/mutation/MutableCluster.js";
 import { Attribute, Command, TlvNoResponse, Event } from "../cluster/Cluster.js";
 import { BitFlag } from "../schema/BitmapSchema.js";
 import { TlvUInt32, TlvBitmap, TlvUInt64, TlvUInt16, TlvEnum } from "../tlv/TlvNumber.js";
-import { AccessLevel } from "#model";
+import { AccessLevel } from "@matter/model";
 import { TlvField, TlvOptionalField, TlvObject } from "../tlv/TlvObject.js";
 import { TlvVendorId } from "../datatype/VendorId.js";
 import { TlvString, TlvByteString } from "../tlv/TlvString.js";
@@ -19,7 +19,7 @@ import { Priority } from "../globals/Priority.js";
 import { TlvNodeId } from "../datatype/NodeId.js";
 import { Status } from "../globals/Status.js";
 import { TlvFabricIndex } from "../datatype/FabricIndex.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace CommissionerControl {
@@ -240,10 +240,6 @@ export namespace CommissionerControl {
              * > The approval is valid for a period determined by the manufacturer and characteristics of the node
              *   presenting the Commissioner Control Cluster. Clients SHOULD send the CommissionNode command immediately
              *   upon receiving a CommissioningRequestResult event.
-             *
-             * 11.26.7.2. RequestID / ClientNodeID Fields The RequestID shall match the RequestID provided to
-             * RequestCommissioningApproval and the ClientNodeID shall match the NodeID of the client which generated
-             * the RequestCommissioningApproval command.
              *
              * @see {@link MatterSpecification.v142.Core} § 11.26.7.1
              */

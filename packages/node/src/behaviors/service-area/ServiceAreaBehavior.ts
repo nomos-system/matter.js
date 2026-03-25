@@ -1,15 +1,15 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*** THIS FILE IS GENERATED, DO NOT EDIT ***/
 
-import { ServiceArea } from "#clusters/service-area";
+import { ServiceArea } from "@matter/types/clusters/service-area";
 import { ClusterBehavior } from "../../behavior/cluster/ClusterBehavior.js";
 import { ServiceAreaInterface } from "./ServiceAreaInterface.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 
 /**
  * ServiceAreaBehavior is the base class for objects that support interaction with {@link ServiceArea.Cluster}.

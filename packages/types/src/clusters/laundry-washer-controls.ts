@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -13,7 +13,7 @@ import { TlvString } from "../tlv/TlvString.js";
 import { TlvUInt8, TlvEnum } from "../tlv/TlvNumber.js";
 import { TlvNullable } from "../tlv/TlvNullable.js";
 import { BitFlag } from "../schema/BitmapSchema.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 import { ClusterRegistry } from "../cluster/ClusterRegistry.js";
 
 export namespace LaundryWasherControls {
@@ -93,10 +93,9 @@ export namespace LaundryWasherControls {
              * spin speed, as such, this attribute can be an integer between 0 and the number of entries in SpinSpeeds -
              * 1. If a value is received that is outside of the defined constraints, a CONSTRAINT_ERROR shall be sent as
              * the response. If a value is attempted to be written that doesn’t match a valid index (e.g. an index of 5
-             * when the list has 4 values), a CONSTRAINT_ERROR shall be
-             *
-             * sent as the response. If null is written to this attribute, there will be no spin speed for the selected
-             * cycle. If the value is null, there will be no spin speed on the current mode.
+             * when the list has 4 values), a CONSTRAINT_ERROR shall be sent as the response. If null is written to this
+             * attribute, there will be no spin speed for the selected cycle. If the value is null, there will be no
+             * spin speed on the current mode.
              *
              * @see {@link MatterSpecification.v142.Cluster} § 8.6.6.2
              */

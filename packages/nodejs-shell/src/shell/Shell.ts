@@ -1,10 +1,10 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Logger, MatterError } from "#general";
+import { Logger, MatterError } from "@matter/general";
 import { createWriteStream, readFileSync } from "node:fs";
 import readline from "node:readline";
 import { Readable, Writable } from "node:stream";

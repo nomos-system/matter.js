@@ -1,11 +1,11 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Environment, Environmental } from "#general";
-import { MdnsClient, MdnsScannerTargetCriteria, Scanner, ScannerSet } from "#protocol";
+import { Environment, Environmental } from "@matter/general";
+import { MdnsClient, MdnsScannerTargetCriteria, Scanner, ScannerSet } from "@matter/protocol";
 import type { Discovery } from "./Discovery.js";
 
 /**
@@ -49,7 +49,7 @@ export class ActiveDiscoveries extends Set<Discovery<any>> {
         }
 
         if (this.#mdnsTargetCriteria === undefined) {
-            this.#mdnsTargetCriteria = { commissionable: true, operationalTargets: [] };
+            this.#mdnsTargetCriteria = { commissionable: true };
         }
         scanner.targetCriteriaProviders.add(this.#mdnsTargetCriteria);
     }

@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -8,6 +8,7 @@ import { Channel, ChannelType, IpNetworkChannel } from "#net/Channel.js";
 import { ConnectionlessTransport } from "#net/ConnectionlessTransport.js";
 import { Network, NetworkError } from "#net/Network.js";
 import { Bytes } from "#util/Bytes.js";
+import { Observable } from "#util/index.js";
 import { ServerAddress, ServerAddressUdp } from "../ServerAddress.js";
 import { UdpChannel } from "./UdpChannel.js";
 
@@ -41,9 +42,9 @@ export class UdpInterface implements ConnectionlessTransport {
     }
 
     onData(listener: (channel: Channel<Bytes>, messageBytes: Bytes) => void): ConnectionlessTransport.Listener {
-        return this.#server.onData((_netInterface, peerHost, peerPort, data) =>
-            listener(new UdpConnection(this.#server, peerHost, peerPort), data),
-        );
+        return this.#server.onData((_netInterface, peerHost, peerPort, data) => {
+            listener(new UdpConnection(this.#server, peerHost, peerPort), data);
+        });
     }
 
     get port() {
@@ -68,8 +69,9 @@ export class UdpConnection implements IpNetworkChannel<Bytes> {
     readonly supportsLargeMessages = false;
     readonly type = ChannelType.UDP;
     readonly #server: UdpChannel;
-    readonly #peerAddress: string;
-    readonly #peerPort: number;
+    #peerAddress: string;
+    #peerPort: number;
+    readonly networkAddressChanged = Observable<[ServerAddressUdp]>();
 
     constructor(server: UdpChannel, peerAddress: string, peerPort: number) {
         this.#server = server;
@@ -81,16 +83,28 @@ export class UdpConnection implements IpNetworkChannel<Bytes> {
         return this.#server.maxPayloadSize;
     }
 
-    send(data: Bytes) {
+    send(data: Bytes, addressOverride?: ServerAddressUdp) {
+        if (addressOverride) {
+            return this.#server.send(addressOverride.ip, addressOverride.port, data);
+        }
         return this.#server.send(this.#peerAddress, this.#peerPort, data);
     }
 
     get name() {
-        return `${this.type}://[${this.#peerAddress}]:${this.#peerPort}`;
+        return `${this.type}://${this.#peerAddress.includes(":") ? `[${this.#peerAddress}]` : this.#peerAddress}:${this.#peerPort}`;
     }
 
     get networkAddress(): ServerAddressUdp {
         return { type: "udp", ip: this.#peerAddress, port: this.#peerPort };
+    }
+
+    set networkAddress(address: ServerAddressUdp) {
+        if (address.type !== "udp" || (address.ip === this.#peerAddress && address.port === this.#peerPort)) {
+            return;
+        }
+        this.#peerAddress = address.ip;
+        this.#peerPort = address.port;
+        this.networkAddressChanged.emit(this.networkAddress);
     }
 
     async close() {

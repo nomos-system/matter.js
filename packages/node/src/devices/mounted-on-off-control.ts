@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -18,7 +18,7 @@ import {
 } from "../behaviors/occupancy-sensing/OccupancySensingBehavior.js";
 import { MutableEndpoint } from "../endpoint/type/MutableEndpoint.js";
 import { SupportedBehaviors } from "../endpoint/properties/SupportedBehaviors.js";
-import { Identity } from "#general";
+import { Identity } from "@matter/general";
 
 /**
  * A Mounted On/Off Control is a fixed device that provides power to another device or power circuit that is connected
@@ -32,9 +32,8 @@ import { Identity } from "#general";
  *
  * > Since this device type was added in Matter 1.4, for endpoints using this device type it is recommended to add the
  *   subset device type On/Off Plug-in Unit to the DeviceTypeList of the Descriptor cluster on the same endpoint for
- *   backward compatibility with existing clients.
- *
- * See [ref_MountedOnOffClientGuidance] for client guidance with these two device types.
+ *   backward compatibility with existing clients. See [ref_MountedOnOffClientGuidance] for client guidance with these
+ *   two device types.
  *
  * @see {@link MatterSpecification.v142.Device} § 5.3
  */

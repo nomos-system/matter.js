@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -8,8 +8,8 @@ import { CertificateAuthority } from "#certificate/CertificateAuthority.js";
 import { Icac } from "#certificate/kinds/Icac.js";
 import { Noc } from "#certificate/kinds/Noc.js";
 import { Rcac } from "#certificate/kinds/Rcac.js";
-import { Bytes, StandardCrypto, StorageBackendMemory, StorageContext, StorageManager } from "#general";
-import { CaseAuthenticatedTag, FabricId, NodeId } from "#types";
+import { Bytes, MemoryStorageDriver, StandardCrypto, StorageContext, StorageManager } from "@matter/general";
+import { CaseAuthenticatedTag, FabricId, NodeId } from "@matter/types";
 
 const crypto = new StandardCrypto();
 
@@ -40,7 +40,7 @@ describe("CertificateAuthority", () => {
         });
 
         it("persists and loads from storage", async () => {
-            const storage = new StorageManager(new StorageBackendMemory());
+            const storage = new StorageManager(new MemoryStorageDriver());
             await storage.initialize();
             const context = storage.createContext("test");
 
@@ -71,7 +71,7 @@ describe("CertificateAuthority", () => {
             const icac = Icac.fromTlv(icacCert!);
 
             expect(BigInt(rcac.cert.subject.rcacId)).equal(BigInt(0));
-            expect(BigInt(icac.cert.subject.icacId!)).equal(BigInt(1));
+            expect(BigInt(icac.cert.subject.icacId)).equal(BigInt(1));
             expect(BigInt(icac.cert.issuer.rcacId!)).equal(BigInt(0));
         });
 
@@ -86,7 +86,7 @@ describe("CertificateAuthority", () => {
         });
 
         it("persists ICAC to storage", async () => {
-            const storage = new StorageManager(new StorageBackendMemory());
+            const storage = new StorageManager(new MemoryStorageDriver());
             await storage.initialize();
             const context = storage.createContext("test");
 
@@ -107,7 +107,7 @@ describe("CertificateAuthority", () => {
         });
 
         it("auto-detects ICAC from storage when ica option not provided", async () => {
-            const storage = new StorageManager(new StorageBackendMemory());
+            const storage = new StorageManager(new MemoryStorageDriver());
             await storage.initialize();
             const context = storage.createContext("test");
 
@@ -126,7 +126,7 @@ describe("CertificateAuthority", () => {
         });
 
         it("loads ICAC from storage and sets intermediateCert=true (storage takes precedence)", async () => {
-            const storage = new StorageManager(new StorageBackendMemory());
+            const storage = new StorageManager(new MemoryStorageDriver());
             await storage.initialize();
             const context = storage.createContext("test");
 
@@ -150,7 +150,7 @@ describe("CertificateAuthority", () => {
         let context: StorageContext;
 
         beforeEach(async () => {
-            storage = new StorageManager(new StorageBackendMemory());
+            storage = new StorageManager(new MemoryStorageDriver());
             await storage.initialize();
             context = storage.createContext("test");
         });
@@ -214,10 +214,10 @@ describe("CertificateAuthority", () => {
     describe("Configuration export", () => {
         it("exports complete configuration with ICAC", async () => {
             const ca = await CertificateAuthority.create(crypto, true);
-            const config = ca.config;
+            const config = ca.config as CertificateAuthority.ConfigurationWithIcac;
 
             expect(BigInt(config.rootCertId)).equal(BigInt(0));
-            expect(BigInt(config.icacCertId!)).equal(BigInt(1));
+            expect(BigInt(config.icacCertId)).equal(BigInt(1));
             expect(config.icacKeyPair).ok;
             expect(config.icacKeyIdentifier).ok;
             expect(config.icacCertBytes).ok;

@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Environment, LogDestination, LogFormat, Logger, LogLevel } from "#general";
-import { createFileLogger } from "#nodejs";
+import { Environment, LogDestination, LogFormat, Logger, LogLevel } from "@matter/general";
+import { createFileLogger } from "@matter/nodejs";
 import "@matter/nodejs-ble";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
@@ -182,16 +182,10 @@ process.on("message", function (message) {
 });
 
 export async function exit(code = 0) {
-    process.off("SIGINT", sigIntHandler);
-    process.emit("SIGINT");
-    process.exit(code);
+    process.exitCode = code;
+    Environment.default.runtime.cancel();
 }
 
-const sigIntHandler = () => {
-    // Pragmatic way to make sure the storage is correctly closed before the process ends.
-    exit().catch(error => logger.error(error));
-};
-
-process.on("SIGINT", sigIntHandler);
-
-Environment.default.runtime.add(main());
+const runtime = Environment.default.runtime;
+runtime.add(main());
+void runtime.inactive.then(() => process.exit(process.exitCode ?? 0));

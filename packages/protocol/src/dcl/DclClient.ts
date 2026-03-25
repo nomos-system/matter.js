@@ -1,8 +1,9 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
+import { DclConfig } from "#dcl/DclConfig.js";
 import {
     DclApiErrorResponse,
     DclModelModelsWithVidPidResponse,
@@ -13,13 +14,9 @@ import {
     DclPkiRootCertificateSubjectReference,
     DclVendorInfo,
 } from "#dcl/DclRestApiTypes.js";
-import { Duration, Logger, MatterError, Seconds } from "#general";
+import { Duration, Logger, MatterError, Seconds } from "@matter/general";
 
 const logger = new Logger("DclClient");
-
-// Swagger for DCL: https://zigbee-alliance.github.io/distributed-compliance-ledger/#/
-const DCL_PRODUCTION_URL = "https://on.dcl.csa-iot.org";
-const DCL_TEST_URL = "https://on.test-net.dcl.csa-iot.org";
 
 const DEFAULT_DCL_TIMEOUT = Seconds(5);
 
@@ -28,17 +25,20 @@ export class MatterDclError extends MatterError {}
 
 /** Error thrown when fetching data from DCL fails */
 export class MatterDclResponseError extends MatterDclError {
+    readonly response: DclApiErrorResponse;
+
     constructor(path: string, error: DclApiErrorResponse, options?: ErrorOptions) {
         super(`Error fetching ${path} from DCL: ${error.code} - ${error.message}`, options);
+        this.response = error;
     }
 }
 
-/** A client clas to use "fetch" to get REST DAta from DCL (Decentraland) */
+/** A client class to use "fetch" to get REST data from DCL (Distributed Compliance Ledger) */
 export class DclClient {
     #baseUrl: string;
 
-    constructor(private readonly production: boolean = true) {
-        this.#baseUrl = this.production ? DCL_PRODUCTION_URL : DCL_TEST_URL;
+    constructor(config: DclConfig = DclConfig.production) {
+        this.#baseUrl = config.url;
     }
 
     async #fetchPaginatedJson<ItemT>(
@@ -72,7 +72,7 @@ export class DclClient {
 
     async #fetchJson<ResponseT>(path: string, options?: DclClient.Options): Promise<ResponseT> {
         const url = new URL(path, this.#baseUrl).toString();
-        logger.debug(`Fetching for DCL:`, url);
+        logger.debug(`Fetching from DCL:`, url);
         try {
             const timeoutMs = options?.timeout ?? DEFAULT_DCL_TIMEOUT;
             const response = await fetch(url, {

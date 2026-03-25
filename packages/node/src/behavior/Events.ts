@@ -1,16 +1,16 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { ValueSupervisor } from "#behavior/supervision/ValueSupervisor.js";
 import type { Endpoint } from "#endpoint/Endpoint.js";
+import { ChangeNotificationService } from "#node/integration/ChangeNotificationService.js";
 import {
     asError,
     AsyncObservable,
     BasicObservable,
-    camelize,
     EventEmitter,
     ImplementationError,
     InternalError,
@@ -22,10 +22,10 @@ import {
     QuietObservable,
     Time,
     type Observer,
-} from "#general";
-import { ElementTag, EventElement, EventModel, type AttributeElement, type ValueModel } from "#model";
-import { Occurrence, OccurrenceManager } from "#protocol";
-import { ClusterId, EventId, Priority } from "#types";
+} from "@matter/general";
+import { ElementTag, EventElement, EventModel, type AttributeElement, type ValueModel } from "@matter/model";
+import { NumberedOccurrence, Occurrence, OccurrenceManager, Val } from "@matter/protocol";
+import { ClusterId, EventId, Priority } from "@matter/types";
 import type { Behavior } from "./Behavior.js";
 import { NodeActivity } from "./context/NodeActivity.js";
 
@@ -37,6 +37,7 @@ const logger = Logger.get("Events");
 export class Events extends EventEmitter {
     #endpoint?: Endpoint;
     #behavior?: Behavior.Type;
+    #changes?: ChangeNotificationService;
 
     setContext(endpoint: Endpoint, behavior: Behavior.Type) {
         this.#endpoint = endpoint;
@@ -46,17 +47,33 @@ export class Events extends EventEmitter {
     /**
      * Emitted when state associated with this behavior is first mutated by a specific interaction.
      */
-    interactionBegin = Observable<[context?: ValueSupervisor.Session], MaybePromise>();
+    declare interactionBegin: Observable<[context?: ValueSupervisor.Session], MaybePromise>;
 
     /**
      * Emitted when a mutating interaction completes.
      */
-    interactionEnd = Observable<[context?: ValueSupervisor.Session], MaybePromise>();
+    declare interactionEnd: Observable<[context?: ValueSupervisor.Session], MaybePromise>;
 
     /**
      * Emitted when the state of this behavior changes at the end after all concrete $Changed events were emitted.
      */
-    stateChanged = Observable<[context?: ValueSupervisor.Session], MaybePromise>();
+    declare stateChanged: Observable<[context?: ValueSupervisor.Session], MaybePromise>;
+
+    static {
+        for (const name of ["interactionBegin", "interactionEnd", "stateChanged"]) {
+            Object.defineProperty(this.prototype, name, {
+                get(this: EventEmitter) {
+                    if (this.hasEvent(name, true)) {
+                        return this.getEvent(name);
+                    }
+                    const event = Observable<[context?: ValueSupervisor.Session], MaybePromise>();
+                    this.addEvent(name, event);
+                    return event;
+                },
+                enumerable: true,
+            });
+        }
+    }
 
     get endpoint() {
         return this.#endpoint;
@@ -64,6 +81,17 @@ export class Events extends EventEmitter {
 
     get behavior() {
         return this.#behavior;
+    }
+
+    get changes() {
+        if (
+            this.#changes === undefined &&
+            this.#endpoint !== undefined &&
+            this.#endpoint.env.has(ChangeNotificationService)
+        ) {
+            this.#changes = this.#endpoint.env.get(ChangeNotificationService);
+        }
+        return this.#changes;
     }
 
     override toString() {
@@ -168,7 +196,8 @@ export class OnlineEvent<T extends any[] = any[], S extends ValueModel = ValueMo
             },
         );
 
-        // If it is a "real" Matter event, then we connect this event instance with the OccurrenceManager
+        // If it is a "real" Matter event, then we connect this event instance with the OccurrenceManager and
+        // ChangeNotificationService
         const eventSchema = this.schema as EventModel;
         if (
             this.schema.tag === ElementTag.Event &&
@@ -199,18 +228,29 @@ export class OnlineEvent<T extends any[] = any[], S extends ValueModel = ValueMo
         }
 
         const trigger = (payload?: any) => {
-            const maybePromise = occurrenceManager.add({
+            const occurrence = occurrenceManager.add({
                 ...this.#baseOccurrence!,
                 epochTimestamp: Time.nowMs,
                 payload,
             });
 
-            if (MaybePromise.is(maybePromise)) {
-                this.owner.endpoint!.env.runtime.add(maybePromise);
+            if (MaybePromise.is(occurrence)) {
+                this.owner.endpoint!.env.runtime.add(occurrence.then(this.#broadcast.bind(this)));
+            } else {
+                this.#broadcast(occurrence);
             }
         };
         this.online.on(trigger as unknown as Observer<T, void>);
         this.#occurrenceTrigger = trigger;
+    }
+
+    #broadcast({ number, epochTimestamp: timestamp, priority, payload }: NumberedOccurrence) {
+        this.owner.changes?.broadcastEvent(this.owner.endpoint!, this.owner.behavior!, this.schema as EventModel, {
+            number,
+            timestamp,
+            priority,
+            payload: payload as Val.Struct | undefined,
+        });
     }
 
     /**
@@ -236,7 +276,7 @@ export class OnlineEvent<T extends any[] = any[], S extends ValueModel = ValueMo
     }
 
     override toString() {
-        const base = `${this.owner.toString()}.${camelize(this.schema.name)}`;
+        const base = `${this.owner.toString()}.${this.schema.propertyName}`;
         if (this.schema.tag === ElementTag.Attribute || this.schema.tag === ElementTag.Field) {
             return `${base}$Changed`;
         }

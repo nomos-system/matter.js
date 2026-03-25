@@ -1,14 +1,14 @@
 /**
  * @license
- * Copyright 2022-2025 Matter.js Authors
+ * Copyright 2022-2026 Matter.js Authors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { ImplementationError } from "#general";
 import type { ClusterModel } from "#models/ClusterModel.js";
 import { DatatypeModel } from "#models/DatatypeModel.js";
 import type { Model } from "#models/Model.js";
 import type { ValueModel } from "#models/ValueModel.js";
+import { ImplementationError } from "@matter/general";
 import { MissingMetadataError } from "../decoration/errors.js";
 import { Semantics } from "../decoration/semantics/Semantics.js";
 
