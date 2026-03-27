@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { NetworkCommissioningBehavior } from "#behaviors/network-commissioning";
 import type { ServerNode } from "#node/ServerNode.js";
 import { InteractionServer } from "#node/server/InteractionServer.js";
 import {
@@ -20,6 +21,7 @@ import {
     ObserverGroup,
     UdpInterface,
 } from "@matter/general";
+import { DeviceClassification } from "@matter/model";
 import {
     Advertiser,
     Ble,
@@ -325,8 +327,14 @@ export class ServerNetworkRuntime extends NetworkRuntime {
         if (timing) {
             env.get(PeerSet).timing = timing;
         }
-        if (profiles) {
-            env.get(NetworkProfiles).defaults = profiles;
+
+        // Auto-detect the "unknown" profile for peers with unknown physical properties.  If the node has
+        // application endpoints we derive it from local network capabilities.  Users can still override
+        // via profiles.unknown in config.
+        const autoUnknown = this.#detectFallbackProfile();
+        const effectiveProfiles = autoUnknown !== undefined ? { unknown: autoUnknown, ...profiles } : profiles;
+        if (effectiveProfiles) {
+            env.get(NetworkProfiles).defaults = effectiveProfiles;
         }
 
         env.get(PeerSet).exchanges = exchanges;
@@ -400,6 +408,40 @@ export class ServerNetworkRuntime extends NetworkRuntime {
         }
 
         env.delete(ScannerSet);
+    }
+
+    /**
+     * Auto-detect limits for the conservative/unknown profile based on the local node's endpoint structure.
+     *
+     * Returns profile limits if the node has application endpoints (i.e. it is a device), derived from the root
+     * endpoint's NetworkCommissioning supported features.  Returns undefined for pure controller/utility nodes.
+     */
+    #detectFallbackProfile(): NetworkProfiles.Limits | undefined {
+        const { owner } = this;
+
+        // Check if any child endpoint is an application device type
+        let hasApplicationEndpoint = false;
+        for (const part of owner.parts) {
+            if (!DeviceClassification.isUtility(part.type.deviceClass)) {
+                hasApplicationEndpoint = true;
+                break;
+            }
+        }
+
+        if (!hasApplicationEndpoint) {
+            return undefined;
+        }
+
+        // We are a device — determine profile from the root endpoint's NetworkCommissioning features.
+        // TODO - whenever we support WiFi/Thread or secondary network interfaces we need to adjust this logic
+        const nc = owner.behaviors.typeFor(NetworkCommissioningBehavior);
+        if (nc?.schema.supportedFeatures.has("TH")) {
+            logger.info("Default network profile for unknown peers set to thread");
+            return NetworkProfiles.defaults.thread;
+        }
+
+        logger.info("Default network profile for unknown peers set to fast");
+        return NetworkProfiles.defaults.fast;
     }
 
     async #initializeGroupNetworking() {
