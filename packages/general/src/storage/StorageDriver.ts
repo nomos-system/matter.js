@@ -217,8 +217,9 @@ export namespace StorageDriver {
 /**
  * {@link StorageDriver} subclass for drivers backed by the filesystem.
  *
- * Manages a {@link DatafileRoot.Lock} that is acquired during {@link initialize} and released during {@link close}.
- * Filesystem-specific drivers should extend this instead of {@link StorageDriver} directly.
+ * Manages a {@link DatafileRoot.Lock} that is acquired during {@link initialize} and released during
+ * {@link close}.  Filesystem-specific KV drivers should extend this instead of {@link StorageDriver}
+ * directly.  Blob drivers should extend {@link FilesystemBlobStorageDriver} instead.
  */
 export abstract class FilesystemStorageDriver extends StorageDriver {
     readonly #root?: DatafileRoot;
@@ -239,6 +240,9 @@ export abstract class FilesystemStorageDriver extends StorageDriver {
     }
 
     async initialize() {
+        if (this.#lock) {
+            throw new ImplementationError("Filesystem storage driver is already initialized");
+        }
         if (this.#root) {
             this.#lock = await this.#root.lock();
         }
