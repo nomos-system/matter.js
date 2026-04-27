@@ -11,6 +11,8 @@ import {
 } from "#dcl/DclOtaUpdateService.js";
 import { OtaImageWriter } from "#ota/OtaImageWriter.js";
 import {
+    type BlobStorageHandle,
+    Bytes,
     Crypto,
     DataWriter,
     Endian,
@@ -19,6 +21,7 @@ import {
     MockFetch,
     MockStorageService,
     StandardCrypto,
+    StorageService,
 } from "@matter/general";
 import { VendorId } from "@matter/types";
 import { createOtaImage, createVersionMetadata, mockVersionsList } from "./dcl-ota-test-helpers.js";
@@ -26,19 +29,21 @@ import { createOtaImage, createVersionMetadata, mockVersionsList } from "./dcl-o
 describe("DclOtaUpdateService", () => {
     let fetchMock: MockFetch;
     let environment: Environment;
-    let mockStorage: MockStorageService;
     const crypto = new StandardCrypto();
 
     beforeEach(async () => {
         fetchMock = new MockFetch();
         environment = new Environment("test");
 
-        mockStorage = new MockStorageService(environment);
+        new MockStorageService(environment);
         environment.set(Crypto, crypto);
     });
 
     afterEach(async () => {
         fetchMock.uninstall();
+        if (environment.has(DclOtaUpdateService)) {
+            await environment.get(DclOtaUpdateService).close();
+        }
     });
 
     describe("checkForUpdate", () => {
@@ -303,6 +308,142 @@ describe("DclOtaUpdateService", () => {
 
             // Should return undefined because DCL URLs must be HTTPS
             expect(update).to.be.undefined;
+        });
+
+        it("skips stored test-mode files when isProduction is true", async () => {
+            // Store a test-mode file from an earlier session
+            const otaImage = await createOtaImage(crypto, 0xfff1, 0x8000, 3);
+            fetchMock.addResponse("https://example.com/ota-test.bin", otaImage, { binary: true });
+            // Mock Prod DCL to return no applicable updates
+            fetchMock.addResponse("/dcl/model/versions/65521/32768", {
+                modelVersions: { vid: VendorId(0xfff1), pid: 0x8000, softwareVersions: [], schemaVersion: 0 },
+            });
+            fetchMock.install();
+
+            const service = new DclOtaUpdateService(environment);
+            await service.downloadUpdate(
+                {
+                    vid: VendorId(0xfff1),
+                    pid: 0x8000,
+                    softwareVersion: 3,
+                    softwareVersionString: "v3.0.0",
+                    cdVersionNumber: 1,
+                    softwareVersionValid: true,
+                    otaUrl: "https://example.com/ota-test.bin",
+                    otaFileSize: otaImage.byteLength,
+                    minApplicableSoftwareVersion: 2,
+                    maxApplicableSoftwareVersion: 2,
+                    schemaVersion: 0,
+                    source: "dcl-test",
+                },
+                true,
+            );
+
+            // Even with includeStoredUpdates, a prod-only caller must not get test-mode files surfaced
+            const update = await service.checkForUpdate({
+                vendorId: 0xfff1,
+                productId: 0x8000,
+                currentSoftwareVersion: 2,
+                isProduction: true,
+                includeStoredUpdates: true,
+            });
+            expect(update).to.be.undefined;
+
+            // Explicit test query still returns the stored file
+            const testUpdate = await service.checkForUpdate({
+                vendorId: 0xfff1,
+                productId: 0x8000,
+                currentSoftwareVersion: 2,
+                isProduction: false,
+                includeStoredUpdates: true,
+            });
+            expect(testUpdate).to.not.be.undefined;
+            expect(testUpdate?.source).to.equal("dcl-test");
+        });
+
+        it("surfaces local-mode stored files regardless of isProduction", async () => {
+            const otaImage = await createOtaImage(crypto, 0xfff1, 0x8000, 3);
+            // Prod DCL returns no applicable updates
+            fetchMock.addResponse("/dcl/model/versions/65521/32768", {
+                modelVersions: { vid: VendorId(0xfff1), pid: 0x8000, softwareVersions: [], schemaVersion: 0 },
+            });
+            fetchMock.install();
+
+            const service = new DclOtaUpdateService(environment);
+            const stream = new ReadableStream({
+                start(controller) {
+                    controller.enqueue(otaImage);
+                    controller.close();
+                },
+            });
+            await service.store(
+                stream,
+                {
+                    vid: VendorId(0xfff1),
+                    pid: 0x8000,
+                    softwareVersion: 3,
+                    softwareVersionString: "v3.0.0",
+                    cdVersionNumber: 1,
+                    softwareVersionValid: true,
+                    otaUrl: "file://local.bin",
+                    otaFileSize: otaImage.byteLength,
+                    minApplicableSoftwareVersion: 2,
+                    maxApplicableSoftwareVersion: 2,
+                    schemaVersion: 0,
+                    source: "local",
+                },
+                "local",
+            );
+
+            const update = await service.checkForUpdate({
+                vendorId: 0xfff1,
+                productId: 0x8000,
+                currentSoftwareVersion: 2,
+                isProduction: true,
+                includeStoredUpdates: true,
+            });
+            expect(update?.source).to.equal("local");
+        });
+
+        it("surfaces stored prod-mode files when isProduction is false", async () => {
+            // Enabling test mode means "also include test DCL", not "exclude prod" — stored prod files remain
+            // valid upgrade targets even when the caller explicitly requested test-DCL queries.
+            const otaImage = await createOtaImage(crypto, 0xfff1, 0x8000, 3);
+            fetchMock.addResponse("https://example.com/ota-prod.bin", otaImage, { binary: true });
+            // Test DCL returns no applicable updates
+            fetchMock.addResponse("/dcl/model/versions/65521/32768", {
+                modelVersions: { vid: VendorId(0xfff1), pid: 0x8000, softwareVersions: [], schemaVersion: 0 },
+            });
+            fetchMock.install();
+
+            const service = new DclOtaUpdateService(environment);
+            await service.downloadUpdate(
+                {
+                    vid: VendorId(0xfff1),
+                    pid: 0x8000,
+                    softwareVersion: 3,
+                    softwareVersionString: "v3.0.0",
+                    cdVersionNumber: 1,
+                    softwareVersionValid: true,
+                    otaUrl: "https://example.com/ota-prod.bin",
+                    otaFileSize: otaImage.byteLength,
+                    minApplicableSoftwareVersion: 2,
+                    maxApplicableSoftwareVersion: 2,
+                    schemaVersion: 0,
+                    source: "dcl-prod",
+                },
+                true,
+            );
+
+            const update = await service.checkForUpdate({
+                vendorId: 0xfff1,
+                productId: 0x8000,
+                currentSoftwareVersion: 2,
+                isProduction: false,
+                includeStoredUpdates: true,
+            });
+            expect(update?.source).to.equal("dcl-prod");
+            expect(update?.softwareVersion).to.equal(3);
         });
     });
 
@@ -1216,13 +1357,32 @@ describe("DclOtaUpdateService", () => {
     });
 
     describe("migration", () => {
+        let testBlobHandle: BlobStorageHandle | undefined;
+
+        afterEach(async () => {
+            await testBlobHandle?.close();
+            testBlobHandle = undefined;
+        });
+
+        async function writeBlobToStorage(contexts: string[], key: string, data: Bytes) {
+            if (!testBlobHandle) {
+                testBlobHandle = await environment.get(StorageService).openBlobStorage("ota");
+            }
+            const stream = new ReadableStream<Bytes>({
+                start(controller) {
+                    controller.enqueue(data);
+                    controller.close();
+                },
+            });
+            await testBlobHandle.driver.writeBlobFromStream(contexts, key, stream);
+        }
+
         it("migrates old bare keys to version-keyed format", async () => {
-            // Pre-populate storage with old-format data
+            // Pre-populate blob storage with old-format data
             const otaImage = await createOtaImage(crypto, 0xfff1, 0x8000, 3);
 
-            // Write directly to storage in old format: bin/fff1/8000/prod
-            const storage = mockStorage.store("ota");
-            storage.set(["bin", "fff1", "8000"], "prod", otaImage);
+            // Write directly to blob storage in old format: bin/fff1/8000/prod
+            await writeBlobToStorage(["bin", "fff1", "8000"], "prod", otaImage);
 
             // Creating the service triggers migration
             const service = new DclOtaUpdateService(environment);
@@ -1240,8 +1400,7 @@ describe("DclOtaUpdateService", () => {
             const otaImage = await createOtaImage(crypto, 0xfff1, 0x8000, 2);
 
             // Write in old format: bin/fff1/8000/test
-            const storage = mockStorage.store("ota");
-            storage.set(["bin", "fff1", "8000"], "test", otaImage);
+            await writeBlobToStorage(["bin", "fff1", "8000"], "test", otaImage);
 
             const service = new DclOtaUpdateService(environment);
             await service.construction;
@@ -1254,8 +1413,7 @@ describe("DclOtaUpdateService", () => {
 
         it("handles corrupt files during migration gracefully", async () => {
             // Write garbage data in old format
-            const storage = mockStorage.store("ota");
-            storage.set(["bin", "fff1", "8000"], "prod", new Uint8Array([0x00, 0x01, 0x02]));
+            await writeBlobToStorage(["bin", "fff1", "8000"], "prod", new Uint8Array([0x00, 0x01, 0x02]));
 
             // Service should start without error
             const service = new DclOtaUpdateService(environment);

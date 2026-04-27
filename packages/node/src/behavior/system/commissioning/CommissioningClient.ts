@@ -58,6 +58,7 @@ import {
     LocatedNodeCommissioningOptions,
     Peer,
     PeerAddress,
+    PeerLeftError,
     PeerSet,
     PeerTimingParameters,
     PeerAddress as ProtocolPeerAddress,
@@ -88,8 +89,8 @@ const logger = Logger.get("CommissioningClient");
  */
 export class CommissioningClient extends Behavior {
     declare internal: CommissioningClient.Internal;
-    declare state: CommissioningClient.State;
-    declare events: CommissioningClient.Events;
+    declare readonly state: CommissioningClient.State;
+    declare readonly events: CommissioningClient.Events;
 
     static override readonly early = true;
 
@@ -296,6 +297,14 @@ export class CommissioningClient extends Behavior {
             throw new MatterError(
                 `Removing node ${formerAddress} failed with status ${result.statusCode} "${result.debugText}".`,
             );
+        }
+
+        // Must run before commit unbinds Peer via peerAddress$Changed.
+        const node = this.endpoint as ClientNode;
+        try {
+            await node.env.maybeGet(Peer)?.disconnect(new PeerLeftError());
+        } catch (error) {
+            logger.warn(`Error force-closing sessions for ${formerAddress} after decommission:`, error);
         }
 
         this.state.peerAddress = undefined;

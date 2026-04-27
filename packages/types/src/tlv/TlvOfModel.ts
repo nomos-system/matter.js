@@ -25,7 +25,6 @@ import {
     ClusterModel,
     commandId,
     devtypeId,
-    ElementTag,
     endpointNo,
     epochS,
     epochUs,
@@ -45,7 +44,6 @@ import {
     percent,
     percent100ths,
     posixMs,
-    Scope,
     subjectId,
     systimeMs,
     systimeUs,
@@ -60,6 +58,7 @@ import {
 import { TlvAny } from "./TlvAny.js";
 import { TlvArray } from "./TlvArray.js";
 import { TlvBoolean } from "./TlvBoolean.js";
+import { TlvNoArguments } from "./TlvNoArguments.js";
 import { TlvNullable } from "./TlvNullable.js";
 import {
     TlvBitmap,
@@ -94,7 +93,7 @@ const cache = new WeakMap<ClusterModel | ValueModel, TlvSchema<unknown>>();
  * Obtain the TLV schema for a model or namespace element.
  *
  * Accepts a {@link ClusterModel}, {@link ValueModel}, or an object with a `schema` property (e.g. a
- * {@link ClusterNamespace.Attribute}).
+ * {@link ClusterType.Attribute}).
  */
 export function TlvOfModel(source: ClusterModel | ValueModel | { schema: ClusterModel | ValueModel }) {
     const model = "schema" in source && !(source instanceof ValueModel) ? source.schema : source;
@@ -161,6 +160,11 @@ const NumberMapping: Record<string, TlvSchema<unknown>> = {
 
 function generateTlv(model: ClusterModel | ValueModel): TlvSchema<unknown> {
     const metatype = model.effectiveMetatype;
+
+    // No type information (e.g. unknown attributes on custom clusters) — accept any TLV
+    if (metatype === undefined && model instanceof ValueModel) {
+        return TlvAny;
+    }
 
     // Structs can be ClusterModel or ValueModel; handle separately since they don't require metabase
     if (metatype === Metatype.object) {
@@ -245,8 +249,18 @@ function generateStruct(model: ClusterModel | ValueModel) {
     // TODO - opportunity to deduplicate struct schemas: when a model extends a defining model without changing
     // conformant fields, we could reuse the TlvSchema from the defining model via definingModel lookup
 
+    // Use all fields without conformance filtering — struct fields represent physical TLV positions that must always
+    // be present in the TLV schema regardless of conformance (which is a logical constraint, not a wire-format one).
+    // Same reasoning as generateBitmap.
+    const properties = model.properties;
+
+    // Events and commands with no fields use TlvNoArguments which accepts both empty structs and void
+    if (!properties.length && model instanceof ValueModel) {
+        return TlvNoArguments;
+    }
+
     const fields = {} as Record<string, any>;
-    for (const p of model.conformant.properties) {
+    for (const p of properties) {
         const schema = TlvOfModel(p);
         const id = p.id ?? 0;
         fields[p.propertyName] = p.mandatory ? TlvField(id, schema) : TlvOptionalField(id, schema);
@@ -257,7 +271,7 @@ function generateStruct(model: ClusterModel | ValueModel) {
 function generateBitmap(model: ValueModel) {
     // Use all fields without conformance filtering — bitmap entries represent physical bit positions that must always
     // be present in the TLV schema regardless of conformance (which is a logical constraint, not a wire-format one)
-    const fields = Scope(model).membersOf(model, { tags: [ElementTag.Field] });
+    const fields = model.fields;
 
     const entries = fields.map(field => {
         const name = camelize(field.title ?? field.name);

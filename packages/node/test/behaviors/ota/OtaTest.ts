@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { NetworkClient } from "#behavior/system/network/NetworkClient.js";
 import { OtaUpdateStatus, SoftwareUpdateManager } from "#behavior/system/software-update/SoftwareUpdateManager.js";
 import { BasicInformationServer } from "#behaviors/basic-information";
 import { OtaSoftwareUpdateProviderServer } from "#behaviors/ota-software-update-provider";
@@ -13,8 +14,15 @@ import {
 } from "#behaviors/ota-software-update-requestor";
 import { OtaProviderEndpoint } from "#endpoints/ota-provider";
 import { ServerNode } from "#node/ServerNode.js";
-import { Bytes, createPromise, MockFetch, Timestamp } from "@matter/general";
-import { BdxProtocol, BdxSession, FabricAuthority, PeerAddress, SessionManager } from "@matter/protocol";
+import { Bytes, createPromise, Hours, MockFetch, Timestamp } from "@matter/general";
+import {
+    BdxProtocol,
+    BdxSession,
+    FabricAuthority,
+    PeerAddress,
+    SessionManager,
+    SustainedSubscription,
+} from "@matter/protocol";
 import { FabricIndex, NodeId, VendorId } from "@matter/types";
 import { OtaSoftwareUpdateProvider } from "@matter/types/clusters/ota-software-update-provider";
 import { OtaSoftwareUpdateRequestor } from "@matter/types/clusters/ota-software-update-requestor";
@@ -24,6 +32,7 @@ import {
     initOtaSite,
     InstrumentedOtaProviderServer,
     InstrumentedOtaRequestorServer,
+    streamFromBytes,
 } from "./ota-utils.js";
 
 describe("Ota", () => {
@@ -488,11 +497,19 @@ describe("Ota", () => {
             entry.lastProgressUpdateTime = Timestamp(1000);
         });
 
+        // Await teardown and re-prime on the sustained subscription — the startUp handler only runs
+        // once the priming report delivers the buffered event.
+        const subscription = peer1.behaviors.internalsOf(NetworkClient).activeSubscription!;
+        expect(subscription).not.undefined;
+        SustainedSubscription.assert(subscription);
+
         // Simulate device rebooting with the ORIGINAL (old) version — apply failed
         // The startUp event will fire with the old softwareVersion via the registered observer
         await MockTime.resolve(device.stop());
+        await MockTime.resolve(subscription.inactive);
         // Keep the original softwareVersion (do NOT set it to targetSoftwareVersion)
         await MockTime.resolve(device.start());
+        await MockTime.resolve(subscription.active);
 
         await MockTime.macrotasks;
 
@@ -815,9 +832,7 @@ describe("Ota", () => {
 
         // suppressNextStartUp should have been registered: pendingStartUpSuppress must contain the peer
         const hasSuppressEntry = await otaProvider.act(agent => {
-            return agent
-                .get(SoftwareUpdateManager)
-                .internal.pendingStartUpSuppress.has(PeerAddress(peerAddress).toString());
+            return agent.get(SoftwareUpdateManager).internal.pendingStartUpSuppress.has(peerAddress);
         });
         expect(hasSuppressEntry).equals(true);
 
@@ -951,18 +966,28 @@ describe("Ota", () => {
             };
         });
 
+        // Flush any deferred startUp deliveries that addUpdateConsent's announceOtaProvider flow may
+        // have queued — they would otherwise consume the suppression entry before the real restart.
+        await MockTime.macrotasks;
+
         // Register the suppression with the fake ID — BEFORE device restarts.
         // The startUp fires during device.start(), and at that point the patched maybeSessionFor
         // returns id=42, which matches the suppressed id=42 → suppress!
-        // NOTE: peerAddress must be interned (via PeerAddress()) so .toString() returns "@1:1"
-        // rather than "[object Object]". The handler uses the interned form for its key lookup.
         await otaProvider.act(agent => {
-            agent.get(SoftwareUpdateManager).suppressNextStartUp(PeerAddress(peerAddress), FAKE_SESSION_ID);
+            agent.get(SoftwareUpdateManager).suppressNextStartUp(peerAddress, FAKE_SESSION_ID);
         });
+
+        // Await teardown and re-prime on the sustained subscription — the startUp handler only runs
+        // once the priming report delivers the buffered event.
+        const subscription = peer1.behaviors.internalsOf(NetworkClient).activeSubscription!;
+        expect(subscription).not.undefined;
+        SustainedSubscription.assert(subscription);
 
         // Restart the device with the same (old) version — this fires startUp
         await MockTime.resolve(device.stop());
+        await MockTime.resolve(subscription.inactive);
         await MockTime.resolve(device.start());
+        await MockTime.resolve(subscription.active);
         await MockTime.macrotasks;
 
         // startUp should have been suppressed — no updateFailed event
@@ -970,9 +995,7 @@ describe("Ota", () => {
 
         // The suppression entry should be consumed (deleted by the startUp handler)
         const hasSuppressedAfter = await otaProvider.act(agent => {
-            return agent
-                .get(SoftwareUpdateManager)
-                .internal.pendingStartUpSuppress.has(PeerAddress(peerAddress).toString());
+            return agent.get(SoftwareUpdateManager).internal.pendingStartUpSuppress.has(peerAddress);
         });
         expect(hasSuppressedAfter).equals(false);
     }).timeout(10_000);
@@ -1031,16 +1054,28 @@ describe("Ota", () => {
             };
         });
 
+        // Flush any deferred startUp deliveries that addUpdateConsent's announceOtaProvider flow may
+        // have queued — they would otherwise consume the suppression entry and emit a spurious
+        // updateFailed before the real restart.
+        await MockTime.macrotasks;
+
         // Suppress with a WRONG ID — 999 ≠ 77
-        // NOTE: peerAddress must be interned (via PeerAddress()) so .toString() returns "@1:1"
         const WRONG_SESSION_ID = 999;
         await otaProvider.act(agent => {
-            agent.get(SoftwareUpdateManager).suppressNextStartUp(PeerAddress(peerAddress), WRONG_SESSION_ID);
+            agent.get(SoftwareUpdateManager).suppressNextStartUp(peerAddress, WRONG_SESSION_ID);
         });
+
+        // Await teardown and re-prime on the sustained subscription — the startUp handler only runs
+        // once the priming report delivers the buffered event.
+        const subscription = peer1.behaviors.internalsOf(NetworkClient).activeSubscription!;
+        expect(subscription).not.undefined;
+        SustainedSubscription.assert(subscription);
 
         // Restart the device (same old version = apply failed scenario)
         await MockTime.resolve(device.stop());
+        await MockTime.resolve(subscription.inactive);
         await MockTime.resolve(device.start());
+        await MockTime.resolve(subscription.active);
         await MockTime.macrotasks;
 
         // The session IDs don't match (77 ≠ 999) → suppression NOT applied → updateFailed should fire
@@ -1048,12 +1083,53 @@ describe("Ota", () => {
 
         // The suppression entry should be consumed (even though it didn't suppress)
         const hasSuppressedAfter = await otaProvider.act(agent => {
-            return agent
-                .get(SoftwareUpdateManager)
-                .internal.pendingStartUpSuppress.has(PeerAddress(peerAddress).toString());
+            return agent.get(SoftwareUpdateManager).internal.pendingStartUpSuppress.has(peerAddress);
         });
         expect(hasSuppressedAfter).equals(false);
     }).timeout(10_000);
+
+    it("Cleanup purges stored test-mode OTA when allowTestOtaImages is disabled, preserves prod/local", async () => {
+        const { TestOtaProviderServer } = InstrumentedOtaProviderServer({
+            requestUserConsentForUpdate: false,
+        });
+        const { TestOtaRequestorServer } = InstrumentedOtaRequestorServer({ requestUserConsent: false });
+
+        const { site, device, controller, otaProvider } = await initOtaSite(
+            TestOtaProviderServer,
+            TestOtaRequestorServer,
+        );
+        await using _localSite = site;
+
+        // Store a test-mode OTA image via the helper (matches device vid/pid, version = peer + 1).
+        const { otaImage } = await addTestOtaImage(device, controller);
+
+        // Store prod-mode and local-mode copies of the same image so we can assert they survive cleanup.
+        await otaProvider.act(async agent => {
+            const svc = agent.get(SoftwareUpdateManager).internal.otaService;
+            await svc.store(streamFromBytes(Bytes.of(otaImage.image)), otaImage.updateInfo, true /* prod */);
+            await svc.store(streamFromBytes(Bytes.of(otaImage.image)), otaImage.updateInfo, "local");
+        });
+
+        const before = await otaProvider.act(agent => agent.get(SoftwareUpdateManager).internal.otaService.find({}));
+        expect(before.filter(u => u.mode === "test")).length(1);
+        expect(before.filter(u => u.mode === "prod")).length(1);
+        expect(before.filter(u => u.mode === "local")).length(1);
+
+        // Disable test OTA usage → next periodic check must purge the stored test-mode file.
+        await otaProvider.act(agent => {
+            agent.get(SoftwareUpdateManager).state.allowTestOtaImages = false;
+        });
+
+        // Advance past the 24h update-check interval so the periodic timer fires
+        // #checkAvailableUpdates → #cleanupObsoleteUpdates.
+        await MockTime.advance(Hours(24) + 1000);
+        await MockTime.macrotasks;
+
+        const after = await otaProvider.act(agent => agent.get(SoftwareUpdateManager).internal.otaService.find({}));
+        expect(after.filter(u => u.mode === "test")).length(0);
+        expect(after.filter(u => u.mode === "prod")).length(1);
+        expect(after.filter(u => u.mode === "local")).length(1);
+    }).timeout(15_000);
 
     // TODO Add more test cases for edge cases and error cases, also split out setup into helpers
 });

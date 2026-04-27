@@ -35,7 +35,6 @@ import {
     Time,
     Timestamp,
 } from "@matter/general";
-import type { GlobalAttributes, TypeFromSchema } from "@matter/types";
 import { BasicInformation } from "@matter/types/clusters/basic-information";
 import type { NetworkProfiles } from "./NetworkProfile.js";
 import { PeerAddressMonitor } from "./PeerAddressMonitor.js";
@@ -116,11 +115,6 @@ export class Peer {
                 this.#descriptor.operationalAddress = networkAddress;
             };
 
-            // Remove session when destroyed
-            session.closing.on(() => {
-                this.#sessions.delete(session);
-            });
-
             // Ensure the operational address is always set to the most recent IP
             if (!session.isClosed) {
                 const { channel } = session.channel;
@@ -129,6 +123,15 @@ export class Peer {
                     channel.networkAddressChanged.on(updateNetworkAddress);
                 }
             }
+
+            // Remove session and detach listener when destroyed
+            session.closing.on(() => {
+                this.#sessions.delete(session);
+                const { channel } = session.channel;
+                if (isIpNetworkChannel(channel)) {
+                    channel.networkAddressChanged.off(updateNetworkAddress);
+                }
+            });
 
             // Ensure session parameters reflect those most recently reported by peer
             this.#descriptor.sessionParameters = session.parameters;
@@ -175,7 +178,7 @@ export class Peer {
     }
 
     get basicInformation() {
-        return this.#protocol?.[0]?.[BasicInformation.Cluster.id]?.readState({}) as Peer.BasicInformation | undefined;
+        return this.#protocol?.[0]?.[BasicInformation.id]?.readState({}) as Peer.BasicInformation | undefined;
     }
 
     get limits() {
@@ -266,15 +269,17 @@ export class Peer {
 
             this.#initiateConnection(options);
 
+            // abort and connectionTimeout are orthogonal: abort cancels, timeout bounds the wait on a shared
+            // in-flight handshake.  Callers wanting unbounded wait pass Forever explicitly.
             let timeout: Duration | undefined =
-                options?.connectionTimeout ??
-                (options?.abort ? undefined : this.#context.timing.defaultConnectionTimeout);
-            if (timeout === undefined || timeout === Infinity) {
+                options?.connectionTimeout ?? this.#context.timing.defaultConnectionTimeout;
+            if (timeout === Infinity) {
                 timeout = undefined;
             } else if (timeout <= 0) {
                 timeout = Instant;
             } else if (!options?.kick) {
-                timeout = Millis(timeout - this.timeOffline);
+                const remaining = timeout - this.timeOffline;
+                timeout = remaining <= 0 ? Instant : Millis(remaining);
             }
 
             using localAbort = new Abort({
@@ -306,16 +311,27 @@ export class Peer {
 
     /**
      * Abort any outstanding connection attempts.
+     *
+     * When {@link cause} is provided, also force-close any active sessions with the peer — use this when the peer
+     * is known to be unreachable (e.g. we just removed our fabric on the peer).  Without a cause the existing
+     * sessions are left alone so they can follow their normal graceful-close path.
      */
-    async disconnect() {
+    async disconnect(cause?: Error) {
         if (this.#connecting) {
             using _disconnecting = this.#lifetime.join("disconnecting");
             this.#connecting.abort();
-            await this.#connecting.done;
+            try {
+                await this.#connecting.done;
+            } catch (error) {
+                AbortedError.accept(error);
+            }
         }
 
-        // TODO - need to shutdown exchanges and sessions here too so you can cleanly take down a single peer, but
-        // currently that's handled by "managers" for those entities
+        if (cause !== undefined) {
+            for (const session of this.#context.sessions.sessionsFor(this.address)) {
+                await session.initiateForceClose({ cause });
+            }
+        }
     }
 
     /**
@@ -392,6 +408,7 @@ export class Peer {
             this.#addressMonitor = new PeerAddressMonitor(
                 this,
                 this.#context.timing.addressChangeStabilizationDelay,
+                this.#context.timing.addressChangeProbeCooldown,
                 this.#abort,
                 work => this.#workers.add(work),
             );
@@ -427,6 +444,7 @@ export class Peer {
             done: PeerConnection(this, this.#context, {
                 network: options?.network,
                 timing: options?.timing,
+                handleError: options?.handleError,
                 abort,
                 kicker,
             }).finally(() => {
@@ -451,10 +469,7 @@ export namespace Peer {
     }
 
     export interface BasicInformation extends Identity<{
-        readonly [N in keyof Omit<
-            typeof BasicInformation.Complete.attributes,
-            keyof typeof GlobalAttributes
-        >]?: TypeFromSchema<(typeof BasicInformation.Complete.attributes)[N]["schema"]>;
+        readonly [N in keyof BasicInformation.Attributes]?: BasicInformation.Attributes[N];
     }> {}
 
     export interface ConnectOptions {
@@ -472,6 +487,10 @@ export namespace Peer {
          * A timeout relative to beginning of connection process.
          *
          * If the peer is already connecting, connection time is reduced by this amount.
+         *
+         * If omitted, defaults to {@link PeerTimingParameters.defaultConnectionTimeout}.  Pass `Forever` to wait
+         * without bound (only appropriate for background sustain loops — invokes, reads, writes and non-sustained
+         * subscribes should always allow the default to apply so a hung handshake cannot deadlock a request).
          */
         connectionTimeout?: Duration;
 
@@ -492,6 +511,14 @@ export namespace Peer {
          * ongoing attempt.
          */
         timing?: Partial<PeerTimingParameters>;
+
+        /**
+         * Per-call error handler, overrides {@link PeerConnection.Context.handleError} for this connection only.
+         *
+         * Note: if a connection process is already in progress for this peer, this handler is not applied to the
+         * ongoing attempt.
+         */
+        handleError?: (error: Error) => Duration | void;
     }
 }
 

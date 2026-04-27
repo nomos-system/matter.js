@@ -69,10 +69,15 @@ export default function commands(theNode: MatterNode) {
                                     default: false,
                                     type: "boolean",
                                 },
+                                once: {
+                                    description: "Stop after finding the first matching device",
+                                    default: false,
+                                    type: "boolean",
+                                },
                             });
                     },
                     async argv => {
-                        const { ble = false, pairingCode, vendorId, productId, deviceType, timeoutSeconds } = argv;
+                        const { ble, once, pairingCode, vendorId, productId, deviceType, timeoutSeconds } = argv;
                         let { discriminator, shortDiscriminator } = argv;
 
                         if (typeof pairingCode === "string") {
@@ -103,7 +108,7 @@ export default function commands(theNode: MatterNode) {
                         console.log(
                             `Discover devices with identifier ${Diagnostic.json(
                                 identifierData,
-                            )} for ${timeoutSeconds} seconds.`,
+                            )} for ${once ? "first match or " : ""}${timeoutSeconds} seconds.`,
                         );
 
                         const results = await theNode.commissioningController.discoverCommissionableDevices(
@@ -112,7 +117,15 @@ export default function commands(theNode: MatterNode) {
                                 ble,
                                 onIpNetwork: true,
                             },
-                            device => console.log(`Discovered device ${Diagnostic.json(device)}`),
+                            device => {
+                                console.log(`Discovered device ${Diagnostic.json(device)}`);
+                                if (once) {
+                                    theNode.commissioningController?.cancelCommissionableDeviceDiscovery(
+                                        identifierData,
+                                        { ble, onIpNetwork: true },
+                                    );
+                                }
+                            },
                             Seconds(timeoutSeconds),
                         );
 

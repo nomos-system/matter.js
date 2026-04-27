@@ -9,6 +9,7 @@ import type { ClientNode } from "#node/ClientNode.js";
 import { InternalError, StorageContext, StorageContextFactory } from "@matter/general";
 import { EndpointNumber } from "@matter/types";
 import { NodeStore } from "../NodeStore.js";
+import type { ClientCacheBuffer } from "./ClientCacheBuffer.js";
 import { ClientEndpointStore } from "./ClientEndpointStore.js";
 import { LocalWriter } from "./LocalWriter.js";
 import type { RemoteWriter } from "./RemoteWriter.js";
@@ -22,6 +23,7 @@ export class ClientNodeStore extends NodeStore {
     #stores = new Map<EndpointNumber, ClientEndpointStore>();
     #write?: RemoteWriter;
     #localWriter?: LocalWriter;
+    #buffer?: ClientCacheBuffer;
     #isPreexisting: boolean;
     #onErase?: () => void;
 
@@ -63,6 +65,14 @@ export class ClientNodeStore extends NodeStore {
         return this.#localWriter;
     }
 
+    get buffer() {
+        return this.#buffer;
+    }
+
+    set buffer(buffer: ClientCacheBuffer | undefined) {
+        this.#buffer = buffer;
+    }
+
     get endpointStores() {
         return this.#stores.values();
     }
@@ -76,6 +86,10 @@ export class ClientNodeStore extends NodeStore {
     }
 
     override async erase() {
+        // Cascade so caches unregister from the shared ClientCacheBuffer before storage is cleared.
+        for (const store of this.#stores.values()) {
+            await store.erase();
+        }
         this.#stores = new Map();
         this.#onErase?.();
         await this.#storage?.clearAll();

@@ -5,10 +5,10 @@
  */
 
 import { ClientInteraction } from "#action/client/ClientInteraction.js";
+import { BleChannel, BleChannelClosedError } from "#ble/Ble.js";
 import { CertificateAuthority } from "#certificate/CertificateAuthority.js";
-import { CommissionableDevice, DiscoveryData } from "#common/Scanner.js";
+import { CommissionableDevice, DiscoveryData, DiscoveryDataDiagnostics } from "#common/Scanner.js";
 import { Fabric } from "#fabric/Fabric.js";
-import { MdnsClient } from "#mdns/MdnsClient.js";
 import { CommissioningConnection } from "#peer/CommissioningConnection.js";
 import { CommissioningError, PairRetransmissionLimitReachedError } from "#peer/CommissioningError.js";
 import {
@@ -16,6 +16,7 @@ import {
     ControllerCommissioningFlowOptions,
     NodeIdConflictError,
 } from "#peer/ControllerCommissioningFlow.js";
+import { SessionClosedError } from "#protocol/errors.js";
 import { ExchangeManager } from "#protocol/ExchangeManager.js";
 import { DedicatedChannelExchangeProvider } from "#protocol/ExchangeProvider.js";
 import { ChannelStatusResponseError } from "#securechannel/SecureChannelMessenger.js";
@@ -44,7 +45,7 @@ import {
     Seconds,
     ServerAddress,
 } from "@matter/general";
-import { NodeId, SECURE_CHANNEL_PROTOCOL_ID } from "@matter/types";
+import { NodeId, SECURE_CHANNEL_PROTOCOL_ID, SecureChannelStatusCode } from "@matter/types";
 import { GeneralCommissioning } from "@matter/types/clusters/general-commissioning";
 import { PeerAddress } from "./PeerAddress.js";
 import { CommissioningTransitionError, PeerCommunicationError } from "./PeerCommunicationError.js";
@@ -217,6 +218,7 @@ export class ControllerCommissioner {
         } = options;
 
         this.#assertRequestedNodeIdAvailable(fabric, nodeId);
+        this.#validateCommissioningOptions(options);
 
         // Each address becomes an independent candidate so that a credential failure on one does not
         // cancel attempts on others.  UDP is prioritised within the sorted list.
@@ -315,7 +317,7 @@ export class ControllerCommissioner {
     ): Promise<NodeSession> {
         let paseChannel: Channel<Bytes>;
         if (device !== undefined) {
-            logger.info(`Establish PASE to device`, MdnsClient.discoveryDataDiagnostics(device));
+            logger.info(`Establish PASE to device`, DiscoveryDataDiagnostics(device));
         }
 
         switch (address.type) {
@@ -406,15 +408,44 @@ export class ControllerCommissioner {
         }
     }
 
+    #validateCommissioningOptions(options: Partial<ControllerCommissioningFlowOptions>) {
+        if (options.threadNetwork !== undefined) {
+            const { operationalDataset } = options.threadNetwork;
+            if (operationalDataset.length === 0) {
+                throw new CommissioningError("Thread operational dataset must not be empty");
+            }
+            if (operationalDataset.length % 2 !== 0) {
+                throw new CommissioningError("Thread operational dataset must have an even number of hex characters");
+            }
+            if (!/^[0-9a-fA-F]+$/.test(operationalDataset)) {
+                throw new CommissioningError(
+                    "Thread operational dataset must only contain valid hexadecimal characters",
+                );
+            }
+        }
+
+        if (options.wifiNetwork !== undefined) {
+            const { wifiSsid } = options.wifiNetwork;
+            if (wifiSsid.length === 0) {
+                throw new CommissioningError("Wi-Fi SSID must not be empty");
+            }
+        }
+    }
+
     /**
-     * Maps a sorted list of addresses to synthetic `CommissionableDevice` candidates for use with
-     * {@link CommissioningConnection}.  Each address becomes its own candidate so that a credential failure
-     * on one does not cancel attempts on others, and the per-device abort logic works correctly even in the
-     * single-address case.
+     * Maps addresses to synthetic {@link CommissionableDevice} candidates for use with
+     * {@link CommissioningConnection}.  Each address becomes its own candidate so a credential failure on one
+     * does not cancel attempts on others.  UDP is partitioned ahead of BLE, preserving input order within each
+     * group — the caller's {@link ServerAddressSet.compareDesirability} ranking is load-bearing.
      */
     #addressesToCandidates(addresses: ServerAddress[], discoveryData?: DiscoveryData): CommissionableDevice[] {
-        const sorted = [...addresses].sort((a, b) => (a.type === "udp" ? -1 : b.type === "udp" ? 1 : 0));
-        return sorted.map((address, index) => ({
+        const udps = new Array<ServerAddress>();
+        const others = new Array<ServerAddress>();
+        for (const address of addresses) {
+            (address.type === "udp" ? udps : others).push(address);
+        }
+
+        return [...udps, ...others].map((address, index) => ({
             ...(discoveryData ?? {}),
             addresses: [address],
             deviceIdentifier: `known-address-${index}-${ServerAddress.urlFor(address)}`,
@@ -499,6 +530,27 @@ export class ControllerCommissioner {
         logger.info(`Start commissioning of node ${address.toString()} into fabric ${fabric.fabricId}`);
         const exchangeProvider = new DedicatedChannelExchangeProvider(this.#context.exchanges, ephemeralSession);
 
+        // BLE-only: BTP MRP retrans blocks pending invokes for ~45s when a non-concurrent device
+        // drops BLE after connectNetwork.  Force-close on BLE-lost so the awaited invoke rejects
+        // immediately and the commissioning flow can flip to the non-concurrent CASE path.
+        if (!ephemeralSession.isClosed) {
+            const paseChannel = ephemeralSession.channel.channel;
+            if (paseChannel instanceof BleChannel) {
+                paseChannel.closed.once(() => {
+                    ephemeralSession
+                        .initiateForceClose({
+                            cause: new BleChannelClosedError(`BLE transport closed on ${ephemeralSession.via}`),
+                        })
+                        .catch(error => {
+                            // Already-closed races with our force-close — the session shut down
+                            // via another path, no action needed.  Anything else is a real bug.
+                            if (error instanceof SessionClosedError) return;
+                            logger.error("Error while force-closing PASE session on BLE close", error);
+                        });
+                });
+            }
+        }
+
         await using commissioner = new commissioningFlowImpl(
             new ClientInteraction({
                 environment: this.#context.environment,
@@ -530,7 +582,19 @@ export class ControllerCommissioner {
 
                 const peer = this.#context.peers.for(address);
                 peer.descriptor.discoveryData = discoveryData;
-                await peer.connect({ connectionTimeout: Minutes(4), timing: caseConnectionTiming });
+                await peer.connect({
+                    connectionTimeout: Minutes(4),
+                    timing: caseConnectionTiming,
+
+                    handleError: error => {
+                        const csre = ChannelStatusResponseError.of(error);
+                        if (csre?.protocolStatusCode === SecureChannelStatusCode.NoSharedTrustRoots) {
+                            // During commissioning the device may not yet recognize the fabric; retry quickly
+                            logger.warn("Peer reports no shared trust roots during commissioning, retrying quickly");
+                            return Seconds(15);
+                        }
+                    },
+                });
 
                 return new ClientInteraction({
                     environment: this.#context.environment,

@@ -50,7 +50,6 @@ import {
 import {
     ClientNode,
     ClientNodePhysicalProperties,
-    ClusterState,
     CommissioningClient,
     ControllerBehavior,
     Endpoint,
@@ -140,7 +139,7 @@ export class MatterController {
         localPort?: number;
         environment: Environment;
         enableOtaProvider?: boolean;
-        basicInformation?: Partial<Omit<ClusterState.PropertiesOf<typeof BasicInformation.Complete>, "vendorId">>;
+        basicInformation?: Partial<Omit<BasicInformation.Attributes, "vendorId">>;
     }): Promise<MatterController> {
         const {
             rootFabric,
@@ -300,7 +299,7 @@ export class MatterController {
         localPort?: number;
         environment: Environment;
         enableOtaProvider?: boolean;
-        basicInformation?: Partial<Omit<ClusterState.PropertiesOf<typeof BasicInformation.Complete>, "vendorId">>;
+        basicInformation?: Partial<Omit<BasicInformation.Attributes, "vendorId">>;
     }) {
         const crypto = options.environment.get(Crypto);
         const {
@@ -636,11 +635,11 @@ export class MatterController {
             allowUnknownPeer: true,
         }); // Wait maximum 120s to find the operational device for a commissioning process
         const generalCommissioningClusterClient = ClusterClient(
-            GeneralCommissioning.Cluster,
+            GeneralCommissioning,
             EndpointNumber(0),
             interactionClient,
         );
-        const { errorCode, debugText } = await generalCommissioningClusterClient.commissioningComplete(undefined, {
+        const { errorCode, debugText } = await generalCommissioningClusterClient.commissioningComplete({
             useExtendedFailSafeMessageResponseTimeout: true,
         });
         if (errorCode !== GeneralCommissioning.CommissioningError.Ok) {
@@ -780,7 +779,7 @@ export class MatterController {
         const migratedPeers = new Set<string>();
 
         const newClientStores = serverStore.clientStores;
-        for (const { address: peerAddress, discoveryData, deviceData, operationalAddress } of peers) {
+        for (const { address: peerAddress, discoveryData, operationalAddress } of peers) {
             logger.debug(`Migrating data for commissioned node ${peerAddress.toString()}`);
             const clientNode = server.peers.get(peerAddress);
             if (clientNode !== undefined) {
@@ -831,7 +830,9 @@ export class MatterController {
             }
 
             const commissioning = RemoteDescriptor.toLongForm({
-                ...(discoveryData ? deviceData : {}),
+                // Fallback discoveredAt in case discoveryData doesn't have one
+                discoveredAt: Time.nowMs,
+                ...discoveryData,
                 addresses: operationalAddress ? [operationalAddress] : [],
             });
             logger.debug(

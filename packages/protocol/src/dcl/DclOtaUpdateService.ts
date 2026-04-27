@@ -8,6 +8,7 @@ import { PersistedFileDesignator } from "#bdx/PersistedFileDesignator.js";
 import { ScopedStorage } from "#bdx/ScopedStorage.js";
 import { DclErrorCodes } from "#dcl/DclRestApiTypes.js";
 import {
+    BlobStorageDriver,
     Construction,
     Crypto,
     Diagnostic,
@@ -18,8 +19,6 @@ import {
     Logger,
     MatterError,
     Minutes,
-    StorageContext,
-    StorageManager,
     StorageService,
 } from "@matter/general";
 import { DeviceSoftwareVersionModelDclSchema, VendorId } from "@matter/types";
@@ -66,7 +65,8 @@ export class DclOtaUpdateService {
     readonly #construction: Construction<DclOtaUpdateService>;
     readonly #crypto: Crypto;
     readonly #options?: DclOtaUpdateService.Options;
-    #storageManager?: StorageManager;
+    #blobDriver?: BlobStorageDriver;
+    #closeBlobStorage?: () => Promise<void>;
     #storage?: ScopedStorage;
 
     get construction() {
@@ -85,10 +85,12 @@ export class DclOtaUpdateService {
             }),
         );
 
-        // THe construction is async and will be enforced when needed
+        // The construction is async and will be enforced when needed
         this.#construction = Construction(this, async () => {
-            this.#storageManager = await environment.get(StorageService).open("ota");
-            this.#storage = new ScopedStorage(this.#storageManager.createContext("bin"), "ota");
+            const blobHandle = await environment.get(StorageService).openBlobStorage("ota");
+            this.#blobDriver = blobHandle.driver;
+            this.#closeBlobStorage = blobHandle.close;
+            this.#storage = new ScopedStorage(this.#blobDriver, ["bin"], "ota");
             await this.#migrateStorage();
         });
     }
@@ -99,18 +101,20 @@ export class DclOtaUpdateService {
     }
 
     async close() {
-        await this.#storageManager?.close();
+        await this.#construction.close(async () => {
+            await this.#closeBlobStorage?.();
+        });
     }
 
     async #migrateStorage() {
-        const storage = this.#storage!;
-        const context = storage.context;
+        const blobDriver = this.#blobDriver!;
+        const baseContexts = this.#storage!.baseContexts;
 
-        for (const vendorHex of await context.contexts()) {
-            const vendorContext = context.createContext(vendorHex);
-            for (const productHex of await vendorContext.contexts()) {
-                const productContext = vendorContext.createContext(productHex);
-                const keys = await productContext.keys();
+        for (const vendorHex of await blobDriver.contexts(baseContexts)) {
+            const vendorContexts = [...baseContexts, vendorHex];
+            for (const productHex of await blobDriver.contexts(vendorContexts)) {
+                const productContexts = [...vendorContexts, productHex];
+                const keys = await blobDriver.keys(productContexts);
 
                 for (const key of keys) {
                     if (key !== "prod" && key !== "test") {
@@ -119,19 +123,19 @@ export class DclOtaUpdateService {
 
                     try {
                         // Read the old file header to extract the software version
-                        const headerBlob = await productContext.openBlob(key);
+                        const headerBlob = await blobDriver.openBlob(productContexts, key);
                         const headerReader = headerBlob.stream().getReader();
                         const header = await OtaImageReader.header(headerReader);
                         await headerReader.cancel();
                         const versionKey = header.softwareVersion.toString();
 
                         // Copy to new location: mode sub-context + version key
-                        const modeContext = productContext.createContext(key);
-                        const copyBlob = await productContext.openBlob(key);
-                        await modeContext.writeBlobFromStream(versionKey, copyBlob.stream());
+                        const modeContexts = [...productContexts, key];
+                        const copyBlob = await blobDriver.openBlob(productContexts, key);
+                        await blobDriver.writeBlobFromStream(modeContexts, versionKey, copyBlob.stream());
 
                         // Delete old bare key
-                        await productContext.delete(key);
+                        await blobDriver.delete(productContexts, key);
 
                         logger.info(
                             `Migrated OTA storage: ${vendorHex}.${productHex}.${key} -> ${vendorHex}.${productHex}.${key}.${versionKey}`,
@@ -142,7 +146,7 @@ export class DclOtaUpdateService {
                             error,
                         );
                         try {
-                            await productContext.delete(key);
+                            await blobDriver.delete(productContexts, key);
                         } catch {
                             // Ignore cleanup errors
                         }
@@ -272,8 +276,8 @@ export class DclOtaUpdateService {
 
         const foundUpdates = new Array<DeviceSoftwareVersionModelDclSchemaWithSource>();
 
-        // Check for local updates if allowed — search all modes regardless of isProduction
-        // (isProduction controls which DCL to query, not which stored files to consider)
+        // Only stored test-mode files are gated on the test DCL being enabled; prod and local entries always
+        // pass through so a test-only caller still sees them as valid upgrade targets.
         if (includeStoredUpdates) {
             const localUpdates = await this.find({
                 vendorId,
@@ -283,6 +287,7 @@ export class DclOtaUpdateService {
             // Check each stored entry for applicability (highest version first via reverse iteration)
             for (let i = localUpdates.length - 1; i >= 0; i--) {
                 const entry = localUpdates[i];
+                if (isProduction === true && entry.mode === "test") continue;
                 const localUpdate: DeviceSoftwareVersionModelDclSchemaWithSource = {
                     ...entry,
                     vid: VendorId(vendorId),
@@ -778,7 +783,7 @@ export class DclOtaUpdateService {
             await this.construction;
         }
 
-        const results = await this.#findEntries(this.#storage!.context, options);
+        const results = await this.#findEntries(this.#storage!.baseContexts, options);
 
         // Sort by vendor ID, product ID, mode, and version
         const modeOrder: Record<string, number> = { prod: 0, test: 1, local: 2 };
@@ -794,12 +799,14 @@ export class DclOtaUpdateService {
     }
 
     async #findEntries(
-        context: StorageContext,
+        baseContexts: readonly string[],
         options: DclOtaUpdateService.FindOptions,
     ): Promise<DclOtaUpdateService.OtaUpdateListEntry[]> {
+        const blobDriver = this.#blobDriver!;
         const { vendorId } = options;
         if (vendorId !== undefined) {
-            const vendorEntries = await this.#findVendorEntries(context.createContext(vendorId.toString(16)), options);
+            const vendorContexts = [...baseContexts, vendorId.toString(16)];
+            const vendorEntries = await this.#findVendorEntries(vendorContexts, options);
             return vendorEntries.map(entry => ({
                 ...entry,
                 vendorId,
@@ -809,9 +816,10 @@ export class DclOtaUpdateService {
 
         const result = new Array<DclOtaUpdateService.OtaUpdateListEntry>();
 
-        for (const vendorIdHex of await context.contexts()) {
+        for (const vendorIdHex of await blobDriver.contexts(baseContexts)) {
             const vendorId = parseInt(vendorIdHex, 16);
-            const vendorEntries = await this.#findVendorEntries(context.createContext(vendorIdHex), options);
+            const vendorContexts = [...baseContexts, vendorIdHex];
+            const vendorEntries = await this.#findVendorEntries(vendorContexts, options);
             result.push(
                 ...vendorEntries.map(entry => ({
                     ...entry,
@@ -824,41 +832,39 @@ export class DclOtaUpdateService {
         return result;
     }
 
-    async #findVendorEntries(vendorContext: StorageContext, options: DclOtaUpdateService.FindOptions) {
+    async #findVendorEntries(vendorContexts: string[], options: DclOtaUpdateService.FindOptions) {
+        const blobDriver = this.#blobDriver!;
         const { productId } = options;
 
         if (productId !== undefined) {
-            const productEntries = await this.#findVendorProductEntries(
-                vendorContext.createContext(productId.toString(16)),
-                options,
-            );
+            const productContexts = [...vendorContexts, productId.toString(16)];
+            const productEntries = await this.#findVendorProductEntries(productContexts, options);
             return productEntries.map(entry => ({ ...entry, productId }));
         }
 
         const result = new Array<Omit<DclOtaUpdateService.OtaUpdateListEntry, "vendorId" | "filename">>();
 
-        for (const productIdHex of await vendorContext.contexts()) {
+        for (const productIdHex of await blobDriver.contexts(vendorContexts)) {
             const productId = parseInt(productIdHex, 16);
-            const productEntries = await this.#findVendorProductEntries(
-                vendorContext.createContext(productIdHex),
-                options,
-            );
+            const productContexts = [...vendorContexts, productIdHex];
+            const productEntries = await this.#findVendorProductEntries(productContexts, options);
             result.push(...productEntries.map(entry => ({ ...entry, productId })));
         }
 
         return result;
     }
 
-    async #findVendorProductEntries(productContext: StorageContext, options: DclOtaUpdateService.FindOptions) {
+    async #findVendorProductEntries(productContexts: string[], options: DclOtaUpdateService.FindOptions) {
+        const blobDriver = this.#blobDriver!;
         const { isProduction, mode: filterMode } = options;
 
         const result = new Array<Omit<DclOtaUpdateService.OtaUpdateListEntry, "vendorId" | "productId" | "filename">>();
 
         // New format: enumerate mode sub-contexts
-        const modeContexts = await productContext.contexts();
+        const modeSubContexts = await blobDriver.contexts(productContexts);
         const validModes: OtaStorageMode[] = ["prod", "test", "local"];
 
-        for (const modeStr of modeContexts) {
+        for (const modeStr of modeSubContexts) {
             if (!validModes.includes(modeStr as OtaStorageMode)) {
                 continue;
             }
@@ -873,11 +879,11 @@ export class DclOtaUpdateService {
                 if (isProduction === false && mode === "prod") continue;
             }
 
-            const modeContext = productContext.createContext(modeStr);
-            const versionKeys = await modeContext.keys();
+            const modeContexts = [...productContexts, modeStr];
+            const versionKeys = await blobDriver.keys(modeContexts);
 
             for (const versionKey of versionKeys) {
-                const fileDesignator = new PersistedFileDesignator(versionKey, modeContext);
+                const fileDesignator = new PersistedFileDesignator(versionKey, blobDriver, modeContexts);
                 const entry = await this.#checkEntry(fileDesignator, options);
                 if (entry !== undefined) {
                     result.push({
@@ -957,7 +963,7 @@ export class DclOtaUpdateService {
      * @param options.filename - Specific filename to delete (e.g. `fff1.8000.prod.3`)
      * @param options.vendorId - Vendor ID to filter files for deletion
      * @param options.productId - Product ID to filter files for deletion (optional, requires vendorId)
-     * @param options.isProduction - @deprecated Use mode instead. Production (true) or test (false) mode
+     * @param options.isProduction - (deprecated, use `mode` instead) production (true) or test (false) mode
      * @param options.mode - Storage mode: "prod", "test", or "local"
      * @returns Number of files deleted
      */
@@ -996,15 +1002,18 @@ export class DclOtaUpdateService {
             return 1;
         }
 
+        const blobDriver = this.#blobDriver!;
+        const baseContexts = storage.baseContexts;
+
         if (vendorId !== undefined && productId !== undefined && mode !== undefined) {
             // Delete all versions for this vid/pid/mode
             const vendorHex = vendorId.toString(16);
             const productHex = productId.toString(16);
-            const modeContext = storage.context.createContext(vendorHex).createContext(productHex).createContext(mode);
-            const versionKeys = await modeContext.keys();
+            const modeContexts = [...baseContexts, vendorHex, productHex, mode];
+            const versionKeys = await blobDriver.keys(modeContexts);
             let deletedCount = 0;
             for (const versionKey of versionKeys) {
-                const fd = new PersistedFileDesignator(versionKey, modeContext);
+                const fd = new PersistedFileDesignator(versionKey, blobDriver, modeContexts);
                 await fd.delete();
                 deletedCount++;
             }
@@ -1020,20 +1029,20 @@ export class DclOtaUpdateService {
 
         // Delete all files for the vendor, optionally filtered by mode
         const vendorHex = vendorId.toString(16);
-        const vendorStorage = storage.context.createContext(vendorHex);
+        const vendorContexts = [...baseContexts, vendorHex];
         let deletedCount = 0;
         const validModes: OtaStorageMode[] = ["prod", "test", "local"];
         const modesToDelete = mode !== undefined ? [mode] : validModes;
 
-        for (const productKey of await vendorStorage.contexts()) {
-            const productContext = vendorStorage.createContext(productKey);
-            const modeSubContexts = await productContext.contexts();
+        for (const productKey of await blobDriver.contexts(vendorContexts)) {
+            const productContexts = [...vendorContexts, productKey];
+            const modeSubContexts = await blobDriver.contexts(productContexts);
 
             for (const modeStr of modesToDelete) {
                 if (modeSubContexts.includes(modeStr)) {
-                    const modeContext = productContext.createContext(modeStr);
-                    for (const versionKey of await modeContext.keys()) {
-                        const fd = new PersistedFileDesignator(versionKey, modeContext);
+                    const modeContexts = [...productContexts, modeStr];
+                    for (const versionKey of await blobDriver.keys(modeContexts)) {
+                        const fd = new PersistedFileDesignator(versionKey, blobDriver, modeContexts);
                         await fd.delete();
                         deletedCount++;
                     }

@@ -50,7 +50,7 @@ const schema = GroupKeyManagementBehavior.schema.extend(
  * This is the default server implementation of {@link GroupKeyManagementBehavior}.
  */
 export class GroupKeyManagementServer extends GroupKeyManagementBehavior {
-    declare state: GroupKeyManagementServer.State;
+    declare readonly state: GroupKeyManagementServer.State;
     static override readonly schema = schema;
 
     override initialize() {
@@ -424,8 +424,9 @@ export class GroupKeyManagementServer extends GroupKeyManagementBehavior {
 
         // If there exist any entries for the accessing fabric within the GroupKeyMap attribute that refer to the
         // GroupKeySetID just removed, then these entries SHALL be removed from that list.
-        const groupKeyMap = deepCopy(this.state.groupKeyMap);
-        this.state.groupKeyMap = groupKeyMap.filter(({ groupKeySetId: entryId }) => groupKeySetId !== entryId);
+        this.state.groupKeyMap = this.state.groupKeyMap.filter(
+            ({ groupKeySetId: entryId }) => groupKeySetId !== entryId,
+        );
 
         // Sync to Fabric group manager to remove too
         await fabric.groups.removeGroupKeySet(groupKeySetId);

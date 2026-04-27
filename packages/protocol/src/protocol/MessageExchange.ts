@@ -34,6 +34,7 @@ import {
     MatterFlowError,
     Millis,
     NetworkError,
+    ServerAddress,
     ServerAddressUdp,
     Time,
     TimeoutError,
@@ -97,6 +98,9 @@ export interface ExchangeSendOptions {
 
     /** Initial MRP retransmission time (default: calculated as by Matter specification) */
     initialRetransmissionTime?: Duration;
+
+    /** Suppress peer-loss reporting on send-failure so the session stays alive. Used by probing. */
+    suppressPeerLoss?: boolean;
 }
 
 export interface ExchangeReceiveOptions {
@@ -110,6 +114,9 @@ export interface ExchangeReceiveOptions {
      * timeout for responses together with the normal retransmission logic when MRP is used.
      */
     expectedProcessingTime?: Duration;
+
+    /** Suppress peer-loss reporting on receive failure so the session stays alive for further probing. */
+    suppressPeerLoss?: boolean;
 }
 
 /**
@@ -261,6 +268,7 @@ export class MessageExchange {
             Diagnostic.dict({
                 protocol: this.#protocolId,
                 peerSess: Session.idStrOf(this.#peerSessionId),
+                address: addressOverride ? ServerAddress.urlFor(addressOverride) : undefined,
                 SAT: activeThreshold !== undefined ? Duration.format(activeThreshold) : undefined,
                 SAI: activeInterval !== undefined ? Duration.format(activeInterval) : undefined,
                 SII: idleInterval !== undefined ? Duration.format(idleInterval) : undefined,
@@ -441,6 +449,7 @@ export class MessageExchange {
             // exchanged messages, the peer was reachable, and the later send-failure may be transient — declaring
             // peer loss would unnecessarily close sessions and tear down subscriptions.
             if (
+                !options.suppressPeerLoss &&
                 this.#messageReceivedCounter === 0 &&
                 causedBy(e, TransientPeerCommunicationError, TimeoutError, NetworkError)
             ) {
@@ -598,12 +607,18 @@ export class MessageExchange {
             this.#retransmissionCounter = 0;
             this.#retransmissionTimer?.start();
 
-            // Await response.  Resolves with message when received, undefined when aborted, and rejects on timeout
+            // Await response.  Resolves with message when received, undefined when aborted, and rejects on timeout.
+            // Use race (not attempt) so that on abort we fall through to the cleanup block below
+            // instead of throwing immediately — we need to stop the retransmission timer first.
             using _waiting = sending.join("waiting for ack");
-            const responseMessage = await abort.attempt(ackPromise);
+            const responseMessage = await abort.race(ackPromise);
             if (abort.aborted) {
-                // Aborted exchange caused to return undefined, any other
-                // error is thrown
+                // Aborted — stop the retransmission timer immediately so we don't keep sending
+                // packets to an unreachable peer while the exchange is being torn down.
+                // Leave #sentMessageToAck and the ack callbacks intact so that exchange.close()
+                // still sees the pending ack and can handle cleanup properly.
+                this.#retransmissionTimer?.stop();
+
                 if (!causedBy(abort.reason, AbortedError)) {
                     throw abort.reason;
                 }
@@ -632,7 +647,11 @@ export class MessageExchange {
             // Only declare the peer as lost when this exchange has never received a message.  Receiving at least
             // one message confirms the peer was reachable; a later timeout waiting for the next message in a
             // multi-message exchange should not be treated as permanent peer absence.
-            if (this.#messageReceivedCounter === 0 && causedBy(e, TransientPeerCommunicationError)) {
+            if (
+                !options?.suppressPeerLoss &&
+                this.#messageReceivedCounter === 0 &&
+                causedBy(e, TransientPeerCommunicationError)
+            ) {
                 await this.#context.peerLost(this, asError(e));
             }
 
@@ -915,14 +934,17 @@ export class MessageExchange {
             this.#closeCause = cause;
         }
 
-        this.#retransmissionTimer?.stop();
-        this.#sentMessageAckSuccess?.(undefined);
+        try {
+            this.#retransmissionTimer?.stop();
+            this.#receivedMessageAckTimer.stop();
+            this.#sentMessageAckSuccess?.(undefined);
 
-        this.#closeTimer?.stop();
-        this.#timedInteractionTimer?.stop();
-        this.#messagesQueue.close(this.#closeCause);
-
-        await this.#closed.emit(true);
+            this.#closeTimer?.stop();
+            this.#timedInteractionTimer?.stop();
+            this.#messagesQueue.close(this.#closeCause);
+        } finally {
+            await this.#closed.emit(true);
+        }
     }
 
     get via() {

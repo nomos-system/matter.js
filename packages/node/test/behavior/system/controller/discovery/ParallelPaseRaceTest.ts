@@ -4,7 +4,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { MatterAggregateError } from "@matter/general";
+import { Abort, CanceledError, MatterAggregateError, Millis, Seconds } from "@matter/general";
+import { PeerCommunicationError } from "@matter/protocol";
+
+// Mirror of the module-private constant in ParallelPaseDiscovery.ts — keep in sync.
+const CROSS_DEVICE_STAGGER_DELAY = Seconds(1);
 
 /**
  * Tests the promise race pattern used by {@link ParallelPaseDiscovery.registerAttempt} and
@@ -25,6 +29,7 @@ describe("ParallelPaseDiscovery race pattern", () => {
         let winnerAttempt: Promise<unknown> | undefined;
         let winnerExtractor: ((result: unknown) => W | undefined) | undefined;
         let stopped = false;
+        const attemptErrors = new Array<Error>();
 
         function registerAttempt<R>(
             factory: (winOnPase: () => boolean) => R | PromiseLike<R>,
@@ -50,7 +55,11 @@ describe("ParallelPaseDiscovery race pattern", () => {
                         // Winner's error must propagate
                         throw error;
                     }
-                    // Loser: expected race side effect — resolve to prevent unhandled rejection
+                    // Loser: expected race side effect — resolve to prevent unhandled rejection.
+                    // Collect non-cancellation errors for the failure message.
+                    if (!(error instanceof CanceledError)) {
+                        attemptErrors.push(error);
+                    }
                     return undefined;
                 })
                 .finally(() => {
@@ -70,6 +79,9 @@ describe("ParallelPaseDiscovery race pattern", () => {
             }
 
             if (winner === undefined) {
+                if (attemptErrors.length > 0) {
+                    throw new MatterAggregateError(attemptErrors, "No winner");
+                }
                 throw new Error("No winner");
             }
 
@@ -264,5 +276,369 @@ describe("ParallelPaseDiscovery race pattern", () => {
         } finally {
             tracker.dispose();
         }
+    });
+
+    it("collects attempt errors into aggregate error when no winner", async () => {
+        const harness = createRaceHarness<string>();
+        const gate1 = deferred();
+        const gate2 = deferred();
+
+        harness.registerAttempt(
+            async () => {
+                await gate1.promise;
+                throw new PeerCommunicationError("address 1 unreachable");
+            },
+            result => result,
+        );
+
+        harness.registerAttempt(
+            async () => {
+                await gate2.promise;
+                throw new PeerCommunicationError("address 2 unreachable");
+            },
+            result => result,
+        );
+
+        // Both fail
+        gate1.resolve();
+        gate2.resolve();
+        await MockTime.yield3();
+
+        const error = await expect(harness.onComplete()).to.be.rejectedWith(MatterAggregateError);
+        expect(error.errors).length(2);
+        expect(error.errors[0].message).equals("address 1 unreachable");
+        expect(error.errors[1].message).equals("address 2 unreachable");
+    });
+
+    it("excludes CanceledError from collected attempt errors", async () => {
+        const harness = createRaceHarness<string>();
+        const gate1 = deferred();
+        const gate2 = deferred();
+
+        harness.registerAttempt(
+            async () => {
+                await gate1.promise;
+                throw new PeerCommunicationError("unreachable");
+            },
+            result => result,
+        );
+
+        harness.registerAttempt(
+            async () => {
+                await gate2.promise;
+                throw new CanceledError("aborted by race");
+            },
+            result => result,
+        );
+
+        gate1.resolve();
+        gate2.resolve();
+        await MockTime.yield3();
+
+        const error = await expect(harness.onComplete()).to.be.rejectedWith(MatterAggregateError);
+        // Only the PeerCommunicationError should be collected, not the CanceledError
+        expect(error.errors).length(1);
+        expect(error.errors[0].message).equals("unreachable");
+    });
+});
+
+/**
+ * Tests for the stagger delay logic in {@link ParallelPaseDiscovery.registerAttempt}.
+ *
+ * Replicates the stagger-aware version of registerAttempt so we can verify timing behavior
+ * with MockTime without needing the full Discovery stack.
+ */
+describe("ParallelPaseDiscovery stagger pattern", () => {
+    beforeEach(() => MockTime.init());
+
+    // One stagger slot + 50ms buffer for microtask settling.
+    const SLOT_ADVANCE_MS = CROSS_DEVICE_STAGGER_DELAY + 50;
+
+    /**
+     * Stagger-aware version of the race harness.  Mirrors the production code's use of
+     * Abort.sleep for inter-attempt delays.
+     */
+    function createStaggerHarness<W>() {
+        let paseWon = false;
+        const pending = new Set<Promise<unknown>>();
+        let winner: W | undefined;
+        let winnerAttempt: Promise<unknown> | undefined;
+        let winnerExtractor: ((result: unknown) => W | undefined) | undefined;
+        let stopped = false;
+        const attemptErrors = new Array<Error>();
+        let attemptCount = 0;
+        let startedCount = 0;
+        const abort = new AbortController();
+        const factoryCallOrder = new Array<number>();
+
+        function registerAttempt<R>(
+            factory: (winOnPase: () => boolean) => R | PromiseLike<R>,
+            extractWinner: (result: R) => W | undefined,
+        ): void {
+            let attempt!: Promise<R | undefined>;
+            let isWinner = false;
+
+            const winOnPase = () => {
+                if (paseWon) return false;
+                paseWon = true;
+                isWinner = true;
+                stopped = true;
+                abort.abort();
+                pending.delete(attempt);
+                winnerAttempt = attempt;
+                winnerExtractor = extractWinner as (result: unknown) => W | undefined;
+                return true;
+            };
+
+            const attemptIndex = attemptCount++;
+            const stagger = Millis(attemptIndex * CROSS_DEVICE_STAGGER_DELAY);
+
+            const startFactory = () => {
+                startedCount++;
+                factoryCallOrder.push(attemptIndex);
+                return factory(winOnPase);
+            };
+
+            attempt = (
+                stagger > 0
+                    ? Abort.sleep("PASE stagger", abort.signal, stagger).then(() => {
+                          if (!abort.signal.aborted) {
+                              return startFactory();
+                          }
+                      })
+                    : Promise.resolve(startFactory())
+            )
+                .catch(error => {
+                    if (isWinner) {
+                        throw error;
+                    }
+                    if (!(error instanceof CanceledError)) {
+                        attemptErrors.push(error);
+                    }
+                    return undefined;
+                })
+                .finally(() => {
+                    pending.delete(attempt);
+                });
+
+            pending.add(attempt);
+        }
+
+        async function onComplete(): Promise<W> {
+            if (!paseWon) {
+                abort.abort();
+            }
+            try {
+                if (winnerAttempt !== undefined) {
+                    winner = winnerExtractor!(await winnerAttempt);
+                }
+            } finally {
+                await MatterAggregateError.allSettled([...pending], "cleanup").catch(() => {});
+            }
+
+            if (winner === undefined) {
+                if (attemptErrors.length > 0) {
+                    throw new MatterAggregateError(attemptErrors, "No winner");
+                }
+                throw new Error("No winner");
+            }
+
+            return winner;
+        }
+
+        return {
+            registerAttempt,
+            onComplete,
+            get factoryCallOrder() {
+                return factoryCallOrder;
+            },
+            get startedCount() {
+                return startedCount;
+            },
+            get attemptCount() {
+                return attemptCount;
+            },
+            isStopped: () => stopped,
+        };
+    }
+
+    /** Creates a deferred promise for deterministic sequencing. */
+    function deferred<T = void>() {
+        let resolve!: (value: T) => void;
+        let reject!: (reason?: unknown) => void;
+        const promise = new Promise<T>((res, rej) => {
+            resolve = res;
+            reject = rej;
+        });
+        return { promise, resolve, reject };
+    }
+
+    it("first attempt starts immediately, second after one stagger slot", async () => {
+        const harness = createStaggerHarness<string>();
+
+        const gate1 = deferred();
+        const gate2 = deferred();
+
+        // Register two attempts — factory notifications fire when the factory is invoked
+        harness.registerAttempt(
+            async winOnPase => {
+                await gate1.promise;
+                winOnPase();
+                return "winner";
+            },
+            result => result,
+        );
+
+        harness.registerAttempt(
+            async () => {
+                await gate2.promise;
+                return "loser";
+            },
+            result => result,
+        );
+
+        // After yielding, only the first factory should have been called (no stagger delay)
+        await MockTime.yield3();
+        expect(harness.factoryCallOrder).deep.equals([0]);
+        expect(harness.startedCount).equals(1);
+
+        // Advance time past the stagger slot.  advance() fires the timer callback inline,
+        // then we need yields for the promise chain (Abort.race -> finally -> then).
+        await MockTime.advance(SLOT_ADVANCE_MS);
+        await MockTime.yield3();
+        await MockTime.yield3();
+        await MockTime.yield3();
+        expect(harness.factoryCallOrder).deep.equals([0, 1]);
+        expect(harness.startedCount).equals(2);
+
+        // Let winner finish
+        gate1.resolve();
+        gate2.resolve();
+        await MockTime.yield3();
+
+        const result = await harness.onComplete();
+        expect(result).equals("winner");
+    });
+
+    it("three attempts fire at correct stagger intervals", async () => {
+        const harness = createStaggerHarness<string>();
+
+        const gates = [deferred(), deferred(), deferred()];
+
+        for (const gate of gates) {
+            harness.registerAttempt(
+                async winOnPase => {
+                    await gate.promise;
+                    winOnPase();
+                    return "result";
+                },
+                result => result,
+            );
+        }
+
+        // First starts immediately
+        await MockTime.yield3();
+        expect(harness.factoryCallOrder).deep.equals([0]);
+
+        // One slot later — second attempt fires
+        await MockTime.advance(SLOT_ADVANCE_MS);
+        await MockTime.yield3();
+        await MockTime.yield3();
+        await MockTime.yield3();
+        expect(harness.factoryCallOrder).deep.equals([0, 1]);
+
+        // Another slot later — third attempt fires
+        await MockTime.advance(SLOT_ADVANCE_MS);
+        await MockTime.yield3();
+        await MockTime.yield3();
+        await MockTime.yield3();
+        expect(harness.factoryCallOrder).deep.equals([0, 1, 2]);
+
+        // Clean up
+        gates[0].resolve();
+        gates[1].resolve();
+        gates[2].resolve();
+        await MockTime.yield3();
+        await harness.onComplete();
+    });
+
+    it("staggered attempt is skipped when winner wins before its delay expires", async () => {
+        const harness = createStaggerHarness<string>();
+
+        const winnerGate = deferred();
+
+        // First attempt (immediate)
+        harness.registerAttempt(
+            async winOnPase => {
+                await winnerGate.promise;
+                winOnPase();
+                return "winner";
+            },
+            result => result,
+        );
+
+        // Second attempt (staggered)
+        harness.registerAttempt(
+            async () => {
+                return "should-not-run";
+            },
+            result => result,
+        );
+
+        await MockTime.yield3();
+        expect(harness.factoryCallOrder).deep.equals([0]);
+
+        // Winner wins before the stagger elapses
+        winnerGate.resolve();
+        await MockTime.yield3();
+        expect(harness.isStopped()).equals(true);
+
+        // The abort signal resolves the stagger sleep, and the stagger guard sees
+        // abort.signal.aborted so the factory is skipped.  Advance well past the slot and yield to
+        // let the promise chain settle.
+        await MockTime.resolve(MockTime.advance(SLOT_ADVANCE_MS + 1000));
+        expect(harness.factoryCallOrder).deep.equals([0]);
+        expect(harness.startedCount).equals(1);
+
+        const result = await harness.onComplete();
+        expect(result).equals("winner");
+    });
+
+    it("abort from onComplete resolves stagger sleeps for unstarted attempts", async () => {
+        const harness = createStaggerHarness<string>();
+
+        // Register 3 attempts — only the first will actually start before we call onComplete
+        harness.registerAttempt(
+            async () => {
+                throw new PeerCommunicationError("attempt 0 failed");
+            },
+            result => result,
+        );
+
+        harness.registerAttempt(
+            async () => {
+                throw new PeerCommunicationError("attempt 1 failed");
+            },
+            result => result,
+        );
+
+        harness.registerAttempt(
+            async () => {
+                throw new PeerCommunicationError("attempt 2 failed");
+            },
+            result => result,
+        );
+
+        // Only first starts immediately
+        await MockTime.yield3();
+        expect(harness.startedCount).equals(1);
+        expect(harness.attemptCount).equals(3);
+
+        // onComplete aborts remaining stagger sleeps.  Since the abort signal is set,
+        // the stagger guard skips the factories — only the first (immediately started) attempt runs.
+        const error = await expect(MockTime.resolve(harness.onComplete())).to.be.rejectedWith(MatterAggregateError);
+        expect(error.errors).length(1);
+        expect(error.errors[0].message).equals("attempt 0 failed");
+        expect(harness.startedCount).equals(1);
     });
 });

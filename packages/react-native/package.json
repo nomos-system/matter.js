@@ -23,9 +23,9 @@
         "url": "git+https://github.com/matter-js/matter.js.git"
     },
     "scripts": {
-        "clean": "matter-build clean",
-        "build": "matter-build",
-        "build-clean": "matter-build --clean"
+        "clean": "nacho-build clean",
+        "build": "nacho-build",
+        "build-clean": "nacho-build --clean"
     },
     "imports": {
         "#*": "./src/*"
@@ -35,16 +35,13 @@
         "@matter/general": "*",
         "@matter/nodejs": "*",
         "@matter/protocol": "*",
-        "@react-native-async-storage/async-storage": "^3.0.1",
+        "@react-native-async-storage/async-storage": "^3.0.2",
         "@react-native-community/netinfo": "^12.0.1",
-        "@types/node": "^25.3.5",
+        "@types/node": "^25.6.0",
         "react-native-ble-plx": "^3.5.1",
         "react-native-polyfill-globals": "^3.1.0",
-        "react-native-quick-crypto": "^1.0.16",
+        "react-native-quick-crypto": "^1.0.19",
         "react-native-udp": "^4.1.7"
-    },
-    "devDependencies": {
-        "@matter/tools": "*"
     },
     "overrides": {
         "brorand": "npm:@matter.js/brorand@1.1.0"

@@ -5,7 +5,7 @@
  */
 
 import { Bytes, ImplementationError, InternalError, Merge, UnexpectedDataError } from "@matter/general";
-import { FabricIndex } from "@matter/model";
+import { FabricIndex, FieldElement } from "@matter/model";
 import {
     ValidationDatatypeMismatchError,
     ValidationError,
@@ -88,6 +88,27 @@ export class ObjectSchema<F extends TlvFields> extends TlvSchema<TypeFromFields<
         this.isFabricScoped = isFabricScoped;
     }
 
+    /** @deprecated Part of old ClusterType() compat layer. */
+    override get element(): TlvSchema.Element {
+        const children: FieldElement[] = [];
+
+        for (const name in this.fieldDefinitions) {
+            const field = this.fieldDefinitions[name];
+            const inner = field.schema.element;
+
+            children.push(
+                FieldElement({
+                    name,
+                    id: field.id,
+                    ...inner,
+                    ...(field.optional && { conformance: "O" }),
+                }),
+            );
+        }
+
+        return { type: "struct", children };
+    }
+
     #encodeEntryToTlv(writer: TlvWriter, name: string, value: TypeFromFields<F>, options?: TlvEncodingOptions) {
         const { id, schema, optional: isOptional, repeated: isRepeated } = this.fieldDefinitions[name];
         const { forWriteInteraction = false, allowMissingFieldsForNonFabricFilteredRead = false } = options ?? {};
@@ -96,13 +117,14 @@ export class ObjectSchema<F extends TlvFields> extends TlvSchema<TypeFromFields<
                 "Encode options cannot indicate a write interaction and a fabric filtered read interaction at the same time.",
             );
         }
+        if (forWriteInteraction && id === <number>FabricIndex.id) {
+            // MatterSpecification §7.13.6: fabricIndex SHALL NOT be present in write interactions, regardless of
+            // whether the caller provided a value. Server derives it from the accessing fabric.
+            return;
+        }
         const fieldValue = (value as any)[name];
         if (fieldValue === undefined) {
             if (!isOptional && !allowMissingFieldsForNonFabricFilteredRead) {
-                if (forWriteInteraction && id === <number>FabricIndex.id) {
-                    // FabricIndex field should not be included in encoded data for write interactions
-                    return;
-                }
                 throw new ValidationMandatoryFieldMissingError(`Missing mandatory field ${name}`, name);
             }
             return;
