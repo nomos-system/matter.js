@@ -15,7 +15,7 @@ import type { ClusterModel } from "@matter/model";
  *
  * This cluster provides an interface to a boolean state.
  *
- * @see {@link MatterSpecification.v142.Cluster} § 1.7
+ * @see {@link MatterSpecification.v151.Cluster} § 1.7
  */
 export declare namespace BooleanState {
     /**
@@ -29,9 +29,9 @@ export declare namespace BooleanState {
     export const name: "BooleanState";
 
     /**
-     * The cluster revision assigned by {@link MatterSpecification.v142.Cluster}.
+     * The cluster revision assigned by {@link MatterSpecification.v151.Cluster}.
      */
-    export const revision: 1;
+    export const revision: 2;
 
     /**
      * Canonical metadata for the BooleanState cluster.
@@ -50,7 +50,7 @@ export declare namespace BooleanState {
          * The semantics of this boolean state are defined by the device type using this cluster. For example, in a
          * Contact Sensor device type, FALSE=open or no contact, TRUE=closed or contact.
          *
-         * @see {@link MatterSpecification.v142.Cluster} § 1.7.4.1
+         * @see {@link MatterSpecification.v151.Cluster} § 1.7.4.1
          */
         stateValue: boolean;
     }
@@ -65,7 +65,7 @@ export declare namespace BooleanState {
          * The semantics of this boolean state are defined by the device type using this cluster. For example, in a
          * Contact Sensor device type, FALSE=open or no contact, TRUE=closed or contact.
          *
-         * @see {@link MatterSpecification.v142.Cluster} § 1.7.4.1
+         * @see {@link MatterSpecification.v151.Cluster} § 1.7.4.1
          */
         stateValue: boolean;
     }
@@ -77,7 +77,7 @@ export declare namespace BooleanState {
         /**
          * If this event is supported, it shall be generated when the StateValue attribute changes.
          *
-         * @see {@link MatterSpecification.v142.Cluster} § 1.7.5.1
+         * @see {@link MatterSpecification.v151.Cluster} § 1.7.5.1
          */
         stateChange?: StateChangeEvent;
     }
@@ -91,7 +91,7 @@ export declare namespace BooleanState {
         /**
          * If this event is supported, it shall be generated when the StateValue attribute changes.
          *
-         * @see {@link MatterSpecification.v142.Cluster} § 1.7.5.1
+         * @see {@link MatterSpecification.v151.Cluster} § 1.7.5.1
          */
         stateChange: StateChangeEvent;
     }
@@ -101,18 +101,18 @@ export declare namespace BooleanState {
     /**
      * If this event is supported, it shall be generated when the StateValue attribute changes.
      *
-     * @see {@link MatterSpecification.v142.Cluster} § 1.7.5.1
+     * @see {@link MatterSpecification.v151.Cluster} § 1.7.5.1
      */
-    export declare class StateChangeEvent {
+    export class StateChangeEvent {
         constructor(values?: Partial<StateChangeEvent>);
 
         /**
          * This field shall indicate the new value of the StateValue attribute.
          *
-         * @see {@link MatterSpecification.v142.Cluster} § 1.7.5.1.1
+         * @see {@link MatterSpecification.v151.Cluster} § 1.7.5.1.1
          */
         stateValue: boolean;
-    };
+    }
 
     /**
      * Attribute metadata objects keyed by name.

@@ -8,6 +8,7 @@ import { ClientBdxRequest, ClientBdxResponse } from "#action/client/ClientBdx.js
 import { ClientRead } from "#action/client/ClientRead.js";
 import { Interactable, InteractionSession } from "#action/Interactable.js";
 import { ClientInvoke, Invoke } from "#action/request/Invoke.js";
+import { MalformedRequestError } from "#action/request/MalformedRequestError.js";
 import { Read } from "#action/request/Read.js";
 import { resolvePathForSpecifier } from "#action/request/Specifier.js";
 import { Subscribe } from "#action/request/Subscribe.js";
@@ -27,6 +28,7 @@ import {
     AbortedError,
     AsyncIterator,
     BasicSet,
+    ChannelType,
     ClosedError,
     createPromise,
     Diagnostic,
@@ -65,10 +67,37 @@ const MAX_COMMAND_REF = 0xffff;
 /** Higher processing time to give devices a bit more time to send updates. */
 const SUBSCRIPTION_PROCESSING_TIME = Seconds(10);
 
+/**
+ * Probe commands in a {@link ClientInvoke} for the Matter "Large Message Quality" ("L") flag.
+ *
+ * Legacy command requests carry no model reference, so callers using {@link Invoke.LegacyCommandRequest}
+ * must continue to set {@link ClientInvoke.largeMessage} explicitly.
+ *
+ * @internal — exported for unit testing.
+ */
+export function inferLargeMessage(request: ClientInvoke): boolean {
+    for (const cmd of request.commands.values()) {
+        if (Invoke.isLegacy(cmd)) {
+            continue;
+        }
+        try {
+            const command = Invoke.commandOf(cmd);
+            if (command.schema?.effectiveQuality?.largeMessage) {
+                return true;
+            }
+        } catch (error) {
+            // Swallow only resolution errors — downstream encode will surface them with full context.
+            MalformedRequestError.accept(error);
+        }
+    }
+    return false;
+}
+
 interface PendingCommand {
     request: Invoke.ConcreteCommandRequest<any>;
     pathKey: string;
     network?: string;
+    additionalMrpDelay?: Duration;
     resolve: (entry: InvokeResult.DecodedData | undefined) => void;
     reject: (error: Error) => void;
     aborted?: boolean;
@@ -107,7 +136,7 @@ const DEFAULT_MINIMUM_RESPONSE_TIMEOUT_WITH_FAILSAFE = Seconds(30);
 export class ClientInteraction<
     SessionT extends InteractionSession = InteractionSession,
 > implements Interactable<SessionT> {
-    protected readonly environment: Environment;
+    readonly #environment: Environment;
     readonly #lifetime: Lifetime;
     readonly #exchangeProvider: ExchangeProvider;
     readonly #interactions = new BasicSet<Read | Write | Invoke | Subscribe | ClientBdxRequest>();
@@ -124,7 +153,7 @@ export class ClientInteraction<
     #nextCommandRef = 1;
 
     constructor({ environment, abort, sustainRetries, exchangeProvider, address, network }: ClientInteractionContext) {
-        this.environment = environment;
+        this.#environment = environment;
         this.#exchangeProvider = exchangeProvider ?? environment.get(ExchangeProvider);
         if (environment.has(ClientSubscriptions)) {
             this.#subscriptions = environment.get(ClientSubscriptions);
@@ -157,6 +186,17 @@ export class ClientInteraction<
 
         using _closing = this.#lifetime.closing();
 
+        // Close subscriptions established through this interaction so they do not outlive the interactable; a
+        // sustained subscription would otherwise retry forever against a closed interactable.
+        const peer = this.#exchangeProvider.peerAddress;
+        if (this.#subscriptions !== undefined && peer !== undefined) {
+            for (const subscription of [...this.#subscriptions]) {
+                if (PeerAddress.is(peer, subscription.peer)) {
+                    subscription.close();
+                }
+            }
+        }
+
         // Close batching
         this.#batchTimer?.stop();
         for (const [, pending] of this.#pendingCommands) {
@@ -179,7 +219,7 @@ export class ClientInteraction<
 
     get subscriptions() {
         if (this.#subscriptions === undefined) {
-            this.#subscriptions = this.environment.get(ClientSubscriptions);
+            this.#subscriptions = this.#environment.get(ClientSubscriptions);
         }
         return this.#subscriptions;
     }
@@ -530,14 +570,23 @@ export class ClientInteraction<
      * when the device supports multiple invokes per exchange and the target is not endpoint 0.
      */
     async *invoke(request: ClientInvoke, session?: SessionT): DecodedInvokeResult {
+        if (request.largeMessage === undefined && inferLargeMessage(request)) {
+            request.largeMessage = true;
+        }
+
         const maxPathsPerInvoke = this.#exchangeProvider.maxPathsPerInvoke ?? 1;
 
-        // Single command with batching support — auto-batch
-        if (request.invokeRequests.length === 1 && request.batchDuration !== false && maxPathsPerInvoke) {
-            const endpointId = request.invokeRequests[0].commandPath.endpointId;
-            if (endpointId !== undefined && endpointId !== 0 && !request.timedRequest) {
-                yield* this.#invokeWithBatching(request, session);
-                return;
+        // Large Message Quality commands must not be batched (per spec) but still respect the
+        // peer's MaxPathsPerInvoke — splitting propagates largeMessage to each sub-batch, which
+        // in turn forces TCP transport via #begin.
+        if (!request.largeMessage) {
+            // Single command with batching support — auto-batch
+            if (request.invokeRequests.length === 1 && request.batchDuration !== false && maxPathsPerInvoke) {
+                const endpointId = request.invokeRequests[0].commandPath.endpointId;
+                if (endpointId !== undefined && endpointId !== 0 && !request.timedRequest) {
+                    yield* this.#invokeWithBatching(request, session);
+                    return;
+                }
             }
         }
 
@@ -575,6 +624,7 @@ export class ClientInteraction<
             request: { ...cmd, commandRef } as Invoke.ConcreteCommandRequest<any>,
             pathKey,
             network: request.network,
+            additionalMrpDelay: request.additionalMrpDelay,
             resolve: resolver,
             reject: rejecter,
         };
@@ -727,12 +777,17 @@ export class ClientInteraction<
             // Preserve the network profile from the queued commands (all commands in a batch share the same
             // ClientInteraction so they will normally have the same network; pick the first defined value)
             const batchNetwork = commandList.find(c => c.network !== undefined)?.network;
+            const batchAdditionalMrpDelay = commandList.find(
+                c => c.additionalMrpDelay !== undefined,
+            )?.additionalMrpDelay;
 
             // Use #invokeSingle directly to avoid re-entering the batching path in invoke()
-            // Always skip validation here — commands were already validated when originally submitted
+            // Skip validation: already validated on submit. timed=false: only non-timed commands
+            // reach this path (gate in invoke()); prevents Invoke() spec-based auto-promotion.
             const batchRequest = {
-                ...Invoke({ commands: invokeRequests, skipValidation: true }),
+                ...Invoke({ commands: invokeRequests, skipValidation: true, timed: false }),
                 network: batchNetwork,
+                additionalMrpDelay: batchAdditionalMrpDelay,
             } as ClientInvoke;
             const maxPathsPerInvoke = this.#exchangeProvider.maxPathsPerInvoke ?? 1;
             const chunks =
@@ -913,7 +968,12 @@ export class ClientInteraction<
                 abort: session?.abort,
                 retries: this.#sustainRetries,
                 read,
-                probe: abort => this.probe({ abort }),
+                // TCP has 1:1 session-connection binding plus OS keep-alive — the session is
+                // evicted when the connection drops, so no liveness probe is needed.
+                probe: abort =>
+                    this.#exchangeProvider.channelType === ChannelType.TCP
+                        ? Promise.resolve(true)
+                        : this.probe({ abort }),
             });
         } else {
             subscription = await subscribe(request);
@@ -977,12 +1037,15 @@ export class ClientInteraction<
         // that would dispose prematurely when #begin returns, creating a zombie in the spans Set
         const lifetime = this.#lifetime.join(what);
 
+        // Large Message Quality commands require TCP transport
+        const requiredTransport = "largeMessage" in request && request.largeMessage ? ChannelType.TCP : undefined;
+
         let abort: Abort;
         let messenger: InteractionClientMessenger;
         try {
             if (this.#abort.aborted) {
                 throw new ImplementationError(
-                    `Cannot ${what} ${this.#address ?? "uncommissioned node"} because interactable is closed`,
+                    `Cannot start ${what} ${this.#address ?? this.#exchangeProvider.peerAddress ?? "uncommissioned node"} because interactable is closed`,
                 );
             }
 
@@ -991,9 +1054,11 @@ export class ClientInteraction<
             try {
                 messenger = await InteractionClientMessenger.create(this.#exchangeProvider, {
                     network: request.network ?? this.#network,
+                    additionalMrpDelay: request.additionalMrpDelay,
                     abort,
                     connectionTimeout: session?.connectionTimeout,
                     addressOverride: request.addressOverride,
+                    requiredTransport,
                 });
             } catch (e) {
                 abort[Symbol.dispose]();

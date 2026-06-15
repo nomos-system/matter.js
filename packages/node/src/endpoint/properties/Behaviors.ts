@@ -28,7 +28,7 @@ import {
     MaybePromise,
     Transaction,
 } from "@matter/general";
-import { ClusterModel, FeatureSet } from "@matter/model";
+import { ClusterModel } from "@matter/model";
 import { ClusterTypeProtocol, Val } from "@matter/protocol";
 import type { ClusterType } from "@matter/types";
 import type { Agent } from "../Agent.js";
@@ -123,9 +123,15 @@ export class Behaviors {
             const elements = this.elementsOf(type);
             const elementDiagnostic = Array<unknown>();
 
-            const features = schema instanceof ClusterModel ? schema.supportedFeatures : new FeatureSet();
-            if (features.size) {
-                elementDiagnostic.push([Diagnostic.strong("features"), features]);
+            if (schema instanceof ClusterModel) {
+                const features = schema.supportedFeatures;
+                if (features.size) {
+                    const titleMap = new Map(schema.features.map(f => [f.name, f.title ?? f.name]));
+                    elementDiagnostic.push([
+                        Diagnostic.strong("features"),
+                        [...features].map(name => titleMap.get(name) ?? name),
+                    ]);
+                }
             }
 
             if (elements.attributes.size) {
@@ -686,6 +692,16 @@ export class Behaviors {
     }
 
     /**
+     * @throws ImplementationError if the behavior is not supported.
+     */
+    backingFor(type: Behavior.Type): BehaviorBacking {
+        if (!this.has(type)) {
+            throw new ImplementationError(`Endpoint ${this.#endpoint} does not support behavior ${type.id}`);
+        }
+        return this.#backingFor(type);
+    }
+
+    /**
      * Access elements supported by a behavior.
      */
     elementsOf(type: Behavior.Type): SupportedElements {
@@ -821,7 +837,17 @@ export class Behaviors {
     #augmentEndpoint(type: Behavior.Type) {
         const { id, Events } = type;
 
-        const get = () => this.#backingFor(type).stateView;
+        // Descriptors persist across the lifetime of the Behaviors instance (constructor + inject install them and
+        // close does not remove them so reuse paths like factory-reset can re-activate the same getter).  Returning
+        // undefined for endpoints that are tearing down keeps post-close access from re-entering #backingFor on a
+        // missing backing and surfacing a misleading BehaviorInitializationError.
+        const get = () => {
+            const status = this.#endpoint.construction.status;
+            if (status === Lifecycle.Status.Destroying || status === Lifecycle.Status.Destroyed) {
+                return undefined;
+            }
+            return this.#backingFor(type).stateView;
+        };
         Object.defineProperty(this.#endpoint.state, id, { get, enumerable: true, configurable: true });
         if (type.schema.id !== undefined) {
             Object.defineProperty(this.#endpoint.state, type.schema.id, { get, configurable: true });

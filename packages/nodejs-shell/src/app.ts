@@ -39,7 +39,7 @@ export function setLogLevel(identifier: string, level: string): void {
             logLevel = LogLevel.DEBUG;
             break;
     }
-    Logger.setDefaultLoglevelForLogger(identifier, logLevel);
+    Logger.destinations[identifier].level = logLevel;
 }
 
 /**
@@ -177,7 +177,7 @@ process.on("message", function (message) {
 
     switch (message) {
         case "exit":
-            exit().catch(error => logger.error(error));
+            exit().catch(error => logger.error("Error during exit", error));
     }
 });
 

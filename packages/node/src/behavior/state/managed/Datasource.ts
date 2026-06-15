@@ -28,6 +28,9 @@ const logger = Logger.get("Datasource");
 
 const FEATURES_KEY = "__features__";
 
+// Once-per-act() guard for local sessions (frozen — can't set interactionStarted on the session).
+const localInteractionBeginEmitted = new WeakSet<object>();
+
 const viewTx = Transaction.open("offline-view", Lifetime.process, "ro");
 
 /**
@@ -273,7 +276,10 @@ class DatasourceImpl implements Datasource, Datasource.ExternallyMutableStore.Co
     persistentFields: Set<string>;
     supervisionConfig?: GlobalConfig;
 
-    observedInteractions?: Set<NonNullable<ValueSupervisor.RemoteActorSession["interactionComplete"]>>;
+    observedInteractions?: Set<
+        | NonNullable<ValueSupervisor.RemoteActorSession["interactionComplete"]>
+        | NonNullable<ValueSupervisor.LocalActorSession["interactionComplete"]>
+    >;
 
     #values: Val.Struct;
     #changedEventIndex?: Map<string, undefined | Datasource.Events[`${string}$Changed`]>;
@@ -405,19 +411,20 @@ class DatasourceImpl implements Datasource, Datasource.ExternallyMutableStore.Co
     }
 
     interactionObserver = (session?: ValueSupervisor.Session) => {
+        if (session?.interactionComplete) {
+            session.interactionComplete.off(this.interactionObserver);
+            this.observedInteractions?.delete(session.interactionComplete);
+        }
         if (hasRemoteActor(session)) {
-            if (session.interactionComplete) {
-                session.interactionComplete.off(this.interactionObserver);
-                this.observedInteractions?.delete(session.interactionComplete);
-            }
-            // Reset so a subsequent interaction on the same session re-emits interactionBegin and re-registers
             session.interactionStarted = false;
+        } else if (session?.interactionComplete) {
+            localInteractionBeginEmitted.delete(session.interactionComplete);
         }
 
         const location = this.location;
 
         function handleObserverError(error: any) {
-            logger.error(`Error in ${location.path} observer:`, error);
+            logger.warn(`Error in ${location.path} observer:`, error);
         }
 
         if (this.events?.interactionEnd?.isObserved) {
@@ -595,7 +602,7 @@ class RootReference implements ValReference<Val.Struct>, Transaction.Participant
                 try {
                     this.rollback();
                 } catch (e) {
-                    logger.error(
+                    logger.warn(
                         `Error resetting reference to ${this.#internals.location.path} after reset of transaction ${transaction.via}:`,
                         e,
                     );
@@ -647,7 +654,7 @@ class RootReference implements ValReference<Val.Struct>, Transaction.Participant
                 this.#expired = true;
                 this.#refreshSubrefs();
             } catch (e) {
-                logger.error(
+                logger.warn(
                     `Error detaching reference to ${this.#internals.location.path} from closed transaction ${transaction.via}:`,
                     e,
                 );
@@ -713,12 +720,17 @@ class RootReference implements ValReference<Val.Struct>, Transaction.Participant
             const properties = (this.#values as Val.Dynamic)[Val.properties]
                 ? (this.#values as Val.Dynamic)[Val.properties](this.rootOwner, this.#session)
                 : undefined;
-            for (const index of this.#fields) {
-                if (properties && index in properties) {
+            // `#fields` only lists property names; client mirrors also store values at numeric attribute ids.
+            const keys = new Set<string>(this.#fields);
+            for (const key of Object.keys(old)) {
+                keys.add(key);
+            }
+            for (const key of keys) {
+                if (properties && key in properties) {
                     // Property is dynamic anyway, so do nothing
-                } else {
-                    this.#values[index] = old[index];
+                    continue;
                 }
+                this.#values[key] = old[key];
             }
 
             // Point subreferences to the clone
@@ -864,21 +876,39 @@ class RootReference implements ValReference<Val.Struct>, Transaction.Participant
         transaction.addParticipants(this);
         transaction.beginSync();
 
-        if (
-            hasRemoteActor(this.#session) &&
-            !this.#session.interactionStarted &&
-            this.#session.interactionComplete &&
-            !this.#session.interactionComplete.isObservedBy(this.#internals.interactionObserver)
-        ) {
-            this.#session.interactionStarted = true;
-            if (this.#internals.events?.interactionBegin?.isObserved) {
-                this.#internals.events?.interactionBegin?.emit(this.#session);
+        const interactionComplete = this.#session.interactionComplete;
+        if (interactionComplete && !interactionComplete.isObservedBy(this.#internals.interactionObserver)) {
+            let emitBegin: boolean;
+            if (hasRemoteActor(this.#session)) {
+                emitBegin = !this.#session.interactionStarted;
+                if (emitBegin) {
+                    this.#session.interactionStarted = true;
+                }
+            } else {
+                emitBegin = !localInteractionBeginEmitted.has(interactionComplete);
+                if (emitBegin) {
+                    localInteractionBeginEmitted.add(interactionComplete);
+                }
+            }
+            if (emitBegin && this.#internals.events?.interactionBegin?.isObserved) {
+                const location = this.#internals.location;
+                function handleBeginObserverError(error: any) {
+                    logger.warn(`Error in ${location.path} observer:`, error);
+                }
+                try {
+                    const result = this.#internals.events?.interactionBegin?.emit(this.#session);
+                    if (MaybePromise.is(result)) {
+                        MaybePromise.then(result, undefined, handleBeginObserverError);
+                    }
+                } catch (e) {
+                    handleBeginObserverError(e);
+                }
             }
             if (!this.#internals.observedInteractions) {
                 this.#internals.observedInteractions = new Set();
             }
-            this.#internals.observedInteractions.add(this.#session.interactionComplete);
-            this.#session.interactionComplete.on(this.#internals.interactionObserver);
+            this.#internals.observedInteractions.add(interactionComplete);
+            interactionComplete.on(this.#internals.interactionObserver);
         }
     }
 

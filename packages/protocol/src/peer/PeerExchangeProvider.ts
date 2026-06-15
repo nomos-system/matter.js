@@ -35,11 +35,27 @@ export class PeerExchangeProvider extends ExchangeProvider {
         return this.#peer.address;
     }
 
-    // TODO - TCP support
-    readonly channelType = ChannelType.UDP;
+    /**
+     * The transport type of the current session. Returns the actual transport (TCP/UDP) of the
+     * newest active session, or UDP as default when no session is active.
+     */
+    get channelType() {
+        const session = this.#peer.newestSession();
+        if (session && !session.isClosed) {
+            return session.channel.transportChannel.type;
+        }
+        return ChannelType.UDP;
+    }
 
     override async connect(options?: NewExchangeOptions): Promise<void> {
-        await this.#peer.connect(options);
+        await this.#peer.connect({
+            abort: options?.abort,
+            network: options?.network,
+            additionalMrpDelay: options?.additionalMrpDelay,
+            connectionTimeout: options?.connectionTimeout,
+            requiredTransport: options?.requiredTransport,
+            preferredTransport: options?.preferredTransport,
+        });
     }
 
     override async initiateExchange(options?: NewExchangeOptions): Promise<MessageExchange> {
@@ -52,19 +68,38 @@ export class PeerExchangeProvider extends ExchangeProvider {
                 // Probes skip connect because they verify liveness of the current session — calling
                 // connect would establish a new session if the current one is broken, defeating the
                 // purpose of a lightweight reachability check.
-                await this.#peer.connect(options);
+                await this.connect(options);
                 abort?.throwIfAborted();
             }
 
             const network = this.#context.networks.select(this.#peer, options?.network);
+            const peerAdditionalMrpDelay =
+                options?.additionalMrpDelay ?? this.#context.networks.forPeer(this.#peer).additionalMrpDelay;
             const slot = await network.semaphore.obtainSlot(abort);
 
             try {
                 abort?.throwIfAborted();
 
-                const session = isGroup
-                    ? await this.#context.sessions.groupSessionForAddress(this.#peer.address, this.#context.exchanges)
-                    : this.#peer.newestSession;
+                let session;
+                if (isGroup) {
+                    session = await this.#context.sessions.groupSessionForAddress(
+                        this.#peer.address,
+                        this.#context.exchanges,
+                    );
+                } else {
+                    const transports = this.#peer.resolveTransports(
+                        options?.requiredTransport,
+                        options?.preferredTransport,
+                    );
+                    if (transports === undefined) {
+                        session = this.#peer.newestSession();
+                    } else {
+                        for (const t of transports) {
+                            session = this.#peer.newestSession(t);
+                            if (session) break;
+                        }
+                    }
+                }
                 if (session === undefined) {
                     if (options?.requireExistingSession) {
                         // Slot will be closed when error is caught
@@ -80,6 +115,7 @@ export class PeerExchangeProvider extends ExchangeProvider {
                     this.#context.exchanges,
                     session,
                     network,
+                    peerAdditionalMrpDelay,
                     options?.protocol ?? INTERACTION_PROTOCOL_ID,
                     options?.addressOverride,
                 );

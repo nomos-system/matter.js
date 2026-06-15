@@ -17,8 +17,11 @@ import { Rcac } from "#certificate/kinds/Rcac.js";
 import {
     Bytes,
     CertificateError,
+    ContextTagged,
+    DerBitString,
     DerCodec,
     DerNode,
+    DerTag,
     EcdsaSignature,
     PrivateKey,
     PublicKey,
@@ -120,7 +123,9 @@ describe("Certificates", () => {
                     // Load from TLV, convert to ASN.1, parse back, and verify
                     const rootFromTlv = Rcac.fromTlv(certs.ROOT.TLV);
                     const rootFromAsn1 = Rcac.fromAsn1(rootFromTlv.asSignedDer());
-                    expect(rootFromAsn1.cert).to.deep.equal(rootFromTlv.cert);
+                    // issuerDer/tbsDer are only present on ASN.1-parsed certs, strip for structural equality
+                    const { issuerDer: _i, tbsDer: _t, ...asn1Cert } = rootFromAsn1.cert as any;
+                    expect(asn1Cert).to.deep.equal(rootFromTlv.cert);
                     if ("ASN1" in certs.ROOT) {
                         expect(Bytes.toHex(rootFromTlv.asUnsignedDer())).to.equal(Bytes.toHex(certs.ROOT.ASN1));
                     }
@@ -134,7 +139,8 @@ describe("Certificates", () => {
                     it("parse intermediate certificate from ASN.1", async () => {
                         const icacFromTlv = Icac.fromTlv(certs.ICAC.TLV);
                         const icacFromAsn1 = Icac.fromAsn1(icacFromTlv.asSignedDer());
-                        expect(icacFromAsn1.cert).to.deep.equal(icacFromTlv.cert);
+                        const { issuerDer: _i, tbsDer: _t, ...asn1Cert } = icacFromAsn1.cert as any;
+                        expect(asn1Cert).to.deep.equal(icacFromTlv.cert);
                         const tlvEncoded = icacFromAsn1.asSignedTlv();
                         expect(Bytes.toHex(tlvEncoded)).equal(Bytes.toHex(certs.ICAC.TLV));
 
@@ -146,7 +152,8 @@ describe("Certificates", () => {
                 it("parse operational certificate from ASN.1", async () => {
                     const nocFromTlv = Noc.fromTlv(certs.NOC.TLV);
                     const nocFromAsn1 = Noc.fromAsn1(nocFromTlv.asSignedDer());
-                    expect(nocFromAsn1.cert).to.deep.equal(nocFromTlv.cert);
+                    const { issuerDer: _i, tbsDer: _t, ...asn1Cert } = nocFromAsn1.cert as any;
+                    expect(asn1Cert).to.deep.equal(nocFromTlv.cert);
                     if ("ASN1" in certs.NOC) {
                         expect(Bytes.toHex(nocFromTlv.asUnsignedDer())).to.equal(Bytes.toHex(certs.NOC.ASN1));
                     }
@@ -532,6 +539,46 @@ describe("Certificates", () => {
             const result = await Certificate.getPublicKeyFromCsr(crypto, csr);
 
             expect(result).deep.equal(TEST_PUBLIC_KEY);
+        });
+
+        it("get the public key from a CSR with an empty subject", async () => {
+            const key = PrivateKey(TEST_PRIVATE_KEY, { publicKey: TEST_PUBLIC_KEY });
+            const request = {
+                version: 0,
+                subject: {},
+                publicKey: X962.PublicKeyEcPrime256v1(key.publicKey),
+                endSignedBytes: ContextTagged(0),
+            };
+            const csr = DerCodec.encode({
+                request,
+                signAlgorithm: X962.EcdsaWithSHA256,
+                signature: DerBitString((await crypto.signEcdsa(key, DerCodec.encode(request))).der),
+            });
+
+            const result = await Certificate.getPublicKeyFromCsr(crypto, csr);
+
+            expect(result).deep.equal(TEST_PUBLIC_KEY);
+        });
+
+        it("declines a CSR with a non-SEQUENCE subject", async () => {
+            const key = PrivateKey(TEST_PRIVATE_KEY, { publicKey: TEST_PUBLIC_KEY });
+            const request = {
+                version: 0,
+                // Constructed SET instead of a SEQUENCE — has _elements but is not a valid RDNSequence
+                subject: { _tag: DerTag.Set, _bytes: new Uint8Array(0) },
+                publicKey: X962.PublicKeyEcPrime256v1(key.publicKey),
+                endSignedBytes: ContextTagged(0),
+            };
+            const csr = DerCodec.encode({
+                request,
+                signAlgorithm: X962.EcdsaWithSHA256,
+                signature: DerBitString((await crypto.signEcdsa(key, DerCodec.encode(request))).der),
+            });
+
+            await expect(Certificate.getPublicKeyFromCsr(crypto, csr)).to.be.rejectedWith(
+                CertificateError,
+                "Missing subject in CSR data",
+            );
         });
     });
 });

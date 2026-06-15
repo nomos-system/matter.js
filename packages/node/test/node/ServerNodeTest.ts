@@ -12,14 +12,13 @@ import { LightSensorDevice } from "#devices/light-sensor";
 import { OnOffLightDevice } from "#devices/on-off-light";
 import { PumpDevice } from "#devices/pump";
 import { Endpoint } from "#endpoint/Endpoint.js";
-import { EndpointBehaviorsError, EndpointPartsError } from "#endpoint/errors.js";
+import { EndpointPartsError } from "#endpoint/errors.js";
 import { AggregatorEndpoint } from "#endpoints/aggregator";
 import { LocalActorContext } from "#index.js";
 import { ServerEnvironment } from "#node/server/ServerEnvironment.js";
 import { ServerNode } from "#node/ServerNode.js";
 import {
     Bytes,
-    CrashedDependenciesError,
     Crypto,
     DnsCodec,
     DnsMessage,
@@ -28,13 +27,13 @@ import {
     isObject,
     MemoryStorageDriver,
     MockCrypto,
-    MockUdpChannel,
+    MockUdpSocket,
     NetworkSimulator,
     Seconds,
     StorageManager,
     StorageService,
 } from "@matter/general";
-import { AccessLevel, BasicInformation, ElementTag, FeatureMap } from "@matter/model";
+import { AccessLevel, BasicInformation, ElementTag, FeatureMap, UnsupportedCastError } from "@matter/model";
 import {
     AttestationCertificateManager,
     CertificationDeclaration,
@@ -44,7 +43,7 @@ import {
     Val,
 } from "@matter/protocol";
 import { FabricIndex, VendorId } from "@matter/types";
-import { BasicInformationCluster } from "@matter/types/clusters/basic-information";
+import { BasicInformation as BasicInformationCluster } from "@matter/types/clusters/basic-information";
 import { PumpConfigurationAndControl } from "@matter/types/clusters/pump-configuration-and-control";
 import { MockServerNode } from "./mock-server-node.js";
 import { CommissioningHelper, FAILSAFE_LENGTH_S, testFactoryReset } from "./node-helpers.js";
@@ -160,7 +159,7 @@ describe("ServerNode", () => {
     it("announces and expires correctly", async () => {
         const simulator = new NetworkSimulator();
 
-        const scannerChannel = new MockUdpChannel(simulator.addHost(2), {
+        const scannerChannel = new MockUdpSocket(simulator.addHost(2), {
             listeningPort: 5353,
             type: "udp6",
         });
@@ -188,16 +187,16 @@ describe("ServerNode", () => {
 
         function answer(name: string) {
             for (const answer of (advertisement as DnsMessage).answers) {
-                if (answer.value.startsWith(name)) {
+                if (typeof answer.value === "string" && answer.value.startsWith(name)) {
                     return answer.value.split(".")[0].substring(name.length);
                 }
             }
         }
 
-        function additional(recordType: DnsRecordType) {
-            for (const additional of (advertisement as DnsMessage).additionalRecords) {
-                if (additional.recordType === recordType) {
-                    return additional.value;
+        function record(recordType: DnsRecordType) {
+            for (const record of (advertisement as DnsMessage).answers) {
+                if (record.recordType === recordType) {
+                    return record.value;
                 }
             }
         }
@@ -208,9 +207,9 @@ describe("ServerNode", () => {
         expect(answer("_T")).equals("256");
         expect(answer("_CM")).equals("");
 
-        expect(additional(DnsRecordType.AAAA)).equals("abcd::80");
-        expect(additional(DnsRecordType.A)).equals("10.10.10.128");
-        expect(additional(DnsRecordType.SRV)?.port).equals(operationalPort);
+        expect(record(DnsRecordType.AAAA)).equals("abcd::80");
+        expect(record(DnsRecordType.A)).equals("10.10.10.128");
+        expect(record(DnsRecordType.SRV)?.port).equals(operationalPort);
 
         const expirationReceived = new Promise<Bytes>(resolve =>
             scannerChannel.onData((_netInterface, _peerAddress, _peerPort, data) => resolve(data)),
@@ -469,8 +468,8 @@ describe("ServerNode", () => {
         expect(node.stateOf(DescriptorBehavior).partsList).deep.equals([aggregator.number, light.number, pump.number]);
         expect(aggregator.stateOf(DescriptorBehavior).partsList).deep.equals([light.number, pump.number]);
 
-        expect(light.stateOf(DescriptorBehavior).serverList).deep.equals([3, 4, 98, 6, 29]);
-        expect(pump.stateOf(DescriptorBehavior).serverList).deep.equals([6, 3, 512, 29]);
+        expect(light.stateOf(DescriptorBehavior).serverList).deep.equals([3, 4, 6, 98, 29]);
+        expect(pump.stateOf(DescriptorBehavior).serverList).deep.equals([3, 6, 512, 29]);
 
         await node.close();
     });
@@ -486,7 +485,7 @@ describe("ServerNode", () => {
             it("from root behavior error", async () => {
                 await expect(
                     MockServerNode.create(MockServerNode.RootEndpoint, { environment: badNodeEnv }),
-                ).rejectedWith(EndpointBehaviorsError);
+                ).rejectedWith(UnsupportedCastError);
             });
 
             it("from behavior error on child during node create", async () => {
@@ -500,7 +499,7 @@ describe("ServerNode", () => {
 
             it("from behavior on child after node create", async () => {
                 const node = await MockServerNode.create(MockServerNode.RootEndpoint, { environment: badEndpointEnv });
-                await expect(node.add(new Endpoint(LightSensorDevice))).rejectedWith(EndpointBehaviorsError);
+                await expect(node.add(new Endpoint(LightSensorDevice))).rejectedWith(UnsupportedCastError);
             });
         });
 
@@ -512,7 +511,7 @@ describe("ServerNode", () => {
                         environment: badNodeEnv,
                         device: undefined,
                     }),
-                ).rejectedWith(EndpointBehaviorsError, 'Cannot convert "not a number" to an integer');
+                ).rejectedWith(UnsupportedCastError, 'Cannot convert "not a number" to an integer');
             });
 
             it("from behavior error on child during startup", async () => {
@@ -523,7 +522,7 @@ describe("ServerNode", () => {
                         id: "foo",
                         device: LightSensorDevice,
                     }),
-                ).rejectedWith(EndpointBehaviorsError, 'Property "diet" is unsupported');
+                ).rejectedWith(UnsupportedCastError, 'Property "diet" is unsupported');
             });
 
             it("from behavior error on child added after startup", async () => {
@@ -533,7 +532,7 @@ describe("ServerNode", () => {
                     device: undefined,
                 });
                 await expect(node.add(LightSensorDevice)).rejectedWith(
-                    CrashedDependenciesError,
+                    UnsupportedCastError,
                     'Property "diet" is unsupported',
                 );
             });
@@ -629,7 +628,7 @@ describe("ServerNode", () => {
 
             expect(bi.version).equals(0x80808081);
             expect(bi.type.id).equals(BasicInformation.id);
-            expect([...bi.type.attributes].length).equals(22);
+            expect([...bi.type.attributes].length).equals(21);
             expect([...bi.type.events].length).equals(3);
 
             expect(bi.type.attributes).has.property(`${FeatureMap.id}`);

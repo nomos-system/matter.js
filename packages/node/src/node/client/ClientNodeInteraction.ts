@@ -18,6 +18,7 @@ import {
     ClientRead,
     ClientSubscribe,
     ClientSubscription,
+    ClientSubscriptions,
     ClientWrite,
     DecodedInvokeResult,
     Interactable,
@@ -61,12 +62,14 @@ export class ClientNodeInteraction implements Interactable<ActionContext> {
 
     /**
      * Read chosen attributes remotely from the node. Known data versions are automatically injected into the request to
-     * optimize the read. Set `skipDataVersionInjection` in the request to prevent adding data versions.
-     * When data versions are used to filter the read request, the returned data only contains attributes that have
-     * changed since the last read or subscription.
+     * optimize the read when the fabric filter matches the active subscription. Set `includeKnownVersions` in the
+     * request to skip version injection and always receive a full response from the server.
      */
     async *read(request: ClientRead, context?: ActionContext): ReadResult {
-        if (!request.includeKnownVersions) {
+        if (
+            !request.includeKnownVersions &&
+            (request.isFabricFiltered ?? true) === this.#structure.subscribedFabricFiltered
+        ) {
             request = this.#structure.injectVersionFilters(request);
         }
 
@@ -160,7 +163,19 @@ export class ClientNodeInteraction implements Interactable<ActionContext> {
     }
 
     async probe(options?: ClientProbeOptions): Promise<boolean> {
+        // A monitor probe can race node teardown (decommission/destroy); report unreachable rather than throwing.
+        if (
+            this.#node.construction.status !== Lifecycle.Status.Active ||
+            !this.#node.owner?.lifecycle.isOnline ||
+            this.#node.state.commissioning.peerAddress === undefined
+        ) {
+            return false;
+        }
         return this.#interaction.probe(options);
+    }
+
+    get subscriptions(): ClientSubscriptions {
+        return this.#node.env.get(ClientSubscriptions);
     }
 
     get #interaction() {
@@ -201,7 +216,7 @@ export class ClientNodeInteraction implements Interactable<ActionContext> {
         }
 
         const closed = this.#interactable.close(reason).catch(e => {
-            logger.error(`Unhandled error closing client interaction`, e);
+            logger.warn(`Unhandled error closing client interaction`, e);
         });
 
         this.#interactable = undefined;

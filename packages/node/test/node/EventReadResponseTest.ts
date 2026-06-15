@@ -11,7 +11,7 @@ import { ServerNode } from "#index.js";
 import { Bytes, Seconds } from "@matter/general";
 import { AccessLevel, Specification } from "@matter/model";
 import { EventReadResponse, Read, ReadResult } from "@matter/protocol";
-import { ClusterId, EndpointNumber, EventId, EventNumber, FabricIndex, StatusCode } from "@matter/types";
+import { ClusterId, EndpointNumber, EventId, EventNumber, FabricIndex, Status } from "@matter/types";
 import { BasicInformation } from "@matter/types/clusters/basic-information";
 import { Messages } from "@matter/types/clusters/messages";
 import { MockServerNode } from "./mock-server-node.js";
@@ -253,7 +253,7 @@ describe("EventReadResponse", () => {
                         clusterId: 40,
                         endpointId: 1,
                     },
-                    status: StatusCode.UnsupportedEndpoint,
+                    status: Status.UnsupportedEndpoint,
                 },
             ],
         ]);
@@ -281,7 +281,7 @@ describe("EventReadResponse", () => {
                         clusterId: 40,
                         endpointId: 0,
                     },
-                    status: StatusCode.UnsupportedEvent,
+                    status: Status.UnsupportedEvent,
                 },
             ],
         ]);
@@ -299,7 +299,7 @@ describe("EventReadResponse", () => {
             }),
         );
 
-        expect(countEvents(response.data)).deep.equals({
+        expect(await countEvents(response.data)).deep.equals({
             0: {
                 40: 1,
             },
@@ -320,7 +320,7 @@ describe("EventReadResponse", () => {
             }),
         );
 
-        expect(countEvents(response.data)).deep.equals({
+        expect(await countEvents(response.data)).deep.equals({
             0: {
                 40: 2,
             },
@@ -332,7 +332,7 @@ describe("EventReadResponse", () => {
         const node = await MockServerNode.createOnline();
         await node.act(agent => node.events.basicInformation.startUp.emit({ softwareVersion: 2 }, agent.context));
         const response = await readEv(node, false, Read.Event({}));
-        expect(countEvents(response.data)).deep.equals({
+        expect(await countEvents(response.data)).deep.equals({
             0: ROOT_ENDPOINT_FULL_CLUSTER_LIST,
         });
         expect(response.counts).deep.equals({
@@ -442,10 +442,10 @@ export async function readEvRaw(node: MockServerNode, data: Partial<Read.Events>
     });
 }
 
-export function countEvents(chunks: ReadResult.Chunk[]) {
+export async function countEvents(chunks: ReadResult.Chunk[]) {
     const counts = {} as Record<EndpointNumber, Record<ClusterId, number>>;
     for (const chunk of chunks) {
-        for (const report of chunk) {
+        for await (const report of chunk) {
             if (report.kind !== "event-value") {
                 throw new Error("Only attribute values expected");
             }

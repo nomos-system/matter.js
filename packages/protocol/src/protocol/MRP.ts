@@ -20,7 +20,7 @@ export namespace MRP {
     /** The scaler for random jitter in the backoff equation. */
     export const BACKOFF_JITTER = 0.25;
 
-    /** The scaler margin increase to backoff over the peer sleepy interval. */
+    /** The scaler margin increase to backoff over the applicable (active/idle) interval. */
     export const BACKOFF_MARGIN = 1.1;
 
     /** The number of retransmissions before transitioning from linear to exponential backoff. */
@@ -35,12 +35,6 @@ export namespace MRP {
      * kExpectedSigma1ProcessingTime.
      */
     export const DEFAULT_EXPECTED_PROCESSING_TIME = Seconds(2);
-
-    /**
-     * To better handle network congestion, we add a delay to the MRP base timings.
-     * TODO Make this value dynamic depending on network type and maybe network behavior
-     */
-    export const ADDITIONAL_MRP_DELAY = Seconds(1.5);
 
     /**
      * The buffer time in milliseconds to add to the peer response time to also consider network delays and other factors.
@@ -101,6 +95,12 @@ export namespace MRP {
         transmissionNumber: number;
         sessionParameters: SessionParameters;
         isPeerActive: boolean;
+
+        /**
+         * Additive margin applied to the base interval on real (non-maximum) sends.  Supplied by the
+         * caller from the combined peer/own network-profile policy; 0 means the bare spec interval.
+         */
+        additionalDelay?: Duration;
     }
 
     /**
@@ -118,22 +118,22 @@ export namespace MRP {
      * side of the exchange.
      *
      * When `calculateMaximum` is set to true, we calculate the maximum time without any randomness.
-     * Otherwise, we add a network overhead to the timings.
+     * Otherwise, the caller-supplied `additionalDelay` (default 0) is added to the base interval.
      *
      * @see {@link MatterSpecification.v10.Core}, section 4.11.2.1
      */
     export function retransmissionIntervalOf(
-        { transmissionNumber, sessionParameters, isPeerActive }: RetryDelayInputs,
+        { transmissionNumber, sessionParameters, isPeerActive, additionalDelay = Millis(0) }: RetryDelayInputs,
         calculateMaximum = false,
     ) {
         const { activeInterval, idleInterval } = sessionParameters;
 
-        // For the first message of a new exchange ... SHALL be set according to the idle state of the peer node.
-        // For all subsequent messages of the exchange, ... SHOULD be set according to the active state of the peer node
-        const peerActive = transmissionNumber > 0 && (!calculateMaximum || isPeerActive);
-        let baseInterval = peerActive ? activeInterval : idleInterval;
+        // Every transmission (including the initial one) selects its interval by PeerActiveMode, re-evaluated
+        // per (re)transmission, matching CHIP GetMRPBaseTimeout(). isPeerActive already yields idle for a
+        // genuinely quiet peer, so no position-based first-message rule is needed.
+        let baseInterval = isPeerActive ? activeInterval : idleInterval;
         if (!calculateMaximum) {
-            baseInterval += ADDITIONAL_MRP_DELAY;
+            baseInterval += additionalDelay;
         }
         return Millis.floor(
             Millis(
@@ -152,7 +152,6 @@ export namespace MRP {
 function maxResponseTimeOf(sessionParameters: SessionParameters, isPeerActive: boolean) {
     let finalWaitTime = 0;
 
-    // and then add the time the other side needs for a full resubmission cycle under the assumption we are active
     for (let i = 0; i < MRP.MAX_TRANSMISSIONS; i++) {
         if (isPeerActive && finalWaitTime > sessionParameters.activeThreshold) {
             // If we considered the device active initially but the wait time goes beyond the active threshold,

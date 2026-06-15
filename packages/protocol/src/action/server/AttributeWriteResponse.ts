@@ -18,7 +18,6 @@ import {
     EndpointNumber,
     FabricIndex,
     Status,
-    StatusCode,
     StatusResponseError,
     TlvSchema,
     TlvStream,
@@ -56,6 +55,14 @@ export class AttributeWriteResponse<
 
         const writeResponses = new Array<WriteResult.AttributeStatus>();
         for (const { path, data, dataVersion } of writeRequests) {
+            // Spec 1.5: WildcardPathFlags SHALL ONLY be used for Read or Subscribe interactions
+            if (path.wildcardPathFlags) {
+                throw new StatusResponseError(
+                    "WildcardPathFlags are not allowed in write interactions",
+                    Status.InvalidAction,
+                );
+            }
+
             if (path.endpointId === undefined || path.clusterId === undefined || path.attributeId === undefined) {
                 // dataVersion silently ignored for Wildcard?
                 const responses = await this.#processWildcard(path, data);
@@ -65,7 +72,7 @@ export class AttributeWriteResponse<
             } else {
                 if (Subject.isGroup(this.session.subject)) {
                     // Group command cannot be concrete paths
-                    throw new StatusResponseError("Group writes can not be concrete paths", StatusCode.InvalidAction);
+                    throw new StatusResponseError("Group writes can not be concrete paths", Status.InvalidAction);
                 }
                 writeResponses.push(
                     await this.#writeConcrete(path as WriteResult.ConcreteAttributePath, data, dataVersion),
@@ -141,10 +148,7 @@ export class AttributeWriteResponse<
         }
 
         if (isGroupPath) {
-            throw new StatusResponseError(
-                "Illegal write request with group ID and endpoint ID",
-                StatusCode.InvalidAction,
-            );
+            throw new StatusResponseError("Illegal write request with group ID and endpoint ID", Status.InvalidAction);
         }
 
         const endpoint = this.node[endpointId];
@@ -278,7 +282,7 @@ export class AttributeWriteResponse<
         if (clusterId === undefined || attributeId === undefined) {
             throw new StatusResponseError(
                 "Wildcard path write must specify a clusterId and attributeId",
-                StatusCode.InvalidAction,
+                Status.InvalidAction,
             );
         }
 
@@ -307,7 +311,7 @@ export class AttributeWriteResponse<
         const { attributeId } = path;
 
         if (attributeId === undefined) {
-            throw new StatusResponseError("Wildcard path write must specify an attributeId", StatusCode.InvalidAction);
+            throw new StatusResponseError("Wildcard path write must specify an attributeId", Status.InvalidAction);
         } else {
             const attribute = cluster.type.attributes[attributeId];
             if (attribute !== undefined) {
@@ -362,7 +366,7 @@ export class AttributeWriteResponse<
         if (status !== Status.Success) {
             logger.debug(
                 () =>
-                    `Error writing attribute ${this.node.inspectPath(path)}: Status=${StatusCode[status]}(${toHex(status)}), ClusterStatus=${clusterStatus !== undefined ? toHex(clusterStatus) : undefined}`,
+                    `Error writing attribute ${this.node.inspectPath(path)}: Status=${Status[status]}(${toHex(status)}), ClusterStatus=${clusterStatus !== undefined ? toHex(clusterStatus) : undefined}`,
             );
         }
 

@@ -219,7 +219,7 @@ export class ClientStructure {
         const scope = ReadScope(request);
         for await (const chunk of changes) {
             const chunkData = new Array<ReadResult.Report>();
-            for (const change of chunk) {
+            for await (const change of chunk) {
                 chunkData.push(change);
                 switch (change.kind) {
                     case "attr-value":
@@ -333,7 +333,7 @@ export class ClientStructure {
     /**
      * Determines if the subscription is fabric filtered.
      */
-    protected get subscribedFabricFiltered(): boolean {
+    get subscribedFabricFiltered(): boolean {
         if (this.#subscribedFabricFiltered === undefined) {
             this.#subscribedFabricFiltered = true;
 
@@ -845,7 +845,7 @@ export class ClientStructure {
         try {
             await endpoint.delete();
         } catch (e) {
-            logger.error(`Error erasing peer endpoint ${endpoint}:`, e);
+            logger.warn(`Error erasing peer endpoint ${endpoint}:`, e);
         }
     }
 
@@ -876,7 +876,7 @@ export class ClientStructure {
                         ).erase?.(),
                     );
                 } catch (e) {
-                    logger.error("Error clearing cluster storage:", e);
+                    logger.warn("Error clearing cluster storage:", e);
                 }
 
                 this.#pendingStructureEvents.push({

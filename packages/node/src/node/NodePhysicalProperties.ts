@@ -41,36 +41,35 @@ export function NodePhysicalProperties(node: Node) {
 
 function inspectEndpoint(endpoint: Endpoint, properties: PhysicalDeviceProperties) {
     // Network interface support
-    const network = endpoint.behaviors.typeFor(NetworkCommissioningClient);
-    if (network) {
-        const features = network.schema.supportedFeatures;
-        if (features.has("WI")) {
+    const networkFeatures = endpoint.maybeFeaturesOf(NetworkCommissioningClient);
+    if (networkFeatures) {
+        if (networkFeatures.wiFiNetworkInterface) {
             properties.supportsWifi = true;
         }
-        if (features.has("TH")) {
+        if (networkFeatures.threadNetworkInterface) {
             properties.supportsThread = true;
         }
-        if (features.has("ET")) {
+        if (networkFeatures.ethernetNetworkInterface) {
             properties.supportsEthernet = true;
         }
     }
 
     // Battery power
-    const powerSource = endpoint.behaviors.typeFor(PowerSourceClient);
-    if (powerSource) {
-        const features = powerSource.schema.supportedFeatures;
-        const status = endpoint.stateOf(PowerSourceClient).status;
-        if (features.has("WIRED")) {
+    const powerSourceFeatures = endpoint.maybeFeaturesOf(PowerSourceClient);
+    const powerSourceState = powerSourceFeatures ? endpoint.maybeStateOf(PowerSourceClient) : undefined;
+    if (powerSourceFeatures && powerSourceState) {
+        const { status } = powerSourceState;
+        if (powerSourceFeatures.wired) {
             if (status === PowerSource.PowerSourceStatus.Active) {
                 // Should we only consider A/C "mains" powered?  What is a DC adapter?  What is an external battery?
                 // For now assuming "wired" means "don't worry about power consumption"
                 properties.isMainsPowered = true;
             }
         } else if (
-            features.has("BAT") ||
+            powerSourceFeatures.battery ||
             // Perform additional checks because we've encountered devices with incorrect features
-            !features.has("WIRED") ||
-            endpoint.behaviors.elementsOf(powerSource).attributes.has("batChargeLevel")
+            !powerSourceFeatures.wired ||
+            endpoint.behaviors.elementsOf(PowerSourceClient).attributes.has("batChargeLevel")
         ) {
             if (
                 status === PowerSource.PowerSourceStatus.Active ||
@@ -84,14 +83,14 @@ function inspectEndpoint(endpoint: Endpoint, properties: PhysicalDevicePropertie
 
     // Sleepy thread device
     const threadNetworkDiagnostics = endpoint.behaviors.typeFor(ThreadNetworkDiagnosticsClient);
-    if (threadNetworkDiagnostics) {
-        const tnd = endpoint.stateOf(threadNetworkDiagnostics);
+    const tnd = threadNetworkDiagnostics ? endpoint.maybeStateOf(threadNetworkDiagnostics) : undefined;
+    if (tnd) {
         if (tnd.routingRole === ThreadNetworkDiagnostics.RoutingRole.SleepyEndDevice) {
             properties.isThreadSleepyEndDevice = true;
         }
         if (tnd.extendedPanId !== undefined && tnd.extendedPanId !== null) {
             properties.threadActive = true;
-            properties.threadPan = tnd.extendedPanId === undefined ? undefined : BigInt(tnd.extendedPanId);
+            properties.threadPan = BigInt(tnd.extendedPanId);
             properties.threadChannel = tnd.channel ?? undefined;
         } else {
             properties.threadActive = false;

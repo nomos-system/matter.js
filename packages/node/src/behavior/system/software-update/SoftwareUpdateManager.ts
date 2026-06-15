@@ -221,7 +221,7 @@ export class SoftwareUpdateManager extends Behavior {
         try {
             await this.#checkAvailableUpdates();
         } catch (error) {
-            logger.error(`Error during initial OTA update check:`, error);
+            logger.notice(`Error during initial OTA update check:`, error);
         }
 
         this.internal.checkForUpdateTimer.stop();
@@ -464,6 +464,9 @@ export class SoftwareUpdateManager extends Behavior {
         // Collect all client nodes and their versions, so we only need to check each version once
         const updateDetails = new Map<string, CollectedNodesUpdateInfo>();
         for (const peer of rootNode.peers) {
+            if (this.internal.closed) {
+                return [];
+            }
             if (peerToCheck !== undefined && peerToCheck !== peer) {
                 continue;
             }
@@ -492,6 +495,9 @@ export class SoftwareUpdateManager extends Behavior {
 
         const peersWithUpdates = new Array<{ peerAddress: PeerAddress; info: SoftwareUpdateInfo }>();
         for (const infos of updateDetails.values()) {
+            if (this.internal.closed) {
+                return [];
+            }
             try {
                 const peers = await this.#checkProductForUpdates(infos, includeStoredUpdates);
                 for (const peer of peers) {
@@ -535,7 +541,7 @@ export class SoftwareUpdateManager extends Behavior {
             includeStoredUpdates,
             isProduction: this.state.allowTestOtaImages ? undefined : true,
         });
-        if (!updateDetails) {
+        if (!updateDetails || this.internal.closed) {
             return [];
         }
         const fd = await this.internal.otaService.downloadUpdate(updateDetails);
@@ -574,6 +580,9 @@ export class SoftwareUpdateManager extends Behavior {
                     consent.peerAddress.fabricIndex === peerAddress.fabricIndex &&
                     consent.peerAddress.nodeId === peerAddress.nodeId,
             );
+            if (this.internal.closed) {
+                break;
+            }
             if (hasConsent) {
                 // We already have a consent for this update, so just announce the provider
                 this.#queueUpdate({
@@ -773,6 +782,9 @@ export class SoftwareUpdateManager extends Behavior {
      * monitor for stalled updates.
      */
     #triggerQueuedUpdate() {
+        if (this.internal.closed) {
+            return;
+        }
         const now = Time.nowMs;
         const inProgressEntries = this.internal.updateQueue.filter(
             ({ lastProgressUpdateTime }) => lastProgressUpdateTime !== undefined,
@@ -810,7 +822,7 @@ export class SoftwareUpdateManager extends Behavior {
         const nextEntry = this.internal.updateQueue[0];
         if (nextEntry) {
             this.#triggerUpdateOnNode(nextEntry).catch(error => {
-                logger.error(`Error while triggering OTA update on node ${nextEntry.peerAddress.toString()}:`, error);
+                logger.warn(`Error while triggering OTA update on node ${nextEntry.peerAddress.toString()}:`, error);
             });
             if (!this.internal.updateQueueTimer?.isRunning) {
                 // Start a periodic timer to check for stalled updates
@@ -854,7 +866,7 @@ export class SoftwareUpdateManager extends Behavior {
                 entry.lastProgressUpdateTime = Time.nowMs;
             }
         } catch (error) {
-            logger.error(`Failed to announce OTA provider to node ${peerAddress.toString()}:`, error);
+            logger.warn(`Failed to announce OTA provider to node ${peerAddress.toString()}:`, error);
             // Reset entry state so the queue doesn't stay blocked
             entry.lastProgressUpdateTime = undefined;
             entry.lastProgressStatus = OtaUpdateStatus.Unknown;
@@ -1098,6 +1110,7 @@ export class SoftwareUpdateManager extends Behavior {
     }
 
     override async [Symbol.asyncDispose]() {
+        this.internal.closed = true;
         this.internal.checkForUpdateTimer?.stop();
         this.internal.updateQueueTimer?.stop();
         await this.internal.announcements?.close();
@@ -1148,6 +1161,8 @@ export namespace SoftwareUpdateManager {
          * or cleaned up in #cancelUpdate when the peer is permanently removed from tracking.
          */
         pendingStartUpSuppress = new PeerAddressMap<number>();
+
+        closed = false;
     }
 
     export class Events extends EventEmitter {

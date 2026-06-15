@@ -34,7 +34,7 @@ import {
     EventId,
     EventNumber,
     FabricIndex,
-    StatusCode,
+    Status,
     StatusResponseError,
     TlvArray,
     TlvClusterId,
@@ -248,13 +248,13 @@ const READ_RESPONSE: DataReportPayload = {
                 },
                 tlv: TlvArray(TlvClusterId),
                 payload: [
-                    ClusterId(40),
                     ClusterId(31),
-                    ClusterId(63),
+                    ClusterId(40),
                     ClusterId(48),
+                    ClusterId(51),
                     ClusterId(60),
                     ClusterId(62),
-                    ClusterId(51),
+                    ClusterId(63),
                     ClusterId(29),
                 ],
                 dataVersion: 0x80808081,
@@ -355,13 +355,13 @@ const READ_RESPONSE_WITH_FILTER: DataReportPayload = {
                 },
                 tlv: TlvArray(TlvClusterId),
                 payload: [
-                    ClusterId(40),
                     ClusterId(31),
-                    ClusterId(63),
+                    ClusterId(40),
                     ClusterId(48),
+                    ClusterId(51),
                     ClusterId(60),
                     ClusterId(62),
-                    ClusterId(51),
+                    ClusterId(63),
                     ClusterId(29),
                 ],
                 dataVersion: 0x80808081,
@@ -991,37 +991,37 @@ const wildcardTestCases: {
     wildcardPathFilter?: TypeFromPartialBitSchema<typeof WildcardPathFlagsBitmap>;
     count: number;
 }[] = [
-    { testCase: "no", clusterId: ClusterId(0x28), wildcardPathFilter: undefined, count: 23 },
+    { testCase: "no", clusterId: ClusterId(0x28), wildcardPathFilter: undefined, count: 22 },
     { testCase: "skipRootNode", clusterId: ClusterId(0x28), wildcardPathFilter: { skipRootNode: true }, count: 0 }, // all sorted out
     {
         testCase: "skipGlobalAttributes",
         clusterId: ClusterId(0x28), // BasicInformationCluster
         wildcardPathFilter: { skipGlobalAttributes: true },
-        count: 20,
+        count: 19,
     }, // 3 less
     {
         testCase: "skipAttributeList",
         clusterId: ClusterId(0x28), // BasicInformationCluster
         wildcardPathFilter: { skipAttributeList: true },
-        count: 22,
+        count: 21,
     }, // 1 less
     {
         testCase: "skipCommandLists",
         clusterId: ClusterId(0x28), // BasicInformationCluster
         wildcardPathFilter: { skipCommandLists: true },
-        count: 21,
+        count: 20,
     }, // 2 less
     {
         testCase: "skipFixedAttributes",
         clusterId: ClusterId(0x28), // BasicInformationCluster
         wildcardPathFilter: { skipFixedAttributes: true },
-        count: 4,
+        count: 3,
     }, // 19 less
     {
         testCase: "skipChangesOmittedAttributes",
         clusterId: ClusterId(0x28), // BasicInformationCluster
         wildcardPathFilter: { skipChangesOmittedAttributes: true },
-        count: 23,
+        count: 22,
     }, // nothing filtered
     {
         testCase: "no for WiFiDiag",
@@ -1395,12 +1395,12 @@ describe("InteractionProtocol", () => {
 
             // First chunk response - REPLACE_ALL success
             expect(responses[0].writeResponses.length).equals(1);
-            expect(responses[0].writeResponses[0].status.status).equals(StatusCode.Success);
+            expect(responses[0].writeResponses[0].status.status).equals(Status.Success);
 
             // Second chunk response - both ADD operations success
             expect(responses[1].writeResponses.length).equals(2);
-            expect(responses[1].writeResponses[0].status.status).equals(StatusCode.Success);
-            expect(responses[1].writeResponses[1].status.status).equals(StatusCode.Success);
+            expect(responses[1].writeResponses[0].status.status).equals(Status.Success);
+            expect(responses[1].writeResponses[1].status.status).equals(Status.Success);
 
             // Verify the final ACL list has both entries
             expect(node.state.accessControl.acl).deep.equals([
@@ -1777,12 +1777,12 @@ describe("InteractionProtocol", () => {
                     messenger,
                     interaction.BarelyMockedMessage,
                 ),
-            ).rejectedWith("Duplicate concrete command path RootNode:0x0.OnOff:0x6.on:0x1 on batch invoke");
+            ).rejectedWith("Duplicate concrete command path 0.onOff.on on batch invoke");
         });
 
         it("handles StatusResponseError gracefully", async () => {
             node.eventsOf(EventedOnOffServer).onOff$Changing.on(() => {
-                throw new StatusResponseError("Sorry so swamped", StatusCode.Busy);
+                throw new StatusResponseError("Sorry so swamped", Status.Busy);
             });
 
             const exchange = await createDummyMessageExchange(node);

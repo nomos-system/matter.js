@@ -7,7 +7,11 @@
 import { Message, PacketHeader, SessionType } from "#codec/MessageCodec.js";
 import { Mark } from "#common/Mark.js";
 import { NetworkProfile } from "#peer/NetworkProfile.js";
-import { PeerUnresponsiveError, TransientPeerCommunicationError } from "#peer/PeerCommunicationError.js";
+import {
+    PeerMessageMissingError,
+    PeerUnresponsiveError,
+    TransientPeerCommunicationError,
+} from "#peer/PeerCommunicationError.js";
 import { GroupSession } from "#session/GroupSession.js";
 import type { NodeSession } from "#session/NodeSession.js";
 import { Session } from "#session/Session.js";
@@ -46,7 +50,7 @@ import {
     NodeId,
     SECURE_CHANNEL_PROTOCOL_ID,
     SecureMessageType,
-    StatusCode,
+    Status,
     StatusResponseError,
 } from "@matter/types";
 import { SessionClosedError, UnexpectedMessageError } from "./errors.js";
@@ -134,6 +138,9 @@ export interface MessageExchangeContext {
     session: Session;
     localSessionParameters: SessionParameters;
 
+    /** Additive MRP retransmission margin for our own (sender-side) network. */
+    localAdditionalMrpDelay: Duration;
+
     peerLost(exchange: MessageExchange, cause: Error): Promise<void>;
 
     /** @deprecated */
@@ -192,6 +199,7 @@ export class MessageExchange {
     readonly #onSend?: MessageExchange.SendNotifier;
     readonly #onReceive?: MessageExchange.ReceiveNotifier;
     readonly #addressOverride?: ServerAddressUdp;
+    readonly #peerAdditionalMrpDelay?: Duration;
     #receivedMessageToAck: Message | undefined;
     #receivedMessageAckTimer = Time.getTimer("ack receipt timeout", MRP.STANDALONE_ACK_TIMEOUT, () => {
         if (this.#receivedMessageToAck !== undefined) {
@@ -199,7 +207,7 @@ export class MessageExchange {
             this.#receivedMessageToAck = undefined;
             // TODO await
             this.sendStandaloneAckForMessage(messageToAck).catch(error =>
-                logger.error("An error happened when sending a standalone ack", error),
+                logger.warn("An error happened when sending a standalone ack", error),
             );
         }
     });
@@ -229,6 +237,7 @@ export class MessageExchange {
     #messageSendCounter = 0;
     #messageReceivedCounter = 0;
     #retransmissionTimer?: Timer;
+    #lastActive = Time.nowMs;
 
     constructor(config: MessageExchange.Config) {
         const {
@@ -242,6 +251,7 @@ export class MessageExchange {
             onSend,
             onReceive,
             network,
+            peerAdditionalMrpDelay,
             addressOverride,
         } = config;
 
@@ -255,6 +265,7 @@ export class MessageExchange {
         this.#onSend = onSend;
         this.#onReceive = onReceive;
         this.#addressOverride = addressOverride;
+        this.#peerAdditionalMrpDelay = peerAdditionalMrpDelay;
 
         const { activeThreshold, activeInterval, idleInterval } = this.session.parameters;
 
@@ -302,6 +313,16 @@ export class MessageExchange {
 
     get considerClosed() {
         return this.#closed.value || (this.#isInitiator && this.#closing.value);
+    }
+
+    /** Timestamp of the last send or receive on this exchange, used to evict the least-recently-active exchange. */
+    get lastActive() {
+        return this.#lastActive;
+    }
+
+    #notifyActivity(messageReceived: boolean) {
+        this.#lastActive = Time.nowMs;
+        this.session.notifyActivity(messageReceived);
     }
 
     /**
@@ -366,13 +387,14 @@ export class MessageExchange {
         } = message;
 
         const isStandaloneAck = SecureMessageType.isStandaloneAck(protocolId, messageType);
-        if (protocolId !== this.#protocolId && !isStandaloneAck) {
+        const isStatusReport = SecureMessageType.isStatusReport(protocolId, messageType);
+        if (protocolId !== this.#protocolId && !isStandaloneAck && !isStatusReport) {
             throw new MatterFlowError(
                 `Drop received a message for an unexpected protocol. Expected: ${this.#protocolId}, received: ${protocolId}`,
             );
         }
 
-        this.session.notifyActivity(true);
+        this.#notifyActivity(true);
         this.#onReceive?.(message, duplicate);
 
         if (duplicate) {
@@ -485,8 +507,10 @@ export class MessageExchange {
             requiresAck = false;
         }
 
-        // Standalone acks are always sent via the SECURE_CHANNEL_PROTOCOL_ID
-        const protocolId = isStandaloneAck ? SECURE_CHANNEL_PROTOCOL_ID : this.#protocolId;
+        // StandaloneAck and StatusReport are SecureChannel messages and are always sent via SECURE_CHANNEL_PROTOCOL_ID
+        // regardless of the exchange's protocol (Matter spec 4.10).
+        const isStatusReport = messageType === SecureMessageType.StatusReport;
+        const protocolId = isStandaloneAck || isStatusReport ? SECURE_CHANNEL_PROTOCOL_ID : this.#protocolId;
         if (isStandaloneAck) {
             if (!this.session.usesMrp) {
                 return;
@@ -503,7 +527,7 @@ export class MessageExchange {
 
         this.#used = true;
         this.#messageSendCounter++;
-        this.session.notifyActivity(false);
+        this.#notifyActivity(false);
 
         let ackedMessageId = standaloneAckMessageId;
         if (ackedMessageId === undefined && this.session.usesMrp) {
@@ -528,7 +552,7 @@ export class MessageExchange {
                 messageId,
                 destNodeId: this.#peerNodeId,
                 sourceNodeId: this.#nodeId,
-                hasPrivacyEnhancements: false,
+                hasPrivacyEnhancements: false, // Privacy is only defined for group messages
                 isControlMessage: false,
                 hasMessageExtensions: false,
             };
@@ -551,7 +575,7 @@ export class MessageExchange {
                 messageId,
                 destGroupId,
                 sourceNodeId: this.#nodeId, // We are the source node, so use our NodeId
-                hasPrivacyEnhancements: false,
+                hasPrivacyEnhancements: this.session.usePrivacy,
                 isControlMessage: false,
                 hasMessageExtensions: false,
             };
@@ -677,7 +701,7 @@ export class MessageExchange {
             abort: options?.abort,
 
             timeoutHandler: () => {
-                throw new PeerUnresponsiveError(timeout!);
+                throw new PeerMessageMissingError(timeout!);
             },
         });
 
@@ -739,13 +763,13 @@ export class MessageExchange {
             if (this.#closeTimer !== undefined) {
                 // All resubmissions done and in closing, no need to wait further
                 // TODO await
-                this.#close().catch(error => logger.error("Error closing exchange", error));
+                this.#close().catch(error => logger.warn("Error closing exchange", error));
             }
             return;
         }
 
         this.#messageSendCounter++;
-        this.session.notifyActivity(false);
+        this.#notifyActivity(false);
 
         this.context.retry(this.#retransmissionCounter);
         const resubmissionBackoffTime = this.#mrpResubmissionBackOffTime;
@@ -764,9 +788,9 @@ export class MessageExchange {
             })
             .then(() => this.#initializeResubmission(message, resubmissionBackoffTime, expectedProcessingTime))
             .catch(error => {
-                logger.error(`Error retransmitting ${Message.via(this, message)}:`, error);
+                logger.warn(`Error retransmitting ${Message.via(this, message)}:`, error);
                 if (error instanceof SessionClosedError) {
-                    this.#close().catch(error => logger.error("An error happened when closing the exchange", error));
+                    this.#close().catch(error => logger.warn("An error happened when closing the exchange", error));
                 } else {
                     this.#initializeResubmission(message, resubmissionBackoffTime, expectedProcessingTime);
                 }
@@ -795,7 +819,7 @@ export class MessageExchange {
             try {
                 await this.sendStandaloneAckForMessage(messageToAck);
             } catch (error) {
-                logger.error("An error happened when closing the exchange", error);
+                logger.warn("An error happened when closing the exchange", error);
             }
         }
         await this.#close();
@@ -804,10 +828,7 @@ export class MessageExchange {
     startTimedInteraction(timeout: Duration) {
         if (this.#timedInteractionTimer !== undefined && this.#timedInteractionTimer.isRunning) {
             this.#timedInteractionTimer.stop();
-            throw new StatusResponseError(
-                "Timed interaction already running for this exchange",
-                StatusCode.InvalidAction,
-            );
+            throw new StatusResponseError("Timed interaction already running for this exchange", Status.InvalidAction);
         }
 
         logger.debug(
@@ -896,7 +917,7 @@ export class MessageExchange {
                 using _acking = closing.join("acking");
                 await this.sendStandaloneAckForMessage(messageToAck);
             } catch (error) {
-                logger.error(this.via, `Unhandled error closing exchange`, error);
+                logger.warn(this.via, `Unhandled error closing exchange`, error);
             }
             if (cause || this.#sentMessageToAck === undefined) {
                 // We have sent the Ack and there's nothing left waiting for a peer ack, close directly
@@ -971,11 +992,49 @@ export class MessageExchange {
     }
 
     get #mrpResubmissionBackOffTime() {
-        let backOff = this.channel.getMrpResubmissionBackOffTime(this.#retransmissionCounter);
+        return this.#backOffFor(this.#retransmissionCounter);
+    }
+
+    /**
+     * Scheduled MRP backoff for a given (re)transmission number, after the send-option overrides.
+     *
+     * The cap never drops below the peer's idle interval: a peer whose idle base backoff already exceeds
+     * maxRetransmissionTime must not be retried faster than its own idle cadence.
+     */
+    #backOffFor(retransmissionCount: number) {
+        const additionalDelay = Duration.max(
+            this.#context.localAdditionalMrpDelay,
+            this.#peerAdditionalMrpDelay ?? Millis(0),
+        );
+        let backOff = this.channel.getMrpResubmissionBackOffTime(
+            retransmissionCount,
+            undefined,
+            false,
+            additionalDelay,
+        );
         if (this.#sendOptions.initialRetransmissionTime !== undefined) {
             backOff = Millis(backOff + this.#sendOptions.initialRetransmissionTime);
         }
-        return Duration.min(backOff, this.#sendOptions.maxRetransmissionTime ?? Forever);
+        const cap = Duration.max(
+            this.#sendOptions.maxRetransmissionTime ?? Forever,
+            this.session.parameters.idleInterval ?? Instant,
+        );
+        return Duration.min(backOff, cap);
+    }
+
+    /**
+     * How much restarting the exchange (resetting the retransmission counter to 0) would shorten the wait until
+     * the next (re)transmission.  Roughly zero near the base interval — e.g. an idle peer, whose fresh interval is
+     * just as slow.
+     */
+    get retransmissionRestartSaving(): Duration {
+        // No pending retransmit → nothing for a restart to shorten → report no saving so the kick is suppressed.
+        const currentWait = this.#retransmissionTimer?.interval;
+        if (currentWait === undefined) {
+            return Instant;
+        }
+        // Read the live timer's real interval (margins/jitter/cap baked in), not a freshly recomputed random one.
+        return Duration.max(Instant, Millis(currentWait - this.#backOffFor(0)));
     }
 }
 
@@ -992,9 +1051,17 @@ export namespace MessageExchange {
         onReceive?: ReceiveNotifier;
 
         /**
-         * Network Profile used
+         * Network profile governing exchange throttling.  Retained for diagnostics; MRP backoff derives from
+         * {@link peerAdditionalMrpDelay} instead, so an explicit throttle override (e.g. "unlimited") does not
+         * affect retransmission timing.
          */
         network?: NetworkProfile;
+
+        /**
+         * Additive MRP retransmission margin for the peer's network medium.  Sourced independently of
+         * {@link network} so concurrency overrides cannot strip the medium-correct margin (e.g. thread's).
+         */
+        peerAdditionalMrpDelay?: Duration;
 
         /**
          * Optional address override for this exchange.  When set, messages are sent to this address

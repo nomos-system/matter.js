@@ -12,6 +12,7 @@ import {
     DerBitString,
     DerCodec,
     DerNode,
+    DerTag,
     DerType,
     EcdsaSignature,
     Key,
@@ -119,7 +120,9 @@ export abstract class Certificate<CT extends MatterCertificate> {
      * Serialize as DER without signature.
      */
     asUnsignedDer(): Bytes {
-        // Serialize
+        if (this.#cert.tbsDer !== undefined) {
+            return this.#cert.tbsDer;
+        }
         const certBytes = X509.certificateToDer(matterToX509(this.cert));
         assertCertificateDerSize(certBytes);
         return certBytes;
@@ -487,6 +490,7 @@ export namespace Certificate {
         }
 
         const [certificateNode, , signatureNode] = rootElements;
+        const tbsDer = Bytes.of(DerCodec.encode(certificateNode));
 
         // Parse TBSCertificate
         const { _elements: certElements } = certificateNode;
@@ -513,7 +517,8 @@ export namespace Certificate {
         const signatureAlgorithm = Bytes.toHex(signatureAlgorithmOid) === "2a8648ce3d040302" ? 1 : 0;
         idx++;
 
-        // Issuer
+        // Issuer — retain raw DER for exact-match comparisons (CRL revocation lookup)
+        const issuerDer = Bytes.of(DerCodec.encode(certElements[idx]));
         const issuer = parseSubjectOrIssuer(certElements[idx++]);
 
         // Validity
@@ -565,6 +570,8 @@ export namespace Certificate {
             serialNumber,
             signatureAlgorithm,
             issuer,
+            issuerDer,
+            tbsDer,
             notBefore,
             notAfter,
             subject,
@@ -597,8 +604,8 @@ export namespace Certificate {
             throw new CertificateError(`Unsupported CSR version ${requestVersionBytes[0]}`);
         }
 
-        // Verify the subject, according to spec can be "any value", so just check that it exists
-        if (!subjectNode._elements?.length) {
+        // Subject must be a SEQUENCE (RDNSequence) but per Matter spec § 6.4.7 MAY be any value, including empty.
+        if (subjectNode._tag !== DerTag.Sequence) {
             throw new CertificateError("Missing subject in CSR data");
         }
 
