@@ -6,11 +6,16 @@ updates:
       interval: weekly
       time: "04:00"
       timezone: Europe/Berlin
+
+  # This fork is frozen at the Matter 1.4-certified state. Dependency bumps
+  # would require re-certification, so no npm update PRs at all (the limit
+  # blocks scheduled PRs, the ignore rule blocks security PRs).
   - package-ecosystem: npm
     directory: "/"
     schedule:
       interval: weekly
       time: "04:00"
       timezone: Europe/Berlin
-    open-pull-requests-limit: 10
-    versioning-strategy: increase
+    open-pull-requests-limit: 0
+    ignore:
+      - dependency-name: "*"
